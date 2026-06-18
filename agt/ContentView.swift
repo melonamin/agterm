@@ -29,7 +29,11 @@ struct ContentView: View {
                 detailPane
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 if !store.statusBarHidden {
-                    Divider()
+                    // hairline between the terminal and the status bar, matching the one
+                    // under the title bar.
+                    Rectangle()
+                        .fill(Color.white.opacity(0.1))
+                        .frame(height: 1)
                     statusBar
                 }
             }
@@ -69,7 +73,16 @@ struct ContentView: View {
         .padding(.trailing, 20)
         .padding(.vertical, 4)
         .frame(maxWidth: .infinity, minHeight: 22)
-        .background(.bar)
+        // blend with the terminal: same background, so the status bar reads as a
+        // continuation of it (separated only by the hairline above).
+        .background(terminalColor)
+    }
+
+    /// The terminal background color (from the ghostty config), used to blend the status
+    /// bar with the terminal; a dark fallback if libghostty hasn't reported it.
+    private var terminalColor: Color {
+        Color(nsColor: GhosttyApp.shared.terminalBackgroundColor
+            ?? NSColor(srgbRed: 0.157, green: 0.173, blue: 0.204, alpha: 1))
     }
 
     /// The titlebar title (first line): the active session's display name, or "agt"
