@@ -183,7 +183,7 @@ struct ContentView: View {
 
     /// Toolbar button (next to the split toggle) that toggles the quick terminal: a single
     /// scratch terminal overlaid at 90% of the window, on top of the sidebar and terminal.
-    /// Click the button again or the dimmed margin to hide; the shell stays alive until quit.
+    /// Click the button again or the surrounding margin to hide; the shell stays alive until quit.
     private var quickTerminalButton: some View {
         Button {
             quickTerminal.toggle()
@@ -194,14 +194,16 @@ struct ContentView: View {
         .accessibilityIdentifier("quick-terminal-toggle")
     }
 
-    /// The quick-terminal overlay: a dim over the whole window (tap to dismiss) with the scratch
-    /// terminal centered at 90% of the window. Rendered only while visible; the surface it hosts
-    /// is owned by the controller, so hiding keeps the shell alive.
+    /// The quick-terminal overlay: the scratch terminal centered at 90% of the window, floating on
+    /// its shadow over the (undimmed) content. The margin is a transparent tap-catcher that
+    /// dismisses on click — no darkening, because the overlay can't cover the AppKit title bar, so a
+    /// dim would shade the body but not the chrome. Rendered only while visible; the surface it
+    /// hosts is owned by the controller, so hiding keeps the shell alive.
     @ViewBuilder private var quickTerminalOverlay: some View {
         if quickTerminal.isVisible {
             GeometryReader { geo in
                 ZStack {
-                    Color.black.opacity(0.35)
+                    Color.clear
                         .contentShape(Rectangle())
                         .onTapGesture { quickTerminal.hide() }
                     QuickTerminalPane()
