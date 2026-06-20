@@ -35,11 +35,11 @@ struct ContentView: View {
     /// restored WindowGroup windows (they linger on screen as empty windows).
     @State private var isStray = false
 
-    /// True only when running an isolated UI test that requested a forced-visible sidebar
-    /// (`AGT_STATE_DIR` set AND the `AGT_UITEST_FORCE_SIDEBAR_VISIBLE` launch arg present). The
-    /// sidebar collapse lives in the bundle's global NSSplitView autosave, which leaks past
-    /// `AGT_STATE_DIR`; this gate lets the tests pin it visible without changing production.
-    static var forceSidebarVisibleForUITests: Bool {
+    /// True when running under an isolated XCUITest (`AGT_STATE_DIR` set AND the
+    /// `AGT_UITEST_FORCE_SIDEBAR_VISIBLE` env sentinel present). Gates the FB11763863 window-present
+    /// workaround. The custom sidebar is always visible, so this no longer forces sidebar state; the
+    /// env var keeps its historical name.
+    static var isUITestLaunch: Bool {
         let process = ProcessInfo.processInfo
         // the sentinel rides launch ENVIRONMENT, not launch arguments: a process-launched SwiftUI
         // WindowGroup app fails to present its window under some launch-arg patterns on macOS 15+
@@ -165,31 +165,31 @@ private struct WindowContentView: View {
     /// Mirror of `GhosttyApp.compactToolbar`: when true the cwd subtitle is dropped so the title bar
     /// collapses to a single line. Refreshed on `.agtAppearanceChanged`, like `terminalColor`.
     @State private var compactToolbar: Bool = WindowContentView.resolvedCompactToolbar()
-    /// Sidebar column visibility — only consulted on the isolated-UI-test path (see `splitRoot`),
-    /// where it is pinned to `.doubleColumn`. Production never binds it, so its persisted collapse is
-    /// untouched.
-    @State private var columnVisibility: NavigationSplitViewVisibility =
-        ContentView.forceSidebarVisibleForUITests ? .doubleColumn : .automatic
+    /// Custom sidebar state (we own the split now, not NavigationSplitView): show/hide via the toolbar
+    /// toggle, and a drag-resizable width. Not yet persisted (experiment).
+    @State private var sidebarVisible = true
+    @State private var sidebarWidth: CGFloat = 220
+    /// Height of the custom titlebar row: one short line in compact mode, two lines (title + cwd)
+    /// otherwise. The split content is inset by this so it sits below the row.
+    private var titlebarHeight: CGFloat { compactToolbar ? 30 : 48 }
 
     var body: some View {
-        splitRoot
-        // native two-line titlebar title (session name bold + working-directory subtitle),
-        // driven through SwiftUI so it isn't clobbered by NavigationSplitView.
-        .navigationTitle(windowTitle)
-        .navigationSubtitle(windowSubtitle)
-        .toolbar {
-            // .sharedBackgroundVisibility(.hidden) drops the macOS 26 toolbar-item glass capsule
-            // (synthesized around adjacent items) so the icons sit flush on the dark title bar.
-            // Gated: the deployment target is macOS 14, where the API doesn't exist (older systems
-            // keep the default chrome).
-            if #available(macOS 26.0, *) {
-                ToolbarItem(placement: .primaryAction) { splitButton }
-                    .sharedBackgroundVisibility(.hidden)
-                ToolbarItem(placement: .primaryAction) { quickTerminalButton }
-                    .sharedBackgroundVisibility(.hidden)
-            } else {
-                ToolbarItem(placement: .primaryAction) { splitButton }
-                ToolbarItem(placement: .primaryAction) { quickTerminalButton }
+        ZStack(alignment: .top) {
+            // the split's AppKit HSplitView overruns its frame up into the titlebar zone and would
+            // steal the header's clicks; keep the header in front (drawn last in the ZStack) and inset
+            // the split content below it so the buttons stay hittable in split mode.
+            splitRoot
+                .padding(.top, titlebarHeight)
+            customTitlebar
+        }
+        // with the title bar hidden (.hiddenTitleBar), pull our header to the very top so the traffic
+        // lights overlay it as one row; no system title bar is left to clip the content.
+        .ignoresSafeArea(.container, edges: .top)
+        // re-tint the sidebar after a collapse/expand: the re-attached NSScrollView comes back with a
+        // default (lighter) background until the next WindowAppearance sync; nudge that sync now.
+        .onChange(of: sidebarVisible) { _, visible in
+            if visible {
+                DispatchQueue.main.async { NotificationCenter.default.post(name: .agtAppearanceChanged, object: nil) }
             }
         }
         // the quick terminal: an in-app overlay above the whole split view (sidebar + terminal),
@@ -230,37 +230,57 @@ private struct WindowContentView: View {
         .onDisappear { QuickTerminalRegistry.shared.unregister(windowID) }
     }
 
-    /// The split view. Production uses the plain unbound `NavigationSplitView` (so its sidebar
-    /// collapse persists via AppKit's autosave, untouched). An isolated UI test instead binds
-    /// `columnVisibility` and pins it `.doubleColumn`, so the test asks SwiftUI for the two-column
-    /// layout before the AppKit split-view fixup below enforces the real divider state regardless of the
-    /// host's persisted collapse (which leaks past `AGT_STATE_DIR` via the global autosave).
+    /// EXPERIMENT (custom-sidebar branch): our own split instead of `NavigationSplitView`, so macOS 26
+    /// doesn't impose the Liquid-Glass sidebar chrome (inset panel, toggle capsule) or couple it to the
+    /// toolbar style. A plain `HStack` gives the sidebar tree + a themed draggable divider + the terminal.
     @ViewBuilder private var splitRoot: some View {
-        if ContentView.forceSidebarVisibleForUITests {
-            NavigationSplitView(columnVisibility: $columnVisibility) {
+        HStack(spacing: 0) {
+            if sidebarVisible {
                 sidebarColumn
-            } detail: {
-                detailColumn
+                    .frame(width: sidebarWidth)
+                sidebarDivider
             }
-            // `.doubleColumn` shows the sidebar + detail in a two-column split (`.all` is the
-            // three-column value and doesn't reveal the sidebar here).
-            .onAppear { columnVisibility = .doubleColumn }
-            .onChange(of: columnVisibility) { _, visibility in
-                if visibility != .doubleColumn { columnVisibility = .doubleColumn }
-            }
-        } else {
-            NavigationSplitView {
-                sidebarColumn
-            } detail: {
-                detailColumn
-            }
+            detailColumn
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
     private var sidebarColumn: some View {
-        WorkspaceSidebar(store: store, actions: actions)
-            .navigationSplitViewColumnWidth(min: 180, ideal: 220)
-            .safeAreaInset(edge: .bottom) { bottomBar }
+        VStack(spacing: 0) {
+            // matches the detail pane's hairline so the line continues across the full width under
+            // the title bar (the vertical divider hangs from it at the sidebar/terminal junction).
+            Rectangle()
+                .fill(Color.white.opacity(0.1))
+                .frame(height: 1)
+            WorkspaceSidebar(store: store, actions: actions)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        }
+        .safeAreaInset(edge: .bottom) { bottomBar }
+    }
+
+    /// A 1px themed vertical separator with a wider invisible drag handle to resize the sidebar.
+    private var sidebarDivider: some View {
+        Rectangle()
+            .fill(Color.white.opacity(0.1))
+            .frame(width: 1)
+            .frame(maxHeight: .infinity)
+            .overlay {
+                Color.clear
+                    .frame(width: 10)
+                    .contentShape(Rectangle())
+                    .onHover { inside in
+                        if inside { NSCursor.resizeLeftRight.set() } else { NSCursor.arrow.set() }
+                    }
+                    .gesture(
+                        // drive width from the absolute cursor X (window coords), NOT accumulated
+                        // translation: the divider moves with the width, so translation-based resize
+                        // feeds back on itself and the line flickers. Absolute position is stable.
+                        DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                            .onChanged { value in
+                                sidebarWidth = min(560, max(160, value.location.x))
+                            }
+                    )
+            }
     }
 
     @ViewBuilder private var detailColumn: some View {
@@ -348,8 +368,64 @@ private struct WindowContentView: View {
         compactToolbar ? "" : (store.activeSession?.effectiveCwd ?? "")
     }
 
-    /// Toolbar button (right of the title bar) that toggles the active session's one-level
-    /// vertical split: first press shows the second pane, the next hides it.
+    /// The window title at the terminal's leading edge: the session name, plus the cwd subtitle on a
+    /// second line when not in compact mode (compact drops it for a single short row).
+    private var titleLabel: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(windowTitle).fontWeight(.semibold)
+            if !compactToolbar, !windowSubtitle.isEmpty {
+                Text(windowSubtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// Custom titlebar row replacing the system toolbar: the sidebar toggle pinned to the sidebar's
+    /// trailing edge (by the divider), the title at the terminal's start, and the split / quick-terminal
+    /// buttons at the trailing edge. Positions track `sidebarWidth`; the left inset clears the system
+    /// traffic lights.
+    private var customTitlebar: some View {
+        HStack(spacing: 0) {
+            Color.clear.frame(width: 78) // system traffic lights
+            if sidebarVisible {
+                HStack(spacing: 0) {
+                    Spacer(minLength: 0)
+                    sidebarToggleButton.labelStyle(.iconOnly)
+                }
+                .frame(width: max(40, sidebarWidth - 78))
+                Color.clear.frame(width: 11) // 1px divider + gap to the title
+            } else {
+                sidebarToggleButton.labelStyle(.iconOnly)
+                Spacer().frame(width: 12)
+            }
+            titleLabel
+            Spacer(minLength: 12)
+            HStack(spacing: 14) {
+                splitButton.labelStyle(.iconOnly)
+                quickTerminalButton.labelStyle(.iconOnly)
+            }
+            .padding(.trailing, 14)
+        }
+        .buttonStyle(.plain)
+        // larger icons in the taller non-compact row, smaller in the compact row (imageScale hits the
+        // SF Symbols, not the title text).
+        .imageScale(compactToolbar ? .medium : .large)
+        .frame(height: titlebarHeight)
+        .frame(maxWidth: .infinity)
+    }
+
+    /// Our own sidebar show/hide toggle (the custom split has no system one). Animated collapse.
+    private var sidebarToggleButton: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.15)) { sidebarVisible.toggle() }
+        } label: {
+            Label("Toggle Sidebar", systemImage: "sidebar.left")
+        }
+        .help("Toggle Sidebar")
+        .accessibilityIdentifier("sidebar-toggle-button")
+    }
+
     private var splitButton: some View {
         let isSplit = store.activeSession?.isSplit ?? false
         return Button {
@@ -641,7 +717,7 @@ private struct WindowAccessor: NSViewRepresentable {
             // re-apply the miniaturized state right after the view attaches.
             bringForward(window)
             DispatchQueue.main.async { [weak self] in self?.bringForward(window) }
-            applyUITestSidebarFixups(window)
+            scheduleUITestWindowForward(window)
         }
 
         deinit {
@@ -691,14 +767,15 @@ private struct WindowAccessor: NSViewRepresentable {
         }
 
 
-        private func applyUITestSidebarFixups(_ window: NSWindow) {
-            guard ContentView.forceSidebarVisibleForUITests else { return }
+        /// Re-assert the window forward under XCUITest: the FB11763863 reopen can present it slightly
+        /// after the view attaches, so keep ordering it front for a short schedule.
+        private func scheduleUITestWindowForward(_ window: NSWindow) {
+            guard ContentView.isUITestLaunch else { return }
             let delays: [TimeInterval] = [0, 0.05, 0.15, 0.35, 0.7, 0.95]
             for delay in delays {
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self, weak window] in
                     guard let self, let window, self.window === window else { return }
                     self.bringForwardForUITests(window)
-                    UITestWindowFixups.expandSidebar(in: window)
                 }
             }
         }
@@ -716,8 +793,7 @@ private struct WindowAccessor: NSViewRepresentable {
                 ?? NSColor(srgbRed: 0.157, green: 0.173, blue: 0.204, alpha: 1)
             WindowAppearance.sync(window: window, background: background,
                                   chrome: .init(opacity: GhosttyApp.shared.windowOpacity,
-                                                blurRadius: GhosttyApp.shared.windowBlurRadius,
-                                                compactToolbar: GhosttyApp.shared.compactToolbar))
+                                                blurRadius: GhosttyApp.shared.windowBlurRadius))
         }
     }
 }

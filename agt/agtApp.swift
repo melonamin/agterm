@@ -84,6 +84,9 @@ struct agtApp: App {
                     appDelegate.scheduleRestoredWindowReconciliation(reason: "scene-task")
                 }
         }
+        // chromeless: no system title bar (the traffic lights float over our custom titlebar row in
+        // ContentView), so there's no empty title-bar strip above our header.
+        .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 900, height: 600)
         .windowResizability(.contentMinSize)
         .commands {
@@ -306,7 +309,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_: Notification) {
         NSApp.setActivationPolicy(.regular)
-        if ContentView.forceSidebarVisibleForUITests {
+        if ContentView.isUITestLaunch {
             scheduleUITestWindowActivationRetries()
         } else {
             NSApp.activate()
@@ -341,7 +344,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if window.isMiniaturized { window.deminiaturize(nil) }
             window.orderFrontRegardless()
             window.makeKeyAndOrderFront(nil)
-            UITestWindowFixups.expandSidebar(in: window)
         }
     }
 

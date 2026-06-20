@@ -13,7 +13,6 @@ enum WindowAppearance {
     struct Chrome {
         var opacity: Double = 1
         var blurRadius: Int = 0
-        var compactToolbar: Bool = false
     }
 
     /// Apply the blend to `window` using `background` (the terminal background color) and the given
@@ -29,10 +28,12 @@ enum WindowAppearance {
     static func sync(window: NSWindow, background: NSColor, chrome: Chrome) {
         window.titlebarAppearsTransparent = true
         window.titlebarSeparatorStyle = .none
+        // the visible title is our custom titlebar row; blank the OS window title and hide AppKit's
+        // title text so "agt" (the fallback since we dropped navigationTitle) never shows through,
+        // including after a split re-lays out the titlebar.
+        window.title = ""
+        window.titleVisibility = .hidden
         window.styleMask.insert(.fullSizeContentView)
-        // compact: a single short title-bar row with smaller items; the tall default stacks the
-        // session name over the cwd subtitle (ContentView drops the subtitle in compact mode).
-        window.toolbarStyle = chrome.compactToolbar ? .unifiedCompact : .unified
 
         // native fullscreen draws its own opaque background and the chrome shows through any
         // transparency, so force opaque while fullscreened.
@@ -67,9 +68,10 @@ enum WindowAppearance {
             titlebarView.wantsLayer = true
             titlebarView.layer?.backgroundColor = NSColor.clear.cgColor
         }
-        // NSTitlebarBackgroundView forces its own opaque material; hide it only when transparent so
-        // the translucent window background shows through the titlebar continuously.
-        container.firstDescendant(withClassName: "NSTitlebarBackgroundView")?.isHidden = transparent
+        // always hide the OS titlebar background: our custom titlebar row is the chrome. At full
+        // opacity, or when .hiddenTitleBar doesn't hold (the XCUITest reopen path), it would otherwise
+        // paint a dark strip above the header.
+        container.firstDescendant(withClassName: "NSTitlebarBackgroundView")?.isHidden = true
     }
 
     /// Paints the macOS 26 Liquid Glass sidebar a constant terminal color instead of letting the
