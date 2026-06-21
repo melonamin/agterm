@@ -38,7 +38,6 @@ final class GhosttyApp {
     /// Whether the window chrome uses the compact title bar (single short row, smaller icons, no
     /// subtitle). NOT ghostty-resolved: `WindowAppearance.sync` reads it, `SettingsModel` writes it.
     private(set) var compactToolbar: Bool = false
-    private var tickTimer: Timer?
     let callbacks = GhosttyCallbacks()
     private var resourcesDir: String?
 
@@ -75,15 +74,9 @@ final class GhosttyApp {
         app = createdApp
         config = cfg
         resolveThemeColors(from: cfg)
-
-        // A main-RunLoop timer is proven to fire on the main thread, so
-        // `assumeIsolated` is valid here (and ONLY here). 120Hz keeps latency
-        // low without the scheduling overhead of `Task`/`DispatchQueue.async`.
-        let timer = Timer(timeInterval: 1.0 / 120.0, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.tick() }
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        tickTimer = timer
+        // demand-driven: no poll timer. ticks come from libghostty wakeups (coalesced in
+        // GhosttyCallbacks.wakeup) and surfaces draw on GHOSTTY_ACTION_RENDER, matching Ghostty.app/conterm
+        // — an idle terminal does no work, where a 120Hz poll ticked continuously.
     }
 
     func tick() {

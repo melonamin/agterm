@@ -250,6 +250,12 @@ final class GhosttySurfaceView: NSView, TerminalSurface {
         onFontSizeChange?(size)
     }
 
+    /// Draws the surface now, servicing libghostty's `GHOSTTY_ACTION_RENDER` demand. Main-actor.
+    func renderNow() {
+        guard let surface else { return }
+        ghostty_surface_draw(surface)
+    }
+
     // MARK: - Surface lifecycle
 
     func createSurface() {

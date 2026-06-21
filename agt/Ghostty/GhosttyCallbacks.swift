@@ -2,6 +2,7 @@
 
 import AppKit
 import GhosttyKit
+import os
 
 /// Routes libghostty runtime callbacks to the appropriate terminal views.
 ///
@@ -11,8 +12,23 @@ import GhosttyKit
 /// C string is copied to a Swift `String` value *before* the hop (the `char*`
 /// is only valid for the synchronous callback duration).
 final class GhosttyCallbacks: @unchecked Sendable {
+    /// Coalesces libghostty wakeups into one queued main-thread tick. `wakeup_cb` fires off-main far faster
+    /// than the runloop drains; a single `ghostty_app_tick` drains all pending work. The flag clears before
+    /// the tick so a wakeup arriving during it re-schedules instead of being dropped. (Replaces the dropped
+    /// 120Hz poll timer — agt is demand-driven now.)
+    private let tickScheduled = OSAllocatedUnfairLock(initialState: false)
+
     func wakeup() {
-        DispatchQueue.main.async { GhosttyApp.shared.tick() }
+        let alreadyScheduled = tickScheduled.withLock { scheduled -> Bool in
+            if scheduled { return true }
+            scheduled = true
+            return false
+        }
+        guard !alreadyScheduled else { return }
+        DispatchQueue.main.async { [self] in
+            tickScheduled.withLock { $0 = false }
+            GhosttyApp.shared.tick()
+        }
     }
 
     func action(target: ghostty_target_s, action: ghostty_action_s) -> Bool {
@@ -36,6 +52,12 @@ final class GhosttyCallbacks: @unchecked Sendable {
             // persists it.
             guard let view = surfaceView(from: target) else { return true }
             DispatchQueue.main.async { view.reportFontSize() }
+            return true
+        case GHOSTTY_ACTION_RENDER:
+            // libghostty signals this surface has a frame ready to paint. agt is demand-driven (no poll
+            // timer), so service it by drawing now.
+            guard let view = surfaceView(from: target) else { return true }
+            DispatchQueue.main.async { view.renderNow() }
             return true
         case GHOSTTY_ACTION_DESKTOP_NOTIFICATION:
             // a program emitted an OSC 9 / 777 desktop notification. recover the firing surface and
