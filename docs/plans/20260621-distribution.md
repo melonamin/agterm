@@ -1,5 +1,22 @@
 # Signed + Notarized DMG Distribution (GitHub Releases + Homebrew cask)
 
+## Update (2026-06-29): interim UNSIGNED, CI-by-tag distribution
+
+The signed + notarized end state below is still the target, but it is blocked on Apple (org-account conversion under review). To ship in the meantime, releases now go out as **ad-hoc-signed, NOT notarized** builds, published by **CI on a `v*` tag**, with a documented Gatekeeper workaround. This reverts cleanly once notarization is available (drop `AGTERM_ALLOW_UNSIGNED`, add signing creds/identity).
+
+What changed from the original local-signed plan:
+- **`scripts/release.sh`** stays the single source of truth and the CI entry point. `--publish` now refuses an ad-hoc build *unless* `AGTERM_ALLOW_UNSIGNED=1` (CI sets it). The sign/notarize blocks already no-op when no Developer ID identity is present, so the unsigned path needs nothing else. The GitHub release body is built by a new `release_notes()` helper: the matching `CHANGELOG.md` section + a fixed unsigned-install footer (`xattr -cr …`), via `--notes-file` (replacing `--generate-notes`).
+- **`.github/workflows/release.yml`** (new) — `on: push: tags: ['v*']`, `runs-on: macos-26`, caches libghostty like `ci.yml`, sets a bot git identity + `gh auth setup-git`, then runs `scripts/release.sh "${GITHUB_REF_NAME#v}" --publish`.
+- **`packaging/agterm.rb`** — added a `postflight` that strips `com.apple.quarantine` so `brew install --cask` opens the unsigned app with no prompt (mirrors `thdxg/macterm`'s production cask). Remove once notarized.
+- **`README.md`** Install section — rewritten from "signed + notarized, no workaround" to the interim reality: cask auto-strips quarantine; direct-DMG users run `xattr -cr /Applications/agterm.app`. Right-click → Open is explicitly NOT offered — Apple removed it as a Gatekeeper bypass in macOS 15 Sequoia (verified on 26.5.1); the GUI fallback is System Settings → Privacy & Security → Open Anyway.
+- **`CHANGELOG.md`** (new, repo root) — Keep-a-Changelog in the sibling style (revdiff: New Features / Improvements / Bug Fixes), hand-maintained; the release body is sourced from it. First entry: v0.3.1.
+
+Manual prerequisites for CI publish:
+- Secret **`HOMEBREW_TAP_PAT`** on `umputun/agterm`: a fine-grained PAT with **Contents: read/write on BOTH `umputun/agterm` (release) and `umputun/homebrew-apps` (cask push)** — the default `GITHUB_TOKEN` cannot push to the separate tap repo. Create it once; one job both creates the agterm release and pushes the cask.
+- First tag: **v0.3.1** (`git tag v0.3.1 && git push origin v0.3.1`).
+
+The Apple-gated tasks below (signing identity, notarization) remain the eventual target and are unaffected by the interim path.
+
 ## Overview
 - Ship `agterm` as a Developer ID **signed + Apple-notarized + stapled** `.dmg` so macOS Gatekeeper runs it without the "unidentified developer / cannot be opened" block.
 - Two channels: a GitHub Release artifact (direct download) and a Homebrew **cask** in the existing `umputun/homebrew-apps` tap (`brew install --cask umputun/apps/agterm`).

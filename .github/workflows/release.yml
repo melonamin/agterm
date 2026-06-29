@@ -1,0 +1,40 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Publish unsigned DMG + bump cask
+    runs-on: macos-26
+    env:
+      # PAT with Contents:read/write on BOTH umputun/agterm (release) and
+      # umputun/homebrew-apps (cask push); the default GITHUB_TOKEN cannot push
+      # to the separate tap repo. See docs/plans/20260621-distribution.md.
+      GH_TOKEN: ${{ secrets.HOMEBREW_TAP_PAT }}
+      AGTERM_ALLOW_UNSIGNED: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Cache libghostty (GhosttyKit + resources)
+        uses: actions/cache@v6
+        with:
+          path: |
+            GhosttyKit.xcframework
+            agterm/Resources/ghostty
+            agterm/Resources/terminfo
+          key: ghosttykit-${{ hashFiles('scripts/setup.sh') }}
+      - name: Install xcodegen
+        run: brew install xcodegen
+      - name: Configure git + gh for the cask push
+        run: |
+          git config --global user.name  "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          gh auth setup-git
+      - name: Build, publish release, bump cask
+        run: scripts/release.sh "${GITHUB_REF_NAME#v}" --publish

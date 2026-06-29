@@ -53,9 +53,9 @@ A file open in the quick terminal, the window's shared scratch overlay:
 
 ## Install
 
-> Pre-built releases are not published yet. Until the first one is out, build from source (below). The steps here describe how installing will work once releases are available.
+Pre-built releases are for **Apple Silicon (arm64) Macs running macOS 14 or later**.
 
-Releases are signed and notarized for Apple Silicon (arm64) Macs running macOS 14 or later, so they open without any Gatekeeper workaround.
+These interim builds are ad-hoc signed but **not yet Apple-notarized** (Developer ID enrollment is in progress), so macOS Gatekeeper blocks them until the quarantine flag is removed. This is temporary — once notarized builds ship, they install with no extra step.
 
 Homebrew:
 
@@ -63,11 +63,17 @@ Homebrew:
 brew install --cask umputun/apps/agterm
 ```
 
-The cask also installs the `agtermctl` command-line tool, so cask users should not run the in-app installer as well.
+The cask strips the quarantine flag on install, so the app opens with no prompt. It also installs the `agtermctl` command-line tool, so cask users should not run the in-app installer as well.
 
 Direct download:
 
-Download the latest `.dmg` from the [releases page](https://github.com/umputun/agterm/releases), open it, and drag `agterm.app` into `/Applications`. To put the `agtermctl` CLI on your `PATH`, use **Help ▸ Install Command Line Tool…** from the app.
+Download the latest `.dmg` from the [releases page](https://github.com/umputun/agterm/releases), open it, and drag `agterm.app` into `/Applications`. Because the build isn't notarized yet, run this once so Gatekeeper lets it launch:
+
+```sh
+xattr -cr /Applications/agterm.app
+```
+
+(Or try to open it, then click **Open Anyway** in **System Settings → Privacy & Security**. Right-click → Open no longer bypasses Gatekeeper on current macOS.) To put the `agtermctl` CLI on your `PATH`, use **Help ▸ Install Command Line Tool…** from the app.
 
 ## Build from source
 
@@ -85,7 +91,7 @@ scripts/setup.sh   # build libghostty from ghostty source + stage resources (ide
 scripts/run.sh     # setup, generate the Xcode project, build Debug, launch
 ```
 
-A `Makefile` wraps these as a convenience front door: `make run` (build Debug + launch), `make build` (Debug, no launch), `make release` (Release build), `make deploy` (Release build + copy to `~/Applications`), `make test`, and `make dist VERSION=x.y.z` (signed, notarized DMG). Run `make` with no target to list them.
+A `Makefile` wraps these as a convenience front door: `make run` (build Debug + launch), `make build` (Debug, no launch), `make release` (Release build), `make deploy` (Release build + copy to `~/Applications`), `make test`, and `make dist VERSION=x.y.z` (release DMG — signed + notarized when a Developer ID cert is present, otherwise ad-hoc). Run `make` with no target to list them.
 
 `scripts/build.sh` produces a Release build without launching. The unit tests run independently of Xcode and libghostty:
 

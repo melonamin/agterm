@@ -16,6 +16,15 @@ cask "agterm" do
   app "agterm.app"
   binary "#{appdir}/agterm.app/Contents/MacOS/agtermctl", target: "agtermctl"
 
+  # interim: agterm is ad-hoc signed but not yet Apple-notarized, so first launch
+  # would hit a Gatekeeper block. Strip the quarantine xattr on install so the app
+  # opens with no prompt. Remove this once notarized releases ship.
+  postflight do
+    system_command "/usr/bin/xattr",
+                   args: ["-dr", "com.apple.quarantine", "#{appdir}/agterm.app"],
+                   sudo: false
+  end
+
   zap trash: [
     "~/Library/Application Support/agterm",
     "~/Library/Preferences/com.umputun.agterm.plist",

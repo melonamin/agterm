@@ -8,8 +8,9 @@
 #
 # Signing identity: auto-detected from the keychain ("Developer ID Application"),
 # or override with AGTERM_SIGN_IDENTITY. With no identity it produces an AD-HOC
-# dry-run DMG (not notarized, not distributable) so the flow is runnable before
-# the Apple cert is installed. Notary creds come from a keychain profile created
+# DMG (not notarized) — a dry run by default, but set AGTERM_ALLOW_UNSIGNED=1 to
+# --publish it as an interim unsigned release (what CI does until notarization is
+# available). Notary creds come from a keychain profile created
 # with `xcrun notarytool store-credentials` (default name: agterm-notary,
 # override with AGTERM_NOTARY_PROFILE).
 set -euo pipefail
@@ -46,8 +47,9 @@ else
   echo "==> WARNING: no Developer ID Application identity found — building AD-HOC (dry-run, not notarized)"
 fi
 
-if [ "$PUBLISH" = "1" ] && [ "$SIGNED" = "0" ]; then
+if [ "$PUBLISH" = "1" ] && [ "$SIGNED" = "0" ] && [ "${AGTERM_ALLOW_UNSIGNED:-0}" != "1" ]; then
   echo "refusing to --publish an ad-hoc (unsigned) build" >&2
+  echo "set AGTERM_ALLOW_UNSIGNED=1 to publish the interim unsigned build (CI does this)" >&2
   exit 1
 fi
 
@@ -63,6 +65,37 @@ notarize() {
     xcrun notarytool log "$id" --keychain-profile "$NOTARY_PROFILE" || true
     exit 1
   fi
+}
+
+# build the GitHub release body: the matching CHANGELOG.md section followed by the
+# unsigned-install footer. Until the builds are notarized, the footer is the only
+# place direct-download users learn they must strip the Gatekeeper quarantine.
+release_notes() {
+  local section
+  section="$(awk -v ver="v$VERSION" '
+    $0 ~ "^## " ver "( |$)" {grab=1; next}
+    grab && /^## / {exit}
+    grab {body[++n]=$0}
+    END {
+      s=1; while (s<=n && body[s] ~ /^[[:space:]]*$/) s++
+      while (n>=s && body[n] ~ /^[[:space:]]*$/) n--
+      for (i=s; i<=n; i++) print body[i]
+    }
+  ' "$ROOT/CHANGELOG.md")"
+  [ -n "$section" ] || echo "WARNING: no CHANGELOG.md section for v$VERSION — release body will be the install note only" >&2
+  [ -n "$section" ] && printf '%s\n\n' "$section"
+  cat <<EOF
+---
+
+These builds are ad-hoc signed but **not yet Apple-notarized** (Developer ID enrollment is in progress), so macOS Gatekeeper blocks them until the quarantine flag is removed. Apple Silicon (arm64) only, macOS 14 or later.
+
+- **Homebrew** (\`brew install --cask umputun/apps/agterm\`) strips the flag on install — the app just opens.
+- **Direct download:** drag \`agterm.app\` into \`/Applications\`, then run once:
+  \`\`\`
+  xattr -cr /Applications/agterm.app
+  \`\`\`
+  Or try to open it, then click **Open Anyway** in **System Settings → Privacy & Security**.
+EOF
 }
 
 # ── build ────────────────────────────────────────────────────────────────────
@@ -126,7 +159,14 @@ fi
 
 # ── publish: GitHub release + cask bump ───────────────────────────────────────
 echo "==> publishing $TAG"
-gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "Version $VERSION" --generate-notes
+NOTES_FILE="$(mktemp)"
+release_notes >"$NOTES_FILE"
+if gh release view "$TAG" >/dev/null 2>&1; then
+  gh release edit "$TAG" --title "Version $VERSION" --notes-file "$NOTES_FILE"
+else
+  gh release create "$TAG" --title "Version $VERSION" --notes-file "$NOTES_FILE"
+fi
+rm -f "$NOTES_FILE"
 gh release upload "$TAG" "$DMG" --clobber
 
 SHA="$(shasum -a 256 "$DMG" | awk '{print $1}')"
