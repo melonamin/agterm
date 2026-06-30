@@ -1,0 +1,211 @@
+// agterm-linux entry point: an Adwaita application whose window is built by
+// AppController (workspace -> session sidebar + a GtkStack terminal deck driven
+// by agtermCore's AppStore).
+import CGtk
+import Foundation
+import agtermCore
+
+/// Generic GObject pointer cast: some GTK/Adw types import as distinct typed
+/// pointers; all are layout-compatible, so reinterpret the stored handle.
+@inline(__always) func cast<T>(_ p: OpaquePointer?) -> UnsafeMutablePointer<T>? { p.map { UnsafeMutablePointer($0) } }
+
+@main
+struct AgtermApp {
+    static func main() {
+        GhosttyApp.shared.start()
+        // AGTERM_APP_ID overrides the GApplication id so a dev/test instance registers separately on
+        // the session bus and runs ALONGSIDE a deployed one (the Linux analogue of the macOS .debug
+        // bundle id) instead of forwarding its launch to the running instance.
+        let appID = ProcessInfo.processInfo.environment["AGTERM_APP_ID"] ?? "com.umputun.agterm.linux"
+        // HANDLES_OPEN (1<<2): route a dir/file arg to the `open` signal (agterm-linux <dir> → a session
+        // there) instead of erroring on unknown args; no-arg launches still fire `activate`.
+        let app = OpaquePointer(adw_application_new(appID, GApplicationFlags(rawValue: 4)))
+        connect(app, "activate", unsafeBitCast(onActivate, to: GCallback.self), nil)
+        connect(app, "open", unsafeBitCast(onOpen, to: GCallback.self), nil)
+        connect(app, "shutdown", unsafeBitCast(onShutdown, to: GCallback.self), nil)
+        let status = g_application_run(GAPP(app), CommandLine.argc, CommandLine.unsafeArgv)
+        exit(status)
+    }
+}
+
+private let onActivate: @convention(c) (OpaquePointer?, gpointer?) -> Void = { app, _ in
+    MainActor.assumeIsolated { activateApplication(app) }
+}
+
+/// The `open` signal (G_APPLICATION_HANDLES_OPEN): `agterm-linux <dir> [<dir>…]` — first launch OR a
+/// second launch forwarded to the running single instance — opens a session per path in the frontmost
+/// window (a file arg → its parent dir), then raises that window. Routes through the SAME setup as
+/// activate, so a cold `agterm-linux <dir>` boots the app and lands in the directory.
+private let onOpen: @convention(c) (OpaquePointer?, UnsafeMutablePointer<OpaquePointer?>?, gint, UnsafePointer<CChar>?, gpointer?) -> Void = { app, files, nFiles, _, _ in
+    MainActor.assumeIsolated {
+        activateApplication(app)   // ensure setup + a window (or raise the already-running instance)
+        guard let files, nFiles > 0,
+              let id = gLibrary.frontmostWindowID ?? gLibrary.windows.first?.id,
+              let ctl = gWindows[id] else { return }
+        for i in 0..<Int(nFiles) {
+            guard let f = files[i], let cpath = g_file_get_path(f) else { continue }
+            let path = String(cString: cpath); g_free(cpath)
+            var isDir: ObjCBool = false
+            let exists = FileManager.default.fileExists(atPath: path, isDirectory: &isDir)
+            let cwd = (exists && isDir.boolValue) ? path : (path as NSString).deletingLastPathComponent
+            ctl.createSessionInDirectory(cwd)
+        }
+        gtk_window_present(WIN(ctl.windowPointer))
+    }
+}
+
+/// First-time application setup (idempotent — a second activate/open raises the frontmost instead): the
+/// reveal action, the WindowLibrary, the starter config files, app CSS/icons, the control server, the
+/// quit-signal handlers, the color-scheme tracker, then the saved windows. Shared by `activate`+`open`.
+@MainActor func activateApplication(_ app: OpaquePointer?) {
+    // A second launch (or any re-activate) of the single-instance GApplication fires activate again:
+    // raise the frontmost window instead of no-op'ing, so launching agterm while it runs focuses it.
+    if gLibrary != nil {
+        let id = gLibrary.frontmostWindowID ?? gLibrary.windows.first?.id
+        if let id, let ctl = gWindows[id] { gtk_window_present(WIN(ctl.windowPointer)) }
+        return
+    }
+    gApp = app
+    // The notification click-to-reveal target: an `app.reveal` action carrying a session-id string.
+    let revealAction = g_simple_action_new("reveal", g_variant_type_new("s"))
+    connect(revealAction, "activate", unsafeBitCast(onRevealAction as @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void, to: GCallback.self))
+    g_action_map_add_action(app, revealAction)
+    gLibrary = WindowLibrary()
+    ensureStarterFiles()
+    installAppCSS()
+    installStatusColorCSS()
+    installAppIcons()
+    gControlServer.start()
+    // Quit cleanly on SIGTERM/SIGINT (session logout, `kill`, Ctrl+C) so flushOnQuit captures the
+    // foreground commands + snapshot — without this a signal kills the process and loses the capture
+    // (the macOS path runs through applicationWillTerminate). g_application_quit emits "shutdown".
+    _ = g_unix_signal_add(SIGTERM, onQuitSignal, nil)
+    _ = g_unix_signal_add(SIGINT, onQuitSignal, nil)
+    // Re-push the system light/dark scheme to live surfaces whenever it changes.
+    connect(adw_style_manager_get_default(), "notify::dark",
+            unsafeBitCast(onColorSchemeChanged, to: GCallback.self), nil)
+    let ids = gLibrary.openIDs()
+    let toOpen = ids.isEmpty ? [gLibrary.windows.first?.id].compactMap { $0 } : ids
+    for id in toOpen { openWindow(id) }
+}
+
+/// On clean quit: capture each pane's foreground command (when restore is enabled), then flush every
+/// open window's snapshot — AppStore only saves on structural mutations, so a live `cd` since the last
+/// one would otherwise be lost.
+private let onShutdown: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _ in
+    MainActor.assumeIsolated { flushOnQuit() }
+}
+
+/// Install the app-wide CSS once: the `.agterm-blink` keyframe animation that pulses an in-progress
+/// agent-status glyph (the `AgentIndicator.blink` cue). Added at the application priority so it layers
+/// over the theme without overriding user CSS.
+@MainActor private func installAppCSS() {
+    guard let display = gdk_display_get_default() else { return }
+    let provider = gtk_css_provider_new()
+    let css = """
+    .agterm-blink { animation: agterm-blink-pulse 1.2s ease-in-out infinite; }
+    @keyframes agterm-blink-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+    window.agterm-translucent { background-color: transparent; }   /* terminal translucency: ghostty's alpha reaches the compositor */
+    .agterm-quick { background-color: #1e2228; }
+    .agterm-switcher { background-color: alpha(#1e2228, 0.96); padding: 10px; border-radius: 10px; border: 1px solid alpha(#ffffff, 0.12); }
+    .agterm-switcher label { padding: 3px 0; opacity: 0.6; }
+    .agterm-switcher label.agterm-switcher-current { opacity: 1; font-weight: bold; }
+    .agterm-gl-error { color: #ffffff; background-color: alpha(#1e2228, 0.96); padding: 24px; border-radius: 10px; border: 1px solid alpha(#e5a50a, 0.5); }
+    """
+    css.withCString { gtk_css_provider_load_from_string(provider, $0) }
+    // GTK_STYLE_PROVIDER_PRIORITY_APPLICATION = 600; the macro cast isn't available in Swift, the
+    // GtkCssProvider pointer is passed straight through as the GtkStyleProvider.
+    gtk_style_context_add_provider_for_display(display, OpaquePointer(provider), 600)
+}
+
+@MainActor private var gStatusColorProvider: OpaquePointer?
+
+/// Apply the agent-status glyph colors from settings (nil = the Adwaita defaults) via a dedicated,
+/// reloadable provider above the app CSS — re-callable when the Settings color pickers change them.
+@MainActor func installStatusColorCSS() {
+    guard let display = gdk_display_get_default() else { return }
+    let s = SettingsStore().load()
+    let css = """
+    .agterm-status-blocked { color: \(s.blockedStatusColorHex ?? "#e5a50a"); }
+    .agterm-status-completed { color: \(s.completedStatusColorHex ?? "#2ec27e"); }
+    .agterm-status-active { color: \(s.activeStatusColorHex ?? "#3584e4"); }
+    """
+    if gStatusColorProvider == nil {
+        let p = OpaquePointer(gtk_css_provider_new())
+        gStatusColorProvider = p
+        gtk_style_context_add_provider_for_display(display, p, 650)   // above the app CSS (600)
+    }
+    if let p = gStatusColorProvider { css.withCString { gtk_css_provider_load_from_string(cast(p), $0) } }
+}
+
+/// Custom symbolic icon search paths, highest priority first. The dist tarball ships them under
+/// `<bundle>/share/icons`; dev runs can point `AGTERM_ICON_RESOURCES` at `agterm-linux/Resources/icons`,
+/// or fall back to the common repo-root / package-root working directories.
+nonisolated private func iconResourceCandidates() -> [String] {
+    let env = ProcessInfo.processInfo.environment
+    var candidates: [String] = []
+    if let override = env["AGTERM_ICON_RESOURCES"], !override.isEmpty { candidates.append(override) }
+    if let arg0 = CommandLine.arguments.first, !arg0.isEmpty {
+        let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+        let raw = URL(fileURLWithPath: arg0)
+        let executable = raw.path.hasPrefix("/") ? raw : cwd.appendingPathComponent(arg0)
+        let bundleRoot = executable.resolvingSymlinksInPath().deletingLastPathComponent().deletingLastPathComponent()
+        candidates.append(bundleRoot.appendingPathComponent("share/icons", isDirectory: true).path)
+    }
+    let cwd = FileManager.default.currentDirectoryPath
+    candidates.append((cwd as NSString).appendingPathComponent("Resources/icons"))
+    candidates.append((cwd as NSString).appendingPathComponent("agterm-linux/Resources/icons"))
+    return candidates
+}
+
+/// Register the custom symbolic icons (the macOS-matching toolbar glyphs: split / scratch / quick /
+/// new-workspace / new-session / flag) by adding their directory to the icon theme. Installed builds
+/// can also resolve them from the user's hicolor theme (see scripts/install-linux.sh).
+@MainActor private func installAppIcons() {
+    guard let display = gdk_display_get_default() else { return }
+    let theme = gtk_icon_theme_get_for_display(display)
+    for iconsDir in iconResourceCandidates() where FileManager.default.fileExists(atPath: iconsDir) {
+        iconsDir.withCString { gtk_icon_theme_add_search_path(theme, $0) }
+    }
+}
+
+private let onColorSchemeChanged: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { _, _, _ in
+    MainActor.assumeIsolated { for ctl in gWindows.values { ctl.reapplyColorScheme() } }
+}
+
+/// SIGTERM/SIGINT → quit the GApplication on the main loop so its "shutdown" handler (flushOnQuit) runs.
+/// Returns G_SOURCE_REMOVE (the signal source is one-shot — the app is on its way out).
+private let onQuitSignal: @convention(c) (gpointer?) -> gboolean = { _ in
+    MainActor.assumeIsolated { if let app = gApp { g_application_quit(GAPP(app)) } }
+    return 0
+}
+
+/// The `app.reveal` action handler: a clicked notification fires this with the pane-qualified identity
+/// (`window:session:pane`) or, for older/plain notifications, just the session id.
+private let onRevealAction: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { _, param, _ in
+    guard let param, let cstr = g_variant_get_string(param, nil) else { return }
+    let target = String(cString: cstr)
+    MainActor.assumeIsolated {
+        if let parsed = TerminalNotification.parseIdentity(target) {
+            revealSession(parsed.sessionID, pane: parsed.pane)
+        } else if let id = UUID(uuidString: target) {
+            revealSession(id)
+        }
+    }
+}
+
+/// Reveal a session a notification points at: raise its (open) window, select it, and focus the firing
+/// pane. A session whose window is closed isn't found here (best-effort; the badge still tracks it).
+@MainActor func revealSession(_ id: UUID, pane: PaneRole = .main) {
+    for ctl in gWindows.values where ctl.store.session(withID: id) != nil {
+        if let session = ctl.store.session(withID: id), session.hasSplit {
+            session.splitFocused = pane == .split
+        }
+        gtk_window_present(WIN(ctl.windowPointer))
+        ctl.selectSession(id)
+        if let session = ctl.store.session(withID: id), session.hasSplit {
+            ctl.focusPane(toSplit: session.splitFocused, in: id)
+        }
+        return
+    }
+}

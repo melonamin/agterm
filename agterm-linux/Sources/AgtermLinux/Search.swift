@@ -1,0 +1,121 @@
+// In-terminal search (Ctrl+Shift+F): a GtkSearchEntry + match count + prev/next/close,
+// shown above the terminal deck. Drives libghostty via start_search / search:<q> /
+// navigate_search / end_search; libghostty replies through the START/END/TOTAL/SELECTED
+// actions, routed back via GhosttySurface.applySearch* -> these controller methods.
+import CGtk
+import Foundation
+import agtermCore
+
+@MainActor
+extension AppController {
+    func buildSearchBar() {
+        let bar = OpaquePointer(gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6))
+        gtk_widget_set_visible(W(bar), 0)
+        gtk_widget_add_css_class(W(bar), "toolbar")
+        gtk_widget_set_margin_top(W(bar), 4)
+        gtk_widget_set_margin_bottom(W(bar), 4)
+        gtk_widget_set_margin_start(W(bar), 6)
+        gtk_widget_set_margin_end(W(bar), 6)
+
+        guard let entry = op(gtk_search_entry_new()), let label = op(gtk_label_new("")) else { return }
+        gtk_widget_set_hexpand(W(entry), 1)
+        connect(entry, "search-changed", unsafeBitCast(onSearchChanged as @convention(c) (OpaquePointer?, gpointer?) -> Void, to: GCallback.self))
+        let kc = gtk_event_controller_key_new()
+        connect(kc, "key-pressed", unsafeBitCast(onSearchKey as @convention(c) (OpaquePointer?, UInt32, UInt32, UInt32, gpointer?) -> gboolean, to: GCallback.self))
+        gtk_widget_add_controller(W(entry), kc)
+        gtk_box_append(cast(bar), W(entry))
+
+        gtk_widget_add_css_class(W(label), "dim-label")
+        gtk_box_append(cast(bar), W(label))
+
+        func iconButton(_ icon: String, _ tip: String, _ cb: @escaping @convention(c) (OpaquePointer?, gpointer?) -> Void) {
+            let b = OpaquePointer(gtk_button_new_from_icon_name(icon))
+            gtk_widget_set_tooltip_text(W(b), tip)
+            connect(b, "clicked", unsafeBitCast(cb, to: GCallback.self))
+            gtk_box_append(cast(bar), W(b))
+        }
+        iconButton("go-up-symbolic", "Previous match (Shift+Enter)", onSearchPrev)
+        iconButton("go-down-symbolic", "Next match (Enter)", onSearchNext)
+        iconButton("window-close-symbolic", "Close (Esc)", onSearchClose)
+
+        searchBar = bar
+        searchEntry = entry
+        searchMatchLabel = label
+    }
+
+    /// Ctrl+Shift+F: open search on the active surface, or close it if already open.
+    func toggleSearch() {
+        if let owner = searchSurface {
+            owner.endSearch()
+            return
+        }
+        guard let id = store.selectedSessionID, let surf = searchTargetSurface(for: id) else { return }
+        searchSurface = surf
+        surf.startSearch()
+    }
+
+    // MARK: - Replies from libghostty (via GhosttySurface.applySearch*)
+
+    func searchDidStart(_ id: UUID, needle: String?) {
+        searchSessionID = id
+        searchTotal = nil
+        searchSelected = nil
+        updateSearchLabel()
+        gtk_widget_set_visible(W(searchBar), 1)
+        if let needle { needle.withCString { gtk_editable_set_text(searchEntry, $0) } }
+        _ = gtk_widget_grab_focus(W(searchEntry))
+    }
+
+    func searchDidEnd(_ id: UUID) {
+        guard searchSessionID == id else { return }
+        let owner = searchSurface
+        searchSessionID = nil
+        searchSurface = nil
+        gtk_widget_set_visible(W(searchBar), 0)
+        owner?.grabFocus()
+    }
+
+    func searchDidReportTotal(_ id: UUID, total: Int?) { searchTotal = total; updateSearchLabel() }
+    func searchDidReportSelected(_ id: UUID, selected: Int?) { searchSelected = selected; updateSearchLabel() }
+
+    func searchDisplayText() -> String {
+        guard let total = searchTotal else { return "" }
+        return total == 0 ? "No results" : "\(searchSelected ?? 0)/\(total)"
+    }
+
+    private func updateSearchLabel() {
+        let text: String
+        text = searchDisplayText()
+        text.withCString { gtk_label_set_text(searchMatchLabel, $0) }
+    }
+
+    // MARK: - Driven from the entry / buttons
+
+    func searchQueryChanged(_ text: String) { searchSurface?.sendSearchQuery(text) }
+    func searchNavigate(_ direction: SearchDirection) { searchSurface?.navigateSearch(direction) }
+    func searchClose() { searchSurface?.endSearch() }
+}
+
+private let onSearchChanged: @convention(c) (OpaquePointer?, gpointer?) -> Void = { entry, _ in
+    MainActor.assumeIsolated {
+        let text = gtk_editable_get_text(entry).map { String(cString: $0) } ?? ""
+        gController?.searchQueryChanged(text)
+    }
+}
+private let onSearchKey: @convention(c) (OpaquePointer?, UInt32, UInt32, UInt32, gpointer?) -> gboolean = { _, keyval, _, state, _ in
+    let shift = (state & (1 << 0)) != 0
+    switch keyval {
+    case 0xFF1B: MainActor.assumeIsolated { gController?.searchClose() }; return 1                       // Esc
+    case 0xFF0D, 0xFF8D: MainActor.assumeIsolated { gController?.searchNavigate(shift ? .previous : .next) }; return 1   // Enter / KP Enter
+    default: return 0
+    }
+}
+private let onSearchPrev: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _ in
+    MainActor.assumeIsolated { gController?.searchNavigate(.previous) }
+}
+private let onSearchNext: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _ in
+    MainActor.assumeIsolated { gController?.searchNavigate(.next) }
+}
+private let onSearchClose: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _ in
+    MainActor.assumeIsolated { gController?.searchClose() }
+}

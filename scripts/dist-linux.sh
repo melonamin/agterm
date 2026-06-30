@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Build a self-contained, relocatable agterm-linux tarball: the binary + its non-system shared libs
+# (the Swift runtime + libghostty) + the ghostty resources + a launcher that wires LD_LIBRARY_PATH and
+# GHOSTTY resources. GTK4/libadwaita are expected from the host (any modern Linux desktop has them).
+# Usage: scripts/dist-linux.sh   →  agterm-linux-dist.tar.gz at the repo root.
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+APP="$ROOT/agterm-linux"
+
+# Prefer a release build; fall back to debug (with a warning) so the script is usable mid-iteration.
+BIN="$APP/.build/release/AgtermLinux"
+[ -f "$BIN" ] || BIN="$APP/.build/debug/AgtermLinux"
+[ -f "$BIN" ] || { echo "no agterm-linux build found — run 'swift build -c release' in agterm-linux/ first" >&2; exit 1; }
+case "$BIN" in *debug*) echo "WARN: bundling a DEBUG build — run 'swift build -c release' for a release tarball" >&2 ;; esac
+
+STAGE="$(mktemp -d)/agterm-linux"
+mkdir -p "$STAGE/bin" "$STAGE/lib" "$STAGE/share"
+
+cp "$BIN" "$STAGE/bin/agterm-linux.bin"
+# Bundle only the NON-system libs the binary links (the Swift runtime + libghostty); GTK/glibc stay host.
+ldd "$BIN" | awk '/=> \// {print $3}' | grep -E '/(swift|ghostty)|libghostty|swift-linux-compat' | sort -u \
+  | while read -r lib; do [ -f "$lib" ] && cp -L "$lib" "$STAGE/lib/" || true; done
+
+# Ghostty resources (shell-integration + themes) plus the sibling terminfo used by xterm-ghostty;
+# skipped cleanly if not staged.
+[ -d "$APP/vendor/ghostty/share/ghostty" ] && cp -r "$APP/vendor/ghostty/share/ghostty" "$STAGE/share/ghostty" || \
+  echo "NOTE: no vendored ghostty resources to bundle (runtime falls back to /usr/share/ghostty)" >&2
+[ -d "$APP/vendor/ghostty/share/terminfo" ] && cp -r "$APP/vendor/ghostty/share/terminfo" "$STAGE/share/terminfo" || true
+
+# Custom symbolic toolbar icons. The app looks beside the launcher at share/icons before falling back to
+# installed hicolor icons or dev resource paths.
+[ -d "$APP/Resources/icons" ] && cp -r "$APP/Resources/icons" "$STAGE/share/icons" || true
+
+# Relocatable launcher: resolve its own dir, wire the bundled libs + resources, exec the binary.
+cat > "$STAGE/bin/agterm-linux" <<'LAUNCH'
+#!/usr/bin/env bash
+HERE="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+export LD_LIBRARY_PATH="$HERE/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+[ -d "$HERE/share/ghostty" ] && export AGTERM_GHOSTTY_RESOURCES="$HERE/share/ghostty"
+exec "$HERE/bin/agterm-linux.bin" "$@"
+LAUNCH
+chmod +x "$STAGE/bin/agterm-linux"
+
+cp "$ROOT/packaging/linux/com.umputun.agterm.linux.desktop" "$STAGE/" 2>/dev/null || true
+
+OUT="$ROOT/agterm-linux-dist.tar.gz"
+tar czf "$OUT" -C "$(dirname "$STAGE")" agterm-linux
+rm -rf "$(dirname "$STAGE")"
+echo "→ $OUT ($(du -h "$OUT" | cut -f1))"

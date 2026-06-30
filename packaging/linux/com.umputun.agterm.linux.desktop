@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=agterm
+GenericName=Terminal
+Comment=Native terminal with a workspace → session sidebar, on libghostty
+Exec=agterm-linux
+Icon=com.umputun.agterm.linux
+Terminal=false
+Categories=System;TerminalEmulator;
+Keywords=terminal;shell;command;ghostty;
+StartupNotify=true
+StartupWMClass=com.umputun.agterm.linux

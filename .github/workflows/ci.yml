@@ -26,6 +26,9 @@ jobs:
               - "**/*.swift"
               - "agtermCore/**"
               - "agterm/**"
+              - "agterm-linux/**"
+              - "linux/**"
+              - "packaging/**"
               - "project.yml"
               - "scripts/**"
               - ".swiftlint.yml"
@@ -92,6 +95,22 @@ jobs:
       - name: swiftlint (strict)
         run: swiftlint lint --strict
 
+  test-linux:
+    name: Unit tests (Linux)
+    needs: changes
+    if: needs.changes.outputs.swift == 'true'
+    runs-on: ubuntu-latest
+    # The host-free agtermCore package must stay green on Linux too (it backs the agterm-linux GTK
+    # port). The official Swift image matches the toolchain version, so the Arch-only libncurses/
+    # libxml2 compat shims the local run needs are unnecessary here. Adjust the tag if 6.3.2 is not a
+    # published image.
+    container: swift:6.3.2
+    steps:
+      - uses: actions/checkout@v7
+      - name: swift test
+        working-directory: agtermCore
+        run: swift test
+
   build:
     name: Build app
     needs: changes
@@ -111,3 +130,31 @@ jobs:
         run: brew install xcodegen
       - name: Build libghostty + app (Release)
         run: scripts/build.sh
+
+  build-linux:
+    name: Build app (Linux GTK)
+    needs: changes
+    if: needs.changes.outputs.swift == 'true'
+    runs-on: ubuntu-latest
+    # Compile-check the GTK port (the agtermCore unit tests already run in `test-linux`). The official
+    # Swift image carries the toolchain; apt adds GTK4/libadwaita + the GL deps and zig builds libghostty.
+    container: swift:6.3.2
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install GTK4 + libadwaita + GL + zig
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            libgtk-4-dev libadwaita-1-dev libepoxy-dev pkg-config git curl ca-certificates xz-utils
+          curl -fsSL https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz | tar -xJ -C /opt
+          echo "/opt/zig-x86_64-linux-0.15.2" >> "$GITHUB_PATH"
+      - name: Cache vendored libghostty (keyed on the pinned rev + the patch)
+        uses: actions/cache@v6
+        with:
+          path: agterm-linux/vendor/ghostty
+          key: libghostty-${{ hashFiles('scripts/setup-linux.sh', 'linux/patches/ghostty-embedded-opengl.patch') }}
+      - name: Build libghostty (skips if the cache restored it)
+        run: scripts/setup-linux.sh
+      - name: swift build (agterm-linux)
+        working-directory: agterm-linux
+        run: swift build
