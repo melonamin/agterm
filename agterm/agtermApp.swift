@@ -385,22 +385,22 @@ struct agtermApp: App {
     /// `start()` binds still sees it), honoring a test's `AGTERM_CONTROL_SOCKET` override.
     @MainActor
     private func surfaceEnv(for session: Session) -> [String: String] {
-        var env = ["AGTERM_ENABLED": "1", "AGTERM_SESSION_ID": session.id.uuidString,
-                   "AGTERM_SOCKET": controlServer.resolvedSocketPath]
-        if let windowID = library.windowID(forSession: session.id) {
-            env["AGTERM_WINDOW_ID"] = windowID.uuidString
-            if let workspace = library.store(for: windowID)?.workspace(forSession: session.id) {
-                env["AGTERM_WORKSPACE_ID"] = workspace.id.uuidString
+        var windowID: WindowInfo.ID?
+        var workspaceID: UUID?
+        if let resolvedWindowID = library.windowID(forSession: session.id) {
+            windowID = resolvedWindowID
+            if let workspace = library.store(for: resolvedWindowID)?.workspace(forSession: session.id) {
+                workspaceID = workspace.id
             }
         }
-        return env
+        return SurfaceEnvironment.session(sessionID: session.id, windowID: windowID,
+                                          workspaceID: workspaceID, socketPath: controlServer.resolvedSocketPath)
     }
 
     /// The `AGTERM_*` environment a window's quick terminal exposes — scratch, not in the tree, so it
     /// carries only `AGTERM_ENABLED`, `AGTERM_WINDOW_ID`, and `AGTERM_SOCKET` (no workspace/session ids).
     @MainActor
     func quickTerminalEnv(for windowID: WindowInfo.ID) -> [String: String] {
-        ["AGTERM_ENABLED": "1", "AGTERM_WINDOW_ID": windowID.uuidString,
-         "AGTERM_SOCKET": controlServer.resolvedSocketPath]
+        SurfaceEnvironment.quickTerminal(windowID: windowID, socketPath: controlServer.resolvedSocketPath)
     }
 }
