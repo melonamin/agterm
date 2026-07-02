@@ -797,7 +797,10 @@ final class AppController {
         guard let cfg = GhosttyApp.shared.buildConfig(extraLines: lines) else { return }
         GhosttyApp.shared.updateConfig(cfg)
         for ctl in gWindows.values {
-            for s in ctl.configurableSurfaces { s.applyConfig(cfg) }
+            for s in ctl.configurableSurfaces {
+                s.applyConfig(cfg)
+                s.reapplyWatermarkIfNeeded()
+            }
         }
         ghostty_config_free(cfg)
         // The embedded GL renderer ignores the config's colors, so ALSO push them as OSC to every live
@@ -996,16 +999,6 @@ final class AppController {
         case .windowMove:
             // GTK4/Wayland gives no programmatic window positioning — the compositor owns it.
             return err("window.move is not supported on this platform (the compositor controls window position)")
-        case .restoreClear:
-            // clear every open window's saved foreground commands + persist, so the next restart restores
-            // plain shells (also closes the force-quit re-fire: the on-disk copy is overwritten now).
-            for ctl in gWindows.values {
-                for ws in ctl.store.workspaces {
-                    for s in ws.sessions { s.foregroundCommand = nil; s.splitForegroundCommand = nil }
-                }
-            }
-            gLibrary.saveAllOpen()
-            return ok()
         default:
             return err("command not yet supported on Linux: \(req.cmd.rawValue)")
         }
@@ -1108,10 +1101,16 @@ final class AppController {
         // capture the user's divider drags as a persisted 0...1 ratio so the split reopens where they left it.
         connect(paned, "notify::position", unsafeBitCast(onPanedPosition as @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void, to: GCallback.self))
         sessionStacks[s.id] = stack
+        let hadForeground = s.foregroundCommand != nil
         let restoreInput = consumeRestoreInput(&s.foregroundCommand)
-        let surf = GhosttySurface(sessionID: s.id, cwd: s.effectiveCwd, command: s.initialCommand,
+        let plan = CommandRestore.restorePlan(wasRestored: s.wasRestored,
+                                              restoreEnabled: restoreEnabled,
+                                              hadForeground: hadForeground,
+                                              foregroundInput: restoreInput,
+                                              initialCommand: s.initialCommand)
+        let surf = GhosttySurface(sessionID: s.id, cwd: s.effectiveCwd, command: plan.command,
                                   env: sessionEnv(for: s), controller: self, fontSize: s.fontSize,
-                                  initialInput: s.initialCommand == nil ? restoreInput : nil)
+                                  initialInput: plan.initialInput)
         let sid = s.id
         surf.onExit = { [weak self] in self?.closePrimaryPane(sid) }   // promotes a live split; else closes the session
         s.surface = surf
@@ -1437,6 +1436,17 @@ final class AppController {
         gtk_paned_set_position(paned, Int32(ratio * Double(width)))
         splitCaptureSuppressed.remove(sid)   // restore applied → user drags capture again
         return 0
+    }
+
+    /// Apply a control-driven `session.resize` ratio to the live GtkPaned and persist it. If the split is
+    /// currently hidden or not laid out yet, the stored ratio is picked up the next time it is shown.
+    func applySplitRatio(to session: Session) {
+        store.save()
+        guard let paned = sessionPanes[session.id], session.splitRatio != nil else { return }
+        splitCaptureSuppressed.insert(session.id)
+        if tryRestorePanedRatio(paned) != 0 {
+            _ = g_timeout_add(50, restorePanedRatioTick, UnsafeMutableRawPointer(paned))
+        }
     }
 
     private func removeSession(_ id: UUID) {

@@ -104,6 +104,14 @@ final class GhosttyApp: @unchecked Sendable {
         return cfg
     }
 
+    /// Build a config for one surface with a final per-session overlay (`background-image*`, solid
+    /// `background`, and/or a font-size override). The returned config is owned by the caller.
+    func configWithOverlay(_ overlayText: String) -> ghostty_config_t? {
+        let base = AppController.ghosttyLines(for: SettingsStore().load())
+        let overlay = overlayText.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
+        return buildConfig(extraLines: base + overlay)
+    }
+
     /// `<configDir>/ghostty.conf` — the agterm-scoped ghostty config layer, resolved via the shared
     /// ConfigPaths (honors a custom config dir + AGTERM_STATE_DIR isolation).
     private static func scopedGhosttyConfigPath() -> String? {

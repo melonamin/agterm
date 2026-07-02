@@ -43,6 +43,9 @@ final class GhosttySurface: TerminalSurface {
     /// (libghostty copies the env-var STRUCT array during surface_new but keeps the char* pointers),
     /// freed in teardown.
     private var envCStrings: [UnsafeMutablePointer<CChar>] = []
+    /// Per-surface overlay configs (session background/font override), retained until a newer overlay
+    /// replaces them or the surface is torn down.
+    private var ownedConfigs: [ghostty_config_t] = []
 
     /// Set by the host: the shell process exited.
     var onExit: (() -> Void)?
@@ -184,6 +187,9 @@ final class GhosttySurface: TerminalSurface {
         ghostty_surface_set_focus(surface, true)
         applyColorScheme()   // report the system light/dark scheme (OSC color-scheme queries)
         feed(GhosttyApp.shared.currentThemeOSC)   // push theme colors the embedded GL renderer won't adopt from config
+        if controller?.store.session(withID: sessionID)?.backgroundWatermark != nil {
+            applyWatermarkFromSession()
+        }
     }
 
     private func pushSize() {
@@ -254,6 +260,28 @@ final class GhosttySurface: TerminalSurface {
         ghostty_surface_update_config(surface, config)
     }
 
+    func applyWatermarkFromSession() {
+        guard let surface, let session = controller?.store.session(withID: sessionID) else { return }
+        let resolvedImagePath = WatermarkRenderer.materialize(session.backgroundWatermark, sessionID: session.id)
+        let windowOpacity = SettingsStore().load().backgroundOpacity ?? 1
+        let overlay = WatermarkConfig.overlayText(watermark: session.backgroundWatermark,
+                                                  resolvedImagePath: resolvedImagePath,
+                                                  fontSize: session.fontSize,
+                                                  windowOpacity: windowOpacity)
+        guard let config = GhosttyApp.shared.configWithOverlay(overlay) else { return }
+        ghostty_surface_update_config(surface, config)
+        ownedConfigs.forEach { ghostty_config_free($0) }
+        ownedConfigs = [config]
+        let osc = AppSettings.themeOSC(from: overlay.split(separator: "\n", omittingEmptySubsequences: true).map(String.init))
+        if !osc.isEmpty { feed(osc) }
+        queueRender()
+    }
+
+    func reapplyWatermarkIfNeeded() {
+        guard controller?.store.session(withID: sessionID)?.backgroundWatermark != nil else { return }
+        applyWatermarkFromSession()
+    }
+
     func startSearch() { performBindingAction("start_search") }
     func endSearch() { performBindingAction("end_search") }
     func sendSearchQuery(_ needle: String) { performBindingAction("search:\(needle)") }
@@ -274,6 +302,26 @@ final class GhosttySurface: TerminalSurface {
         guard let ptr = out.text else { return nil }
         let s = String(cString: ptr)
         return s.isEmpty ? nil : s
+    }
+
+    func readScreenText(all: Bool, lines: Int?) -> String? {
+        guard let surface else { return nil }
+        let tag = (all || lines != nil) ? GHOSTTY_POINT_SCREEN : GHOSTTY_POINT_VIEWPORT
+        var sel = ghostty_selection_s()
+        sel.top_left = ghostty_point_s(tag: tag, coord: GHOSTTY_POINT_COORD_TOP_LEFT, x: 0, y: 0)
+        sel.bottom_right = ghostty_point_s(tag: tag, coord: GHOSTTY_POINT_COORD_BOTTOM_RIGHT, x: 0, y: 0)
+        sel.rectangle = false
+        var out = ghostty_text_s()
+        guard ghostty_surface_read_text(surface, sel, &out) else { return nil }
+        defer { ghostty_surface_free_text(surface, &out) }
+        guard let ptr = out.text, out.text_len > 0 else { return "" }
+        let full = String(decoding: UnsafeRawBufferPointer(start: ptr, count: Int(out.text_len)), as: UTF8.self)
+        guard let n = lines, n > 0 else { return full }
+        var rows = full.components(separatedBy: "\n")
+        while let last = rows.last, last.trimmingCharacters(in: .whitespaces).isEmpty {
+            rows.removeLast()
+        }
+        return rows.suffix(n).joined(separator: "\n")
     }
 
     func resize(width: Int32, height: Int32) {
@@ -537,6 +585,8 @@ final class GhosttySurface: TerminalSurface {
             ghostty_surface_free(surface)
             self.surface = nil
         }
+        ownedConfigs.forEach { ghostty_config_free($0) }
+        ownedConfigs = []
         for ptr in envCStrings { free(ptr) }
         envCStrings = []
     }

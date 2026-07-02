@@ -45,6 +45,20 @@ extension AppController: ControlActions {
     func foregroundCommands(for session: UUID) -> (main: [String]?, split: [String]?) {
         (surfaces[session]?.foregroundCommand(), splitSurfaces[session]?.foregroundCommand())
     }
+    func applyBackground(to session: Session) {
+        (session.surface as? GhosttySurface)?.applyWatermarkFromSession()
+        (session.splitSurface as? GhosttySurface)?.applyWatermarkFromSession()
+    }
+    func readText(from session: Session, pane: String?, all: Bool, lines: Int?) -> String? {
+        let surface: GhosttySurface?
+        switch pane {
+        case nil: surface = session.onScreenSurface as? GhosttySurface
+        case "left": surface = session.surface as? GhosttySurface
+        case "right": surface = session.splitSurface as? GhosttySurface
+        default: surface = nil
+        }
+        return surface?.readScreenText(all: all, lines: lines)
+    }
     func postNotification(toSession session: UUID?, title: String, body: String) {
         if let session {
             _ = store.recordTerminalNotification(TerminalNotificationRecord(sessionID: session, windowID: windowID, pane: .main,
@@ -59,6 +73,17 @@ extension AppController: ControlActions {
     var blockedStatusSoundName: String? { SettingsStore().load().blockedStatusSoundName }
     func statusSoundError(for name: String) -> String? { StatusSoundPlayer.shared.statusSoundError(for: name) }
     func playStatusSound(_ name: String) { StatusSoundPlayer.shared.play(name) }
+    func clearSavedCommands() {
+        for ctl in gWindows.values {
+            for ws in ctl.store.workspaces {
+                for s in ws.sessions {
+                    s.foregroundCommand = nil
+                    s.splitForegroundCommand = nil
+                }
+            }
+        }
+        gLibrary.saveAllOpen()
+    }
     func listThemes() -> [String] { Self.bundledThemes() }
     // `currentTheme` (the protocol's get) is already a property on AppController.
 
