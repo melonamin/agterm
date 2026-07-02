@@ -239,10 +239,10 @@ Read `.claude/rules/menu-actions.md` and `.claude/rules/theme-picker.md` first. 
 
 agtermCore purity holds: `import Foundation` only. Zero access changes — empirically pre-verified (the move was simulated in a scratch copy: compiled under strict concurrency, all 894 tests passed, zero modifier edits; the moved methods touch only public AppStore API).
 
-- [ ] baseline gate: `make build`; `cd agtermCore && swift test`; `make lint`.
-- [ ] single atomic move (one commit — create+delete cannot be separated or the duplicated methods are a redeclaration error): create `AppStore+Panes.swift` with `import Foundation`, a `// MARK: - Split, overlay, and scratch panes` header, and `extension AppStore { … }` wrapping orig lines 301–454 moved BYTE-IDENTICALLY (already indented one level, no reindent); delete those lines plus the one now-duplicate blank separator from AppStore.swift (846 − 155 = 691 exactly).
-- [ ] full gate: `make build` + `cd agtermCore && swift test` + `make lint`; `swiftlint lint --strict agtermCore/Sources/agtermCore/AppStore+Panes.swift` shows zero findings.
-- [ ] naming note honored: pairs with Task 6's `AppStorePaneTests.swift`; a future navigation extraction pre-agrees `AppStore+Navigation.swift` ~ `AppStoreNavigationTests.swift`. No rule-frontmatter change (AppStore.swift deliberately matches no rule — hub file).
+- [x] baseline gate: `make build`; `cd agtermCore && swift test`; `make lint`. (green: build OK, 894 tests in 39 suites, lint clean before any edit.)
+- [x] single atomic move (one commit — create+delete cannot be separated or the duplicated methods are a redeclaration error): create `AppStore+Panes.swift` with `import Foundation`, a `// MARK: - Split, overlay, and scratch panes` header, and `extension AppStore { … }` wrapping orig lines 301–454 moved BYTE-IDENTICALLY (already indented one level, no reindent); delete those lines plus the one now-duplicate blank separator from AppStore.swift (846 − 155 = 691 exactly). (done: AppStore.swift = 691 lines, AppStore+Panes.swift = 160 lines; seam collapsed to a single blank; no duplicate method defs.)
+- [x] full gate: `make build` + `cd agtermCore && swift test` + `make lint`; `swiftlint lint --strict agtermCore/Sources/agtermCore/AppStore+Panes.swift` shows zero findings. (all green: build OK, 894 tests = baseline, make lint clean, targeted lint 0 violations.)
+- [x] naming note honored: pairs with Task 6's `AppStorePaneTests.swift`; a future navigation extraction pre-agrees `AppStore+Navigation.swift` ~ `AppStoreNavigationTests.swift`. No rule-frontmatter change (AppStore.swift deliberately matches no rule — hub file). (kept the `AppStore+Panes.swift` name; no rule-frontmatter change made.)
 
 ### Task 11: Tighten swiftlint config, fix CI filter, update policy docs
 
