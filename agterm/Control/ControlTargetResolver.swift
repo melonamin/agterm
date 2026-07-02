@@ -44,7 +44,7 @@ final class ControlTargetResolver {
     /// else the closed-window error.
     private func resolveWindowStore(_ window: String?) -> Resolution<AppStore> {
         guard let window = trimmed(window) else { return .success(store) }
-        let resolution = ControlResolve.resolve(window, candidates: library.windows.map(\.id), active: library.activeWindowID)
+        let resolution = library.resolveWindow(window)
         guard case .resolved(let id) = resolution else {
             return .failure(resolutionError("window", target: window, resolution))
         }
@@ -152,10 +152,10 @@ final class ControlTargetResolver {
     /// error. Unlike the session/workspace resolvers, a window need not be open to be a target (select
     /// opens it, delete removes a closed one).
     func resolveWindowID(_ target: String?) -> Resolution<UUID> {
-        let resolution = ControlResolve.resolve(target ?? "active", candidates: library.windows.map(\.id),
-                                                active: library.activeWindowID)
+        let target = target ?? "active"
+        let resolution = library.resolveWindow(target)
         guard case .resolved(let id) = resolution else {
-            return .failure(resolutionError("window", target: target ?? "active", resolution))
+            return .failure(resolutionError("window", target: target, resolution))
         }
         return .success(id)
     }

@@ -75,9 +75,8 @@ struct ControlResolveTests {
         #expect(ControlResolve.errorMessage(noun: "session", target: "active", resolution: .resolved(a)) == "no such session: active")
     }
 
-    // window-id targets reuse the same pure resolver: candidates are window ids, active is the
-    // frontmost window. No window-specific resolver function exists — the cross-window
-    // session->store mapping is app-side ControlServer logic (Task 7), not a resolve concern.
+    // window-id targets reuse the same pure matcher semantics. WindowLibrary wires those semantics to
+    // its own ordered window set and active-window fallback; these tests keep the raw matcher pinned.
     private let w1 = UUID(uuidString: "0A11AAAA-0000-0000-0000-000000000011")!
     private let w2 = UUID(uuidString: "0A22BBBB-0000-0000-0000-000000000012")!
     private let w3 = UUID(uuidString: "7B33CCCC-0000-0000-0000-000000000013")!

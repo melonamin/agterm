@@ -166,6 +166,13 @@ public final class WindowLibrary {
         }
     }
 
+    /// Resolve a control window target against the library's ordered window set. All known windows are
+    /// candidates, including closed windows; `active` resolves to the frontmost open window, with the
+    /// same fallback as `activeWindowID`.
+    public func resolveWindow(_ target: String) -> TargetResolution {
+        ControlResolve.resolve(target, candidates: windows.map(\.id), active: activeWindowID)
+    }
+
     /// The persisted open-set in window order, for the launch reopen-all. A window is open iff
     /// its store is loaded.
     public func openIDs() -> [UUID] {

@@ -142,6 +142,58 @@ final class WindowLibraryTests {
         ])
     }
 
+    @Test func resolveWindowActiveUsesActiveWindowFallback() {
+        let library = WindowLibrary(directory: directory)
+        let first = library.windows[0].id
+        let second = library.newWindow(name: "work").id
+        library.frontmostWindowID = second
+
+        #expect(library.resolveWindow("active") == .resolved(second))
+
+        library.closeWindow(second)
+        #expect(library.resolveWindow("active") == .resolved(first))
+    }
+
+    @Test func resolveWindowMatchesExactAndUniquePrefix() throws {
+        let first = UUID(uuidString: "0A11AAAA-0000-0000-0000-000000000011")!
+        let second = UUID(uuidString: "7B33CCCC-0000-0000-0000-000000000013")!
+        try writeWindowFile(first, Snapshot(workspaces: [WorkspaceSnapshot(id: UUID(), name: "a", sessions: [])]))
+        try writeWindowFile(second, Snapshot(workspaces: [WorkspaceSnapshot(id: UUID(), name: "b", sessions: [])]))
+        try writeIndex(WindowsIndex(frontmost: second, windows: [
+            WindowEntry(id: first, name: "a", isOpen: true),
+            WindowEntry(id: second, name: "b", isOpen: true),
+        ]))
+
+        let library = WindowLibrary(directory: directory)
+
+        #expect(library.resolveWindow(first.uuidString.lowercased()) == .resolved(first))
+        #expect(library.resolveWindow("7b33") == .resolved(second))
+    }
+
+    @Test func resolveWindowReportsAmbiguousAndMissingTargets() throws {
+        let first = UUID(uuidString: "0A11AAAA-0000-0000-0000-000000000011")!
+        let second = UUID(uuidString: "0A22BBBB-0000-0000-0000-000000000012")!
+        try writeWindowFile(first, Snapshot(workspaces: [WorkspaceSnapshot(id: UUID(), name: "a", sessions: [])]))
+        try writeWindowFile(second, Snapshot(workspaces: [WorkspaceSnapshot(id: UUID(), name: "b", sessions: [])]))
+        try writeIndex(WindowsIndex(windows: [
+            WindowEntry(id: first, name: "a", isOpen: true),
+            WindowEntry(id: second, name: "b", isOpen: true),
+        ]))
+
+        let library = WindowLibrary(directory: directory)
+
+        #expect(library.resolveWindow("0a") == .ambiguous([first, second]))
+        #expect(library.resolveWindow("deadbeef") == .notFound)
+    }
+
+    @Test func resolveWindowIncludesClosedWindowsAsCandidates() {
+        let library = WindowLibrary(directory: directory)
+        let closed = library.newWindow(name: "closed").id
+        library.closeWindow(closed)
+
+        #expect(library.resolveWindow(closed.uuidString) == .resolved(closed))
+    }
+
     @Test func newWindowBlankNameFallsBackToDefault() {
         let library = WindowLibrary(directory: directory)
         let info = library.newWindow(name: "   ")
