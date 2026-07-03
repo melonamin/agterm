@@ -26,6 +26,40 @@ public protocol ControlActions {
     func setSidebarViewMode(_ mode: ControlSidebarViewMode) -> ControlResponse
     func expandSidebar(window: String?) -> ControlResponse
     func collapseSidebar(window: String?) -> ControlResponse
+    func typeSession(_ target: String?, window: String?, options: ControlSessionTypeOptions) async -> ControlResponse
+    func copySessionSelection(_ target: String?, window: String?) -> ControlResponse
+    func openSessionOverlay(_ target: String?, window: String?,
+                            options: ControlSessionOverlayOpenOptions) -> ControlResponse
+    func closeSessionOverlay(_ target: String?, window: String?) -> ControlResponse
+    func sessionOverlayResult(_ target: String?, window: String?) -> ControlResponse
+}
+
+public struct ControlSessionTypeOptions: Equatable, Sendable {
+    public let text: String
+    public let select: Bool
+    public let pane: String?
+
+    public init(text: String, select: Bool, pane: String?) {
+        self.text = text
+        self.select = select
+        self.pane = pane
+    }
+}
+
+public struct ControlSessionOverlayOpenOptions: Equatable, Sendable {
+    public let command: String
+    public let cwd: String?
+    public let wait: Bool
+    public let sizePercent: Int?
+    public let backgroundColor: String?
+
+    public init(command: String, cwd: String?, wait: Bool, sizePercent: Int?, backgroundColor: String?) {
+        self.command = command
+        self.cwd = cwd
+        self.wait = wait
+        self.sizePercent = sizePercent
+        self.backgroundColor = backgroundColor
+    }
 }
 
 /// Routes the command groups that have been hoisted from the app control switch. Commands outside this
@@ -38,7 +72,7 @@ public struct ControlDispatcher {
         self.actions = actions
     }
 
-    public func dispatch(_ request: ControlRequest) -> ControlResponse? {
+    public func dispatch(_ request: ControlRequest) async -> ControlResponse? {
         switch request.cmd {
         case .tree:
             return actions.controlTree(window: request.args?.window)
@@ -145,6 +179,37 @@ public struct ControlDispatcher {
             return actions.expandSidebar(window: request.args?.window)
         case .sidebarCollapse:
             return actions.collapseSidebar(window: request.args?.window)
+        case .sessionType:
+            guard let text = request.args?.text else {
+                return ControlResponse(ok: false, error: "session.type requires text")
+            }
+            return await actions.typeSession(request.target, window: request.args?.window,
+                                             options: ControlSessionTypeOptions(
+                                                text: text,
+                                                select: request.args?.select ?? false,
+                                                pane: request.args?.pane
+                                             ))
+        case .sessionCopy:
+            return actions.copySessionSelection(request.target, window: request.args?.window)
+        case .sessionOverlayOpen:
+            guard let command = request.args?.command, !command.isEmpty else {
+                return ControlResponse(ok: false, error: "session.overlay.open requires a command")
+            }
+            if let color = request.args?.color, !WatermarkConfig.isValidColorHex(color) {
+                return ControlResponse(ok: false, error: "invalid color: \(color) (#rrggbb)")
+            }
+            return actions.openSessionOverlay(request.target, window: request.args?.window,
+                                              options: ControlSessionOverlayOpenOptions(
+                                                command: command,
+                                                cwd: request.args?.cwd,
+                                                wait: request.args?.wait ?? false,
+                                                sizePercent: request.args?.sizePercent,
+                                                backgroundColor: request.args?.color
+                                              ))
+        case .sessionOverlayClose:
+            return actions.closeSessionOverlay(request.target, window: request.args?.window)
+        case .sessionOverlayResult:
+            return actions.sessionOverlayResult(request.target, window: request.args?.window)
         default:
             return nil
         }

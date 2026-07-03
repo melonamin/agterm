@@ -28,6 +28,66 @@ extension ControlServer: ControlActions {
         collapseWorkspaces(window: window)
     }
 
+    func typeSession(_ target: String?, window: String?, options: ControlSessionTypeOptions) async -> ControlResponse {
+        // Resolve first (cross-window when no `args.window`), then realize-and-inject; the realize
+        // path is async (bounded poll), so this can't go through the synchronous `resolveSession`
+        // helper. The not-found / ambiguous error strings must stay in sync with `resolve(...)`.
+        switch resolver.resolveSessionTarget(target, window: window) {
+        case .failure(let response):
+            return response
+        case .success(let (store, id)):
+            return await injectText(options.text, into: id, store: store, select: options.select,
+                                    pane: options.pane)
+        }
+    }
+
+    func copySessionSelection(_ target: String?, window: String?) -> ControlResponse {
+        copySelection(target, window: window)
+    }
+
+    func openSessionOverlay(_ target: String?, window: String?,
+                            options: ControlSessionOverlayOpenOptions) -> ControlResponse {
+        resolver.resolveSession(target, window: window) { store, id in
+            guard store.openOverlay(id, command: options.command, cwd: options.cwd,
+                                    wait: options.wait, sizePercent: options.sizePercent,
+                                    backgroundColor: options.backgroundColor) else {
+                return ControlResponse(ok: false, error: "overlay already open")
+            }
+            // A floating overlay (sizePercent set) renders only for the active session, so on a non-active
+            // target its surface never mounts and its program never runs -- and `--block` would poll
+            // forever. Select the target so it mounts and runs (the full overlay mounts in the eager deck
+            // regardless, so this only matters for floating).
+            if options.sizePercent != nil {
+                store.selectSession(id)
+            }
+            return ControlResponse(ok: true, result: ControlResult(id: id.uuidString))
+        }
+    }
+
+    func closeSessionOverlay(_ target: String?, window: String?) -> ControlResponse {
+        resolver.resolveSession(target, window: window) { store, id in
+            guard store.closeOverlay(id) else {
+                return ControlResponse(ok: false, error: "no overlay")
+            }
+            return ControlResponse(ok: true, result: ControlResult(id: id.uuidString))
+        }
+    }
+
+    func sessionOverlayResult(_ target: String?, window: String?) -> ControlResponse {
+        resolver.resolveSession(target, window: window) { store, id in
+            guard let session = store.session(withID: id) else {
+                return ControlResponse(ok: false, error: "no such session")
+            }
+            if session.overlayActive {
+                return ControlResponse(ok: false, error: OverlayResultError.stillRunning)
+            }
+            guard let code = session.overlayExitCode else {
+                return ControlResponse(ok: false, error: OverlayResultError.noResult)
+            }
+            return ControlResponse(ok: true, result: ControlResult(id: id.uuidString, exitCode: code))
+        }
+    }
+
     /// The destination workspace is addressed one of two mutually-exclusive ways: `workspace`
     /// (id / unique prefix / `active`, the default) or `workspaceName` (the sidebar label),
     /// the latter optionally with `createWorkspace` to add it when absent. create needs a name —

@@ -336,14 +336,15 @@ final class ControlServer {
         // refresh the read cache within this same main-actor execution (a window mutation just ran), so
         // the background fast path sees the new state without a separate hop that could stall.
         defer { refreshWindowCache() }
-        if let response = ControlDispatcher(actions: self).dispatch(request) {
+        if let response = await ControlDispatcher(actions: self).dispatch(request) {
             return response
         }
         switch request.cmd {
         case .tree, .sessionNew, .sessionMove, .workspaceMove, .workspaceFocus, .sessionSplit,
                 .sessionScratch, .sessionFocus, .sessionResize, .sessionStatus, .sessionFlag,
                 .notify, .fontInc, .fontDec, .fontReset, .keymapReload, .configReload,
-                .themeSet, .themeList, .sidebar, .sidebarMode, .sidebarExpand, .sidebarCollapse:
+                .themeSet, .themeList, .sidebar, .sidebarMode, .sidebarExpand, .sidebarCollapse,
+                .sessionType, .sessionCopy, .sessionOverlayOpen, .sessionOverlayClose, .sessionOverlayResult:
             return ControlResponse(ok: false, error: "control dispatcher did not handle \(request.cmd.rawValue)")
         case .sessionSelect:
             return resolver.resolveSession(request.target, window: request.args?.window) { store, id in
@@ -410,24 +411,8 @@ final class ControlServer {
                 store.renameSession(id, to: name)
                 return ControlResponse(ok: true, result: ControlResult(id: id.uuidString))
             }
-        case .sessionType:
-            guard let text = request.args?.text else {
-                return ControlResponse(ok: false, error: "session.type requires text")
-            }
-            // resolve first (cross-window when no `args.window`), then realize-and-inject; the realize
-            // path is async (bounded poll), so this can't go through the synchronous `resolveSession`
-            // helper. the not-found / ambiguous error strings must stay in sync with `resolve(...)`.
-            switch resolver.resolveSessionTarget(request.target, window: request.args?.window) {
-            case .failure(let response):
-                return response
-            case .success(let (store, id)):
-                return await injectText(text, into: id, store: store, select: request.args?.select ?? false,
-                                        pane: request.args?.pane)
-            }
         case .sessionBackground:
             return setBackground(request.target, request.args)
-        case .sessionCopy:
-            return copySelection(request.target, window: request.args?.window)
         case .sessionText:
             return readText(request.target, window: request.args?.window, pane: request.args?.pane,
                             all: request.args?.all ?? false, lines: request.args?.lines)
@@ -440,49 +425,6 @@ final class ControlServer {
                 return response
             case .success(let (store, id)):
                 return await searchSession(id, store: store, text: request.args?.text, to: request.args?.to)
-            }
-        case .sessionOverlayOpen:
-            guard let command = request.args?.command, !command.isEmpty else {
-                return ControlResponse(ok: false, error: "session.overlay.open requires a command")
-            }
-            if let color = request.args?.color, !WatermarkConfig.isValidColorHex(color) {
-                return ControlResponse(ok: false, error: "invalid color: \(color) (#rrggbb)")
-            }
-            return resolver.resolveSession(request.target, window: request.args?.window) { store, id in
-                guard store.openOverlay(id, command: command, cwd: request.args?.cwd,
-                                        wait: request.args?.wait ?? false,
-                                        sizePercent: request.args?.sizePercent,
-                                        backgroundColor: request.args?.color) else {
-                    return ControlResponse(ok: false, error: "overlay already open")
-                }
-                // a FLOATING overlay (sizePercent set) renders only for the ACTIVE session, so on a non-active
-                // target its surface never mounts and its program never runs — and `--block` would poll
-                // forever. select the target so it mounts and runs (the full overlay mounts in the eager deck
-                // regardless, so this only matters for floating).
-                if request.args?.sizePercent != nil {
-                    store.selectSession(id)
-                }
-                return ControlResponse(ok: true, result: ControlResult(id: id.uuidString))
-            }
-        case .sessionOverlayClose:
-            return resolver.resolveSession(request.target, window: request.args?.window) { store, id in
-                guard store.closeOverlay(id) else {
-                    return ControlResponse(ok: false, error: "no overlay")
-                }
-                return ControlResponse(ok: true, result: ControlResult(id: id.uuidString))
-            }
-        case .sessionOverlayResult:
-            return resolver.resolveSession(request.target, window: request.args?.window) { store, id in
-                guard let session = store.session(withID: id) else {
-                    return ControlResponse(ok: false, error: "no such session")
-                }
-                if session.overlayActive {
-                    return ControlResponse(ok: false, error: OverlayResultError.stillRunning)
-                }
-                guard let code = session.overlayExitCode else {
-                    return ControlResponse(ok: false, error: OverlayResultError.noResult)
-                }
-                return ControlResponse(ok: true, result: ControlResult(id: id.uuidString, exitCode: code))
             }
         case .quick:
             return setQuickTerminal(mode: request.args?.mode)
