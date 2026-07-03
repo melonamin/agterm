@@ -64,3 +64,71 @@ public enum ControlSidebarViewMode: Equatable, Sendable {
         }
     }
 }
+
+/// Parsed mode for `session.flag`.
+public enum ControlSessionFlagMode: Equatable, Sendable {
+    case on
+    case off
+    case toggle
+    case clear
+
+    public static func parse(_ mode: String?) -> ControlSessionFlagMode? {
+        switch mode ?? "toggle" {
+        case "on": return .on
+        case "off": return .off
+        case "toggle": return .toggle
+        case "clear": return .clear
+        default: return nil
+        }
+    }
+}
+
+/// The mutually exclusive move forms accepted by `session.move`.
+public enum ControlSessionMove: Equatable, Sendable {
+    case reorder(ReorderDirection)
+    case workspace(String)
+}
+
+/// Parsed resize request for `session.resize`.
+public enum ControlSplitResize: Equatable, Sendable {
+    case ratio(Double)
+    case delta(Double)
+}
+
+/// Host-facing `session.new` options after dispatcher-level guard validation.
+public struct ControlSessionCreateOptions: Equatable, Sendable {
+    public let window: String?
+    public let cwd: String?
+    public let workspace: String?
+    public let workspaceName: String?
+    public let createWorkspace: Bool?
+    public let command: String?
+    public let name: String?
+
+    public init(window: String?, cwd: String?, workspace: String?, workspaceName: String?,
+                createWorkspace: Bool?, command: String?, name: String?) {
+        self.window = window
+        self.cwd = cwd
+        self.workspace = workspace
+        self.workspaceName = workspaceName
+        self.createWorkspace = createWorkspace
+        self.command = command
+        self.name = name
+    }
+}
+
+/// Parsed `session.status` payload. Sound validation and playback stay host-side.
+/// The per-call status payload for `setSessionStatus`; the addressing target/window stay separate.
+public struct ControlSessionStatusUpdate: Equatable, Sendable {
+    public let status: AgentStatus
+    public let blink: Bool?
+    public let autoReset: Bool?
+    public let sound: String?
+
+    public init(status: AgentStatus, blink: Bool?, autoReset: Bool?, sound: String?) {
+        self.status = status
+        self.blink = blink
+        self.autoReset = autoReset
+        self.sound = sound
+    }
+}

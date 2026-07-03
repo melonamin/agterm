@@ -28,19 +28,46 @@ extension ControlServer: ControlActions {
         collapseWorkspaces(window: window)
     }
 
+    /// The destination workspace is addressed one of two mutually-exclusive ways: `workspace`
+    /// (id / unique prefix / `active`, the default) or `workspaceName` (the sidebar label),
+    /// the latter optionally with `createWorkspace` to add it when absent. create needs a name —
+    /// there is nothing to create by id. cwd/command/name are applied in makeSessionResponse.
+    func createSession(_ options: ControlSessionCreateOptions) -> ControlResponse {
+        resolver.resolvePlacementStore(options.window) { store in
+            // name addressing: reuse-or-create with `createWorkspace`, else require an existing match.
+            if let name = options.workspaceName {
+                // a blank name can neither be found NOR created — report that directly rather than
+                // suggesting --create-workspace (which would also reject a blank name).
+                guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    return ControlResponse(ok: false, error: "workspace name must not be blank")
+                }
+                let workspace = options.createWorkspace == true
+                    ? store.ensureWorkspace(named: name)
+                    : store.workspace(named: name)
+                guard let workspace else {
+                    return ControlResponse(ok: false, error: "no workspace named \"\(name)\" (pass --create-workspace to add it)")
+                }
+                return makeSessionResponse(in: store, workspaceID: workspace.id, options: options)
+            }
+            // id addressing (default `active`): the canonical prefix/active resolver.
+            let target = options.workspace ?? "active"
+            return resolver.resolve(target, candidates: store.workspaces.map(\.id),
+                           active: store.currentWorkspaceID, noun: "workspace") { workspaceID in
+                makeSessionResponse(in: store, workspaceID: workspaceID, options: options)
+            }
+        }
+    }
+
     /// Resolve the target session and drive the split directly on its owning store (NOT the
     /// argument-less `AppActions.toggleSplit()`, which only acts on the active session). `mode` is
     /// `on|off|toggle`, computed against the session's current `isSplit` so `on`/`off` are
     /// idempotent. Always via `AppStore.toggleSplit` — a keep-alive hide/show that mirrors ⌘D and
     /// never tears the hidden pane's surface down (`closeSplit` stays the shell-exit-only path).
     /// Focus follows via `AppActions.focusSplitPane`.
-    func splitSession(_ target: String?, window: String?, mode: String?) -> ControlResponse {
+    func splitSession(_ target: String?, window: String?, mode parsedMode: ControlToggleMode) -> ControlResponse {
         return resolver.resolveSession(target, window: window) { store, id in
             guard let session = store.session(withID: id) else {
                 return ControlResponse(ok: false, error: "no such session: \(target ?? "active")")
-            }
-            guard let parsedMode = ControlToggleMode.parse(mode) else {
-                return ControlResponse(ok: false, error: "invalid split mode: \(mode ?? "toggle")")
             }
             let want = parsedMode.desiredValue(current: session.isSplit)
             if want != session.isSplit {
@@ -58,13 +85,11 @@ extension ControlServer: ControlActions {
     /// that program as the scratch's process instead of a login shell, run-once like `session.new
     /// --command`: a scratch is expendable, so if one is already alive it is torn down and respawned
     /// with the command (otherwise the flag would be silently inert).
-    func scratchSession(_ target: String?, window: String?, mode: String?, command: String?) -> ControlResponse {
+    func scratchSession(_ target: String?, window: String?, mode parsedMode: ControlToggleMode,
+                        command: String?) -> ControlResponse {
         return resolver.resolveSession(target, window: window) { store, id in
             guard let session = store.session(withID: id) else {
                 return ControlResponse(ok: false, error: "no such session: \(target ?? "active")")
-            }
-            guard let parsedMode = ControlToggleMode.parse(mode) else {
-                return ControlResponse(ok: false, error: "invalid scratch mode: \(mode ?? "toggle")")
             }
             let want = parsedMode.desiredValue(current: session.scratchActive)
             if want, let command, !command.isEmpty {
@@ -89,16 +114,13 @@ extension ControlServer: ControlActions {
 
     /// Move keyboard focus to a split session's left/right pane. `pane` is `left`|`right`|`other`
     /// (`other` toggles). Errors when the session isn't split or the pane value is unknown.
-    func focusSessionPane(_ target: String?, window: String?, pane: String?) -> ControlResponse {
+    func focusSessionPane(_ target: String?, window: String?, pane parsedPane: ControlPaneFocusMode) -> ControlResponse {
         return resolver.resolveSession(target, window: window) { store, id in
             guard let session = store.session(withID: id) else {
                 return ControlResponse(ok: false, error: "no such session: \(target ?? "active")")
             }
             guard session.hasSplit else {
                 return ControlResponse(ok: false, error: "session has no split")
-            }
-            guard let parsedPane = ControlPaneFocusMode.parse(pane) else {
-                return ControlResponse(ok: false, error: "invalid pane: \(pane ?? "other")")
             }
             let toSplit = parsedPane.wantsSplit(currentSplitFocused: session.splitFocused)
             actions.setSplitFocus(toSplit, of: session)
@@ -113,15 +135,7 @@ extension ControlServer: ControlActions {
     /// then `.agtermApplySplitRatio` pokes the session's `SplitProbeView` to move the live divider (a no-op
     /// when the split is hidden — the stored value applies on next show). Errors when the session has no
     /// split, mirroring `session.focus`. Echoes the applied (clamped) fraction in `result.ratio`.
-    func resizeSplit(_ target: String?, window: String?, ratio: Double?, delta: Double?) -> ControlResponse {
-        switch (ratio, delta) {
-        case (nil, nil):
-            return ControlResponse(ok: false, error: "session.resize requires --split-ratio, --grow-left, or --grow-right")
-        case (.some, .some):
-            return ControlResponse(ok: false, error: "session.resize: --split-ratio is mutually exclusive with --grow-left/--grow-right")
-        default:
-            break
-        }
+    func resizeSplit(_ target: String?, window: String?, resize: ControlSplitResize) -> ControlResponse {
         return resolver.resolveSession(target, window: window) { store, id in
             guard let session = store.session(withID: id) else {
                 return ControlResponse(ok: false, error: "no such session: \(target ?? "active")")
@@ -129,7 +143,13 @@ extension ControlServer: ControlActions {
             guard session.hasSplit else {
                 return ControlResponse(ok: false, error: "session has no split")
             }
-            let requested = ratio ?? ((session.splitRatio ?? AppStore.splitRatioDefault) + (delta ?? 0))
+            let requested: Double
+            switch resize {
+            case .ratio(let ratio):
+                requested = ratio
+            case .delta(let delta):
+                requested = (session.splitRatio ?? AppStore.splitRatioDefault) + delta
+            }
             guard let applied = store.applySplitRatio(requested, forSession: id) else {
                 return ControlResponse(ok: false, error: "no such session: \(target ?? "active")")
             }
@@ -148,34 +168,22 @@ extension ControlServer: ControlActions {
     /// per-call `sound` is given and the session TRANSITIONS into `blocked`, the user's configured Settings
     /// "Blocked sound" (`blockedStatusSoundName`) plays as a best-effort default. The indicator is ephemeral
     /// and rendered on every non-idle session.
-    /// The per-call status payload for `setSessionStatus`; the addressing target/window stay separate.
-    struct StatusUpdate {
-        let status: String?
-        let blink: Bool?
-        let autoReset: Bool?
-        let sound: String?
-    }
-
-    func setSessionStatus(_ target: String?, window: String?, update: StatusUpdate) -> ControlResponse {
-        let status = update.status, blink = update.blink, autoReset = update.autoReset, sound = update.sound
-        guard let parsed = AgentStatus(rawValue: status ?? "") else {
-            return ControlResponse(ok: false, error: "invalid status")
-        }
+    func setSessionStatus(_ target: String?, window: String?, update: ControlSessionStatusUpdate) -> ControlResponse {
         // an explicit per-call sound is validated up-front: an unknown name errors without changing status.
         // an empty value is treated as no per-call sound, matching `AgentStatus.effectiveSound`.
-        if let sound, !sound.isEmpty, StatusSoundPlayer.shared.action(for: sound) == nil {
+        if let sound = update.sound, !sound.isEmpty, StatusSoundPlayer.shared.action(for: sound) == nil {
             let hint = StatusSoundPlayer.standardNames.joined(separator: ", ")
             return ControlResponse(ok: false, error: "unknown sound: \(sound) (use 'default', 'beep', or one of: \(hint))")
         }
         return resolver.resolveSession(target, window: window) { store, id in
             // capture the status BEFORE mutating so the Settings default plays only on a real transition.
             let wasBlocked = store.session(withID: id)?.agentIndicator.status == .blocked
-            store.setAgentIndicator(AgentIndicator(status: parsed, blink: blink ?? false,
-                                                   autoReset: autoReset ?? false), forSession: id)
+            store.setAgentIndicator(AgentIndicator(status: update.status, blink: update.blink ?? false,
+                                                   autoReset: update.autoReset ?? false), forSession: id)
             // explicit per-call sound wins on any status; the Settings default plays only when a session
             // newly enters `blocked`, not on a repeated `blocked` set.
             let blockedDefault = wasBlocked ? nil : self.settingsModel.settings.blockedStatusSoundName
-            if let name = parsed.effectiveSound(perCall: sound, blockedDefault: blockedDefault) {
+            if let name = update.status.effectiveSound(perCall: update.sound, blockedDefault: blockedDefault) {
                 StatusSoundPlayer.shared.play(name)
             }
             return ControlResponse(ok: true, result: ControlResult(id: id.uuidString))
@@ -187,9 +195,8 @@ extension ControlServer: ControlActions {
     /// session's current `flagged` so `on`/`off` are idempotent. `clear` ignores the target and unflags
     /// every session in the resolved store (frontmost or `--window`), via `AppStore.clearFlags()` — it
     /// reports ok with no id. An unknown mode is an error.
-    func flagSession(_ target: String?, window: String?, mode: String?) -> ControlResponse {
-        let mode = mode ?? "toggle"
-        if mode == "clear" {
+    func setSessionFlag(_ target: String?, window: String?, mode: ControlSessionFlagMode) -> ControlResponse {
+        if mode == .clear {
             return resolver.resolvePlacementStore(window) { store in
                 store.clearFlags()
                 return ControlResponse(ok: true)
@@ -201,10 +208,10 @@ extension ControlServer: ControlActions {
             }
             let want: Bool
             switch mode {
-            case "on": want = true
-            case "off": want = false
-            case "toggle": want = !session.flagged
-            default: return ControlResponse(ok: false, error: "invalid flag mode: \(mode)")
+            case .on: want = true
+            case .off: want = false
+            case .toggle: want = !session.flagged
+            case .clear: return ControlResponse(ok: false, error: "invalid flag mode: clear")
             }
             store.setFlag(want, forSession: id) // no-op + no save when unchanged (idempotent)
             return ControlResponse(ok: true, result: ControlResult(id: id.uuidString))
@@ -214,29 +221,22 @@ extension ControlServer: ControlActions {
     /// Mode-bearing `session.move`: `to` reorders the session within its own workspace
     /// (`up`|`down`|`top`|`bottom`), `workspace` relocates it to another workspace (appending). Exactly
     /// one of the two is required; both set or neither set is an error. An invalid `to` direction errors.
-    func moveSession(_ target: String?, window: String?, to: String?, workspace: String?) -> ControlResponse {
-        if to != nil && workspace != nil {
-            return ControlResponse(ok: false, error: "session.move takes either --to or a workspace, not both")
-        }
-        if let to {
-            guard let dir = ReorderDirection(rawValue: to) else {
-                return ControlResponse(ok: false, error: "session.move --to must be up|down|top|bottom")
-            }
+    func moveSession(_ target: String?, window: String?, move: ControlSessionMove) -> ControlResponse {
+        switch move {
+        case .reorder(let dir):
             return resolver.resolveSession(target, window: window) { store, id in
                 store.reorderSession(id, dir)
                 return ControlResponse(ok: true, result: ControlResult(id: id.uuidString))
             }
-        }
-        guard let workspace else {
-            return ControlResponse(ok: false, error: "session.move requires --to or a workspace")
-        }
-        // the session and the destination workspace must live in the same store: resolve the
-        // session first (which fixes the store), then the workspace within that same store.
-        return resolver.resolveSession(target, window: window) { store, sessionID in
-            resolver.resolve(workspace, candidates: store.workspaces.map(\.id),
-                    active: store.currentWorkspaceID, noun: "workspace") { workspaceID in
-                store.moveSession(sessionID, toWorkspace: workspaceID)
-                return ControlResponse(ok: true, result: ControlResult(id: sessionID.uuidString))
+        case .workspace(let workspace):
+            // the session and the destination workspace must live in the same store: resolve the
+            // session first (which fixes the store), then the workspace within that same store.
+            return resolver.resolveSession(target, window: window) { store, sessionID in
+                resolver.resolve(workspace, candidates: store.workspaces.map(\.id),
+                        active: store.currentWorkspaceID, noun: "workspace") { workspaceID in
+                    store.moveSession(sessionID, toWorkspace: workspaceID)
+                    return ControlResponse(ok: true, result: ControlResult(id: sessionID.uuidString))
+                }
             }
         }
     }
@@ -244,13 +244,7 @@ extension ControlServer: ControlActions {
     /// `workspace.move`: reorder a workspace among its siblings (`up`|`down`|`top`|`bottom`). `to` is
     /// required; an invalid direction errors. Resolves the workspace target via `resolveWorkspace`
     /// (honoring the global `--window` selector like other workspace commands).
-    func moveWorkspace(_ target: String?, window: String?, to: String?) -> ControlResponse {
-        guard let to else {
-            return ControlResponse(ok: false, error: "workspace.move requires --to")
-        }
-        guard let dir = ReorderDirection(rawValue: to) else {
-            return ControlResponse(ok: false, error: "workspace.move --to must be up|down|top|bottom")
-        }
+    func moveWorkspace(_ target: String?, window: String?, direction dir: ReorderDirection) -> ControlResponse {
         return resolver.resolveWorkspace(target, window: window) { store, id in
             store.reorderWorkspace(id, dir)
             return ControlResponse(ok: true, result: ControlResult(id: id.uuidString))
@@ -262,15 +256,13 @@ extension ControlServer: ControlActions {
     /// is the currently focused one (a no-op otherwise), `toggle` flips. Delta-computed via
     /// `AppStore.setFocusedWorkspace` so a no-op mode skips the write (idempotent). An unknown mode is an
     /// error. The control half of the workspace row's Focus/Unfocus menu + the pill ✕.
-    func focusWorkspace(_ target: String?, window: String?, mode: String?) -> ControlResponse {
-        let mode = mode ?? "toggle"
+    func focusWorkspace(_ target: String?, window: String?, mode: ControlToggleMode) -> ControlResponse {
         return resolver.resolveWorkspace(target, window: window) { store, id in
             let want: UUID?
             switch mode {
-            case "on": want = id
-            case "off": want = store.focusedWorkspaceID == id ? nil : store.focusedWorkspaceID
-            case "toggle": want = store.focusedWorkspaceID == id ? nil : id
-            default: return ControlResponse(ok: false, error: "invalid focus mode: \(mode)")
+            case .on: want = id
+            case .off: want = store.focusedWorkspaceID == id ? nil : store.focusedWorkspaceID
+            case .toggle: want = store.focusedWorkspaceID == id ? nil : id
             }
             store.setFocusedWorkspace(want) // no-op + no save when unchanged (idempotent)
             return ControlResponse(ok: true, result: ControlResult(id: id.uuidString))
