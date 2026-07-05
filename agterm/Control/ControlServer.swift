@@ -347,7 +347,7 @@ final class ControlServer {
                 .fontInc, .fontDec, .fontReset, .keymapReload, .configReload, .themeSet, .themeList,
                 .sidebar, .sidebarMode, .sidebarExpand, .sidebarCollapse, .sessionType, .sessionCopy,
                 .sessionOverlayOpen, .sessionOverlayClose, .sessionOverlayResult, .sessionBackground,
-                .sessionText, .restoreClear:
+                .sessionText, .windowRename, .windowResize, .windowMove, .windowZoom, .restoreClear:
             return ControlResponse(ok: false, error: "control dispatcher did not handle \(request.cmd.rawValue)")
         case .sessionSearch:
             // resolve first (cross-window when no `args.window`), then select + realize the surface; the
@@ -369,16 +369,8 @@ final class ControlServer {
             return await windowSelect(request.target)
         case .windowClose:
             return await windowClose(request.target)
-        case .windowRename:
-            return windowRename(request.target, name: request.args?.name)
         case .windowDelete:
             return windowDelete(request.target)
-        case .windowResize:
-            return windowResize(request.target, width: request.args?.width, height: request.args?.height)
-        case .windowMove:
-            return windowMove(request.target, x: request.args?.x, y: request.args?.y, display: request.args?.display)
-        case .windowZoom:
-            return windowZoom(request.target)
         }
     }
 

@@ -43,6 +43,10 @@ public protocol ControlActions {
     func setSessionBackground(_ target: String?, window: String?,
                               options: ControlSessionBackgroundOptions) -> ControlResponse
     func readSessionText(_ target: String?, window: String?, options: ControlSessionTextOptions) -> ControlResponse
+    func windowRename(_ target: String?, name: String) -> ControlResponse
+    func windowResize(_ target: String?, width: Int, height: Int) -> ControlResponse
+    func windowMove(_ target: String?, x: Int, y: Int, display: Int?) -> ControlResponse
+    func windowZoom(_ target: String?) -> ControlResponse
     func clearRestoreCommands() -> ControlResponse
 }
 
@@ -122,6 +126,8 @@ public struct ControlDispatcher {
                 .themeSet, .themeList, .sidebar, .sidebarMode, .sidebarExpand,
                 .sidebarCollapse, .restoreClear:
             return dispatchAppCommand(request)
+        case .windowRename, .windowResize, .windowMove, .windowZoom:
+            return dispatchWindowCommand(request)
         default:
             return nil
         }
@@ -404,5 +410,30 @@ public struct ControlDispatcher {
                                        options: ControlSessionTextOptions(pane: request.args?.pane,
                                                                           all: all,
                                                                           lines: lines))
+    }
+
+    private func dispatchWindowCommand(_ request: ControlRequest) -> ControlResponse {
+        switch request.cmd {
+        case .windowRename:
+            guard let name = request.args?.name?.trimmedOrNil else {
+                return ControlResponse(ok: false, error: "window.rename requires a name")
+            }
+            return actions.windowRename(request.target, name: name)
+        case .windowResize:
+            guard let width = request.args?.width, let height = request.args?.height,
+                  width > 0, height > 0 else {
+                return ControlResponse(ok: false, error: "window.resize requires positive width and height")
+            }
+            return actions.windowResize(request.target, width: width, height: height)
+        case .windowMove:
+            guard let x = request.args?.x, let y = request.args?.y else {
+                return ControlResponse(ok: false, error: "window.move requires x and y")
+            }
+            return actions.windowMove(request.target, x: x, y: y, display: request.args?.display)
+        case .windowZoom:
+            return actions.windowZoom(request.target)
+        default:
+            preconditionFailure("unexpected window command: \(request.cmd.rawValue)")
+        }
     }
 }

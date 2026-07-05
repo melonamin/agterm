@@ -900,6 +900,102 @@ struct ControlDispatcherTests {
         #expect(actions.calls == [.restoreClear])
     }
 
+    @Test func windowCommandsRouteParsedInputsAndKeepActionResponses() async {
+        let actions = MockControlActions()
+        let dispatcher = ControlDispatcher(actions: actions)
+        actions.nextWindowRenameResponse = ControlResponse(ok: true, result: ControlResult(id: "win"))
+        actions.nextWindowResizeResponse = ControlResponse(ok: true, result: ControlResult(id: "win"))
+        actions.nextWindowMoveResponse = ControlResponse(ok: true, result: ControlResult(id: "win"))
+        actions.nextWindowZoomResponse = ControlResponse(ok: false, error: "window not open — window.select it first")
+
+        let renamed = await dispatcher.dispatch(ControlRequest(
+            cmd: .windowRename,
+            target: "9f3c",
+            args: ControlArgs(name: "  Renamed  ")
+        ))
+        let resized = await dispatcher.dispatch(ControlRequest(
+            cmd: .windowResize,
+            target: "9f3c",
+            args: ControlArgs(width: 1200, height: 800)
+        ))
+        let moved = await dispatcher.dispatch(ControlRequest(
+            cmd: .windowMove,
+            target: "9f3c",
+            args: ControlArgs(x: 100, y: 50, display: 1)
+        ))
+        let zoomed = await dispatcher.dispatch(ControlRequest(cmd: .windowZoom, target: "9f3c"))
+
+        #expect(renamed == ControlResponse(ok: true, result: ControlResult(id: "win")))
+        #expect(resized == ControlResponse(ok: true, result: ControlResult(id: "win")))
+        #expect(moved == ControlResponse(ok: true, result: ControlResult(id: "win")))
+        #expect(zoomed == ControlResponse(ok: false, error: "window not open — window.select it first"))
+        #expect(actions.calls == [
+            .windowRename(target: "9f3c", "Renamed"),
+            .windowResize(target: "9f3c", width: 1200, height: 800),
+            .windowMove(target: "9f3c", x: 100, y: 50, display: 1),
+            .windowZoom(target: "9f3c")
+        ])
+    }
+
+    @Test func windowCommandsRejectInvalidInputsBeforeCallingActions() async {
+        let actions = MockControlActions()
+        let dispatcher = ControlDispatcher(actions: actions)
+
+        let missingName = await dispatcher.dispatch(ControlRequest(cmd: .windowRename, target: "win"))
+        let blankName = await dispatcher.dispatch(ControlRequest(
+            cmd: .windowRename,
+            target: "win",
+            args: ControlArgs(name: "   ")
+        ))
+        let missingResize = await dispatcher.dispatch(ControlRequest(
+            cmd: .windowResize,
+            target: "win",
+            args: ControlArgs(width: 1200)
+        ))
+        let badResize = await dispatcher.dispatch(ControlRequest(
+            cmd: .windowResize,
+            target: "win",
+            args: ControlArgs(width: 0, height: 800)
+        ))
+        let missingMoveY = await dispatcher.dispatch(ControlRequest(
+            cmd: .windowMove,
+            target: "win",
+            args: ControlArgs(x: 100)
+        ))
+
+        #expect(missingName == ControlResponse(ok: false, error: "window.rename requires a name"))
+        #expect(blankName == ControlResponse(ok: false, error: "window.rename requires a name"))
+        #expect(missingResize == ControlResponse(ok: false, error: "window.resize requires positive width and height"))
+        #expect(badResize == ControlResponse(ok: false, error: "window.resize requires positive width and height"))
+        #expect(missingMoveY == ControlResponse(ok: false, error: "window.move requires x and y"))
+        #expect(actions.calls.isEmpty)
+    }
+
+    @Test func windowCommandsKeepHostSideLookupAndPlatformErrors() async {
+        let actions = MockControlActions()
+        let dispatcher = ControlDispatcher(actions: actions)
+        actions.nextWindowRenameResponse = ControlResponse(ok: false, error: "no such window: missing")
+        actions.nextWindowMoveResponse = ControlResponse(ok: false, error: "display 3 out of range (have 1)")
+
+        let missingWindow = await dispatcher.dispatch(ControlRequest(
+            cmd: .windowRename,
+            target: "missing",
+            args: ControlArgs(name: "Renamed")
+        ))
+        let badDisplay = await dispatcher.dispatch(ControlRequest(
+            cmd: .windowMove,
+            target: "win",
+            args: ControlArgs(x: 100, y: 50, display: 3)
+        ))
+
+        #expect(missingWindow == ControlResponse(ok: false, error: "no such window: missing"))
+        #expect(badDisplay == ControlResponse(ok: false, error: "display 3 out of range (have 1)"))
+        #expect(actions.calls == [
+            .windowRename(target: "missing", "Renamed"),
+            .windowMove(target: "win", x: 100, y: 50, display: 3)
+        ])
+    }
+
     @Test func nonMigratedCommandFallsThrough() async {
         let actions = MockControlActions()
         let dispatcher = ControlDispatcher(actions: actions)
@@ -950,6 +1046,10 @@ private final class MockControlActions: ControlActions {
         case overlayResult(target: String?, window: String?)
         case sessionBackground(target: String?, window: String?, ControlSessionBackgroundOptions)
         case sessionText(target: String?, window: String?, ControlSessionTextOptions)
+        case windowRename(target: String?, String)
+        case windowResize(target: String?, width: Int, height: Int)
+        case windowMove(target: String?, x: Int, y: Int, display: Int?)
+        case windowZoom(target: String?)
         case restoreClear
     }
 
@@ -973,6 +1073,10 @@ private final class MockControlActions: ControlActions {
     var nextOverlayResultResponse = ControlResponse(ok: true)
     var nextSessionBackgroundResponse = ControlResponse(ok: true)
     var nextSessionTextResponse = ControlResponse(ok: true)
+    var nextWindowRenameResponse = ControlResponse(ok: true)
+    var nextWindowResizeResponse = ControlResponse(ok: true)
+    var nextWindowMoveResponse = ControlResponse(ok: true)
+    var nextWindowZoomResponse = ControlResponse(ok: true)
     var nextRestoreClearResponse = ControlResponse(ok: true)
 
     func controlTree(window: String?) -> ControlResponse {
@@ -1159,6 +1263,26 @@ private final class MockControlActions: ControlActions {
     func readSessionText(_ target: String?, window: String?, options: ControlSessionTextOptions) -> ControlResponse {
         calls.append(.sessionText(target: target, window: window, options))
         return nextSessionTextResponse
+    }
+
+    func windowRename(_ target: String?, name: String) -> ControlResponse {
+        calls.append(.windowRename(target: target, name))
+        return nextWindowRenameResponse
+    }
+
+    func windowResize(_ target: String?, width: Int, height: Int) -> ControlResponse {
+        calls.append(.windowResize(target: target, width: width, height: height))
+        return nextWindowResizeResponse
+    }
+
+    func windowMove(_ target: String?, x: Int, y: Int, display: Int?) -> ControlResponse {
+        calls.append(.windowMove(target: target, x: x, y: y, display: display))
+        return nextWindowMoveResponse
+    }
+
+    func windowZoom(_ target: String?) -> ControlResponse {
+        calls.append(.windowZoom(target: target))
+        return nextWindowZoomResponse
     }
 
     func clearRestoreCommands() -> ControlResponse {
