@@ -301,7 +301,7 @@ private let onAttentionButtonToggled: @convention(c) (OpaquePointer?, OpaquePoin
     MainActor.assumeIsolated { gController?.setAttentionButtonEnabled(adw_switch_row_get_active(row) != 0) }
 }
 private let onReloadKeymapRow: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _ in
-    MainActor.assumeIsolated { _ = gController?.reloadKeymap() }
+    MainActor.assumeIsolated { _ = gController?.reloadKeymapDiagnostics() }
 }
 private let onFontSizeChanged: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
     MainActor.assumeIsolated { gController?.setFontSize(adw_spin_row_get_value(row)) }

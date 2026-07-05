@@ -247,7 +247,7 @@ final class AppController {
         applyWindowTranslucency()
         gtk_window_present(WIN(window))
         applySidebarThemeColor()   // tint the sidebar to the terminal theme background
-        reloadKeymap()   // load keymap.conf → built-in overrides + custom-command chords for key dispatch
+        reloadKeymapDiagnostics()   // load keymap.conf → built-in overrides + custom-command chords for key dispatch
         reconcile()
         becameFrontmost()
     }
@@ -951,13 +951,13 @@ final class AppController {
 
     // MARK: - Control channel dispatch (a core subset of the macOS ControlServer)
 
-    func handleControl(_ req: ControlRequest) -> ControlResponse {
+    func handleControl(_ req: ControlRequest) async -> ControlResponse {
         func ok(_ id: UUID? = nil) -> ControlResponse { ControlResponse(ok: true, result: ControlResult(id: id?.uuidString)) }
         func err(_ m: String) -> ControlResponse { ControlResponse(ok: false, error: m) }
 
         // The shared ControlDispatcher owns the migrated commands; the rest fall through to the inline
         // switch below (which shrinks as more commands move into the dispatcher).
-        if let resp = ControlDispatcher.dispatch(req, self) { return resp }
+        if let resp = await ControlDispatcher(actions: self).dispatch(req) { return resp }
 
         switch req.cmd {
         case .sessionSearch:
@@ -996,6 +996,44 @@ final class AppController {
             return ControlResponse(ok: true, result: ControlResult(id: id.uuidString,
                                                                    text: display.isEmpty ? nil : display,
                                                                    count: searchTotal))
+        case .quick:
+            guard let mode = ControlToggleMode.parse(req.args?.mode, on: "show", off: "hide") else {
+                return err("invalid quick mode: \(req.args?.mode ?? "toggle")")
+            }
+            setQuick(mode.desiredValue(current: quickVisible))
+            return ok()
+        case .windowNew:
+            let info = library.newWindow(name: req.args?.name?.trimmedOrNil)
+            openWindow(info.id)
+            return ok(info.id)
+        case .windowList:
+            return ControlResponse(ok: true, result: ControlResult(windows: library.controlWindowNodes()))
+        case .windowSelect:
+            guard case .resolved(let id) = library.resolveWindow(req.target ?? "active") else {
+                return resolveError("window", target: req.target, candidates: library.windows.map(\.id))
+            }
+            openWindow(id)
+            return ok(id)
+        case .windowClose:
+            guard case .resolved(let id) = library.resolveWindow(req.target ?? "active") else {
+                return resolveError("window", target: req.target, candidates: library.windows.map(\.id))
+            }
+            guard let ctl = gWindows[id] else {
+                library.closeWindow(id)
+                return ok(id)
+            }
+            gtk_window_close(WIN(ctl.windowPointer))
+            return ok(id)
+        case .windowDelete:
+            guard case .resolved(let id) = library.resolveWindow(req.target ?? "active") else {
+                return resolveError("window", target: req.target, candidates: library.windows.map(\.id))
+            }
+            guard library.canRemoveWindow else { return err("cannot delete last window") }
+            if let ctl = gWindows[id] {
+                gtk_window_close(WIN(ctl.windowPointer))
+            }
+            library.removeWindow(id)
+            return ok(id)
         case .windowMove:
             // GTK4/Wayland gives no programmatic window positioning — the compositor owns it.
             return err("window.move is not supported on this platform (the compositor controls window position)")

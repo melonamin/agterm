@@ -2,101 +2,556 @@ import CGtk
 import Foundation
 import agtermCore
 
-// AppController conforms to the shared `ControlActions` seam so `ControlDispatcher` (agtermCore) can drive
-// the migrated control commands against it; the not-yet-migrated commands fall through to handleControl's
-// inline switch. As more commands move into the dispatcher, that switch shrinks and the Linux control
-// server becomes a thinner transport. All the required methods (resolveSession/Workspace, reconcile,
-// rebuildSidebar, syncSidebarSelection, updateTitle, selectSession, closeSession, navigate, store) already
-// exist on AppController.
+// Linux adapter for agtermCore's upstream `ControlActions` seam. The dispatcher owns command parsing and
+// response shape; AppController keeps GTK/libghostty/window side effects.
 extension AppController: ControlActions {
-    func inject(text: String, into session: UUID, select: Bool) -> Bool {
-        if let surface = focusedSurface(for: session) {
-            surface.inject(text: text)
-            return true
+    private func ok(_ id: UUID? = nil) -> ControlResponse {
+        ControlResponse(ok: true, result: ControlResult(id: id?.uuidString))
+    }
+
+    private func err(_ message: String) -> ControlResponse {
+        ControlResponse(ok: false, error: message)
+    }
+
+    private func resolveError(_ noun: String, target: String?, candidates: [UUID]) -> ControlResponse {
+        if let target, case let .ambiguous(hits) = ControlResolve.resolve(target, candidates: candidates, active: nil) {
+            return err(ControlResolve.ambiguousMessage(noun, target: target, matches: hits))
         }
-        guard select else { return false }
-        selectSession(session)
-        reconcile()
-        for _ in 0..<12 {
-            while g_main_context_iteration(nil, 0) != 0 {}
-            if let surface = focusedSurface(for: session) {
-                surface.inject(text: text)
-                return true
+        return err(ControlResolve.notFoundMessage(noun, target: target))
+    }
+
+    private func resolveSessionResponse(_ target: String?) -> Result<UUID, ControlResponse> {
+        let candidates = store.workspaces.flatMap { $0.sessions.map(\.id) }
+        switch ControlResolve.resolve(target ?? "active", candidates: candidates, active: store.selectedSessionID) {
+        case .resolved(let id): return .success(id)
+        case .ambiguous, .notFound: return .failure(resolveError("session", target: target, candidates: candidates))
+        }
+    }
+
+    private func resolveWorkspaceResponse(_ target: String?) -> Result<UUID, ControlResponse> {
+        let candidates = store.workspaces.map(\.id)
+        switch ControlResolve.resolve(target ?? "active", candidates: candidates, active: store.currentWorkspaceID) {
+        case .resolved(let id): return .success(id)
+        case .ambiguous, .notFound: return .failure(resolveError("workspace", target: target, candidates: candidates))
+        }
+    }
+
+    private func resolveWindowResponse(_ target: String?) -> Result<UUID, ControlResponse> {
+        let candidates = library.windows.map(\.id)
+        switch ControlResolve.resolve(target ?? "active", candidates: candidates, active: library.activeWindowID) {
+        case .resolved(let id): return .success(id)
+        case .ambiguous, .notFound: return .failure(resolveError("window", target: target, candidates: candidates))
+        }
+    }
+
+    private func resolveAnchorLocation(_ anchor: String) -> Result<(workspace: UUID, index: Int), ControlResponse> {
+        let candidates = store.workspaces.flatMap { $0.sessions.map(\.id) }
+        switch ControlResolve.resolve(anchor, candidates: candidates, active: store.selectedSessionID) {
+        case .resolved(let id):
+            guard let location = store.sessionLocation(ofSession: id) else { return .failure(err("no such session")) }
+            return .success((workspace: location.workspace, index: location.index))
+        case .ambiguous, .notFound:
+            return .failure(resolveError("session", target: anchor, candidates: candidates))
+        }
+    }
+
+    func controlTree(window: String?) -> ControlResponse {
+        let tree = store.controlTree(
+            foreground: { [weak self] session in self?.surfaces[session.id]?.foregroundCommand() },
+            splitForeground: { [weak self] session in self?.splitSurfaces[session.id]?.foregroundCommand() }
+        )
+        return ControlResponse(ok: true, result: ControlResult(tree: tree))
+    }
+
+    func createSession(_ options: ControlSessionCreateOptions) -> ControlResponse {
+        let cwd = options.cwd ?? Self.homeCwd
+        if let anchor = options.after ?? options.before {
+            switch resolveAnchorLocation(anchor) {
+            case .failure(let response): return response
+            case .success(let location):
+                let index = options.before != nil ? location.index : location.index + 1
+                guard let session = store.addSession(toWorkspace: location.workspace, cwd: cwd,
+                                                     command: options.command, name: options.name, at: index) else {
+                    return err("no such workspace")
+                }
+                reconcile()
+                selectSession(session.id)
+                return ok(session.id)
             }
-            usleep(30_000)
         }
-        return false
-    }
-    func readSelection(from session: UUID) -> String? {
-        focusedSurface(for: session)?.readSelection()
-    }
-    func performFontAction(_ action: String, in session: UUID) -> Bool {
-        guard let surface = store.session(withID: session)?.activeSurface as? GhosttySurface else { return false }
-        surface.performBindingAction(action)
-        return true
-    }
-    func focusPane(toSplit: Bool, in session: UUID) {
-        store.setPaneFocus(toSplit, forSession: session)
-        if let s = store.session(withID: session) { syncSplit(s) }
-        rebuildSidebar()
-        updateTitle()
-        (toSplit ? splitSurfaces[session] : surfaces[session])?.grabFocus()
-    }
-    func foregroundCommands(for session: UUID) -> (main: [String]?, split: [String]?) {
-        (surfaces[session]?.foregroundCommand(), splitSurfaces[session]?.foregroundCommand())
-    }
-    func applyBackground(to session: Session) {
-        (session.surface as? GhosttySurface)?.applyWatermarkFromSession()
-        (session.splitSurface as? GhosttySurface)?.applyWatermarkFromSession()
-    }
-    func readText(from session: Session, pane: String?, all: Bool, lines: Int?) -> String? {
-        let surface: GhosttySurface?
-        switch pane {
-        case nil: surface = session.onScreenSurface as? GhosttySurface
-        case "left": surface = session.surface as? GhosttySurface
-        case "right": surface = session.splitSurface as? GhosttySurface
-        default: surface = nil
+        let workspaceID: UUID
+        if let name = options.workspaceName {
+            guard let needle = name.trimmedOrNil else { return err("workspace name must not be blank") }
+            if options.createWorkspace == true {
+                workspaceID = store.ensureWorkspace(named: needle)?.id ?? store.addWorkspace(name: needle).id
+            } else if let workspace = store.workspace(named: needle) {
+                workspaceID = workspace.id
+            } else {
+                return err("no workspace named \"\(needle)\" (pass --create-workspace to add it)")
+            }
+        } else {
+            switch resolveWorkspaceResponse(options.workspace) {
+            case .failure(let response): return response
+            case .success(let id): workspaceID = id
+            }
         }
-        return surface?.readScreenText(all: all, lines: lines)
+        guard let session = store.addSession(toWorkspace: workspaceID, cwd: cwd,
+                                             command: options.command, name: options.name) else {
+            return err("no such workspace")
+        }
+        reconcile()
+        selectSession(session.id)
+        return ok(session.id)
     }
-    func postNotification(toSession session: UUID?, title: String, body: String) {
-        if let session {
-            _ = store.recordTerminalNotification(TerminalNotificationRecord(sessionID: session, windowID: windowID, pane: .main,
-                                                                            title: title, body: body,
+
+    func selectSession(_ target: String?, window: String?) -> ControlResponse {
+        switch resolveSessionResponse(target) {
+        case .failure(let response): return response
+        case .success(let id):
+            selectSession(id)
+            return ok(id)
+        }
+    }
+
+    func goSession(window: String?, direction: SessionNavigation) -> ControlResponse {
+        navigate(direction)
+        guard let id = store.selectedSessionID else { return err("no session to navigate") }
+        return ok(id)
+    }
+
+    func closeSession(_ target: String?, window: String?) -> ControlResponse {
+        switch resolveSessionResponse(target) {
+        case .failure(let response): return response
+        case .success(let id):
+            closeSession(id)
+            return ok(id)
+        }
+    }
+
+    func renameSession(_ target: String?, window: String?, name: String) -> ControlResponse {
+        switch resolveSessionResponse(target) {
+        case .failure(let response): return response
+        case .success(let id):
+            store.renameSession(id, to: name)
+            rebuildAfterRename()
+            return ok(id)
+        }
+    }
+
+    func createWorkspace(window: String?, name: String?) -> ControlResponse {
+        let workspace = store.addWorkspace(name: name?.trimmedOrNil ?? store.defaultWorkspaceName)
+        reconcile()
+        return ok(workspace.id)
+    }
+
+    func selectWorkspace(_ target: String?, window: String?) -> ControlResponse {
+        switch resolveWorkspaceResponse(target) {
+        case .failure(let response): return response
+        case .success(let id):
+            if let first = store.workspaces.first(where: { $0.id == id })?.sessions.first {
+                selectSession(first.id)
+            }
+            return ok(id)
+        }
+    }
+
+    func renameWorkspace(_ target: String?, window: String?, name: String) -> ControlResponse {
+        switch resolveWorkspaceResponse(target) {
+        case .failure(let response): return response
+        case .success(let id):
+            store.renameWorkspace(id, to: name)
+            rebuildAfterRename()
+            return ok(id)
+        }
+    }
+
+    func deleteWorkspace(_ target: String?, window: String?) -> ControlResponse {
+        switch resolveWorkspaceResponse(target) {
+        case .failure(let response): return response
+        case .success(let id):
+            guard store.canRemoveWorkspace else { return err("cannot delete last workspace") }
+            store.removeWorkspace(id)
+            reconcile()
+            return ok(id)
+        }
+    }
+
+    func moveSession(_ target: String?, window: String?, move: ControlSessionMove) -> ControlResponse {
+        let id: UUID
+        switch resolveSessionResponse(target) {
+        case .failure(let response): return response
+        case .success(let resolved): id = resolved
+        }
+        switch move {
+        case .reorder(let direction):
+            store.reorderSession(id, direction)
+        case .workspace(let workspace):
+            switch resolveWorkspaceResponse(workspace) {
+            case .failure(let response): return response
+            case .success(let workspaceID): store.moveSession(id, toWorkspace: workspaceID)
+            }
+        case .place(let anchor, let after):
+            switch resolveAnchorLocation(anchor) {
+            case .failure(let response): return response
+            case .success(let location):
+                store.moveSession(id, toWorkspace: location.workspace, at: location.index + (after ? 1 : 0))
+            }
+        }
+        reconcile()
+        return ok(id)
+    }
+
+    func moveWorkspace(_ target: String?, window: String?, direction: ReorderDirection) -> ControlResponse {
+        switch resolveWorkspaceResponse(target) {
+        case .failure(let response): return response
+        case .success(let id):
+            store.reorderWorkspace(id, direction)
+            rebuildSidebar()
+            syncSidebarSelection()
+            return ok(id)
+        }
+    }
+
+    func focusWorkspace(_ target: String?, window: String?, mode: String?) -> ControlResponse {
+        switch resolveWorkspaceResponse(target) {
+        case .failure(let response): return response
+        case .success(let id):
+            guard let parsed = ControlToggleMode.parse(mode) else {
+                return err("invalid workspace.focus mode: \(mode ?? "toggle")")
+            }
+            let want = parsed.desiredValue(current: store.focusedWorkspaceID == id)
+            focusWorkspace(want ? id : nil)
+            return ok(id)
+        }
+    }
+
+    func setSessionFlag(_ target: String?, window: String?, mode: String?) -> ControlResponse {
+        if mode == "clear" {
+            clearFlagged()
+            return ok()
+        }
+        switch resolveSessionResponse(target) {
+        case .failure(let response): return response
+        case .success(let id):
+            guard let parsed = ControlToggleMode.parse(mode) else { return err("invalid flag mode: \(mode ?? "toggle")") }
+            let current = store.session(withID: id)?.flagged ?? false
+            store.setFlag(parsed.desiredValue(current: current), forSession: id)
+            rebuildSidebar()
+            return ok(id)
+        }
+    }
+
+    func setSessionStatus(_ target: String?, window: String?, update: ControlSessionStatusUpdate) -> ControlResponse {
+        switch resolveSessionResponse(target) {
+        case .failure(let response): return response
+        case .success(let id):
+            if let sound = update.sound, !sound.isEmpty, let error = StatusSoundPlayer.shared.statusSoundError(for: sound) {
+                return err(error)
+            }
+            let wasBlocked = store.session(withID: id)?.agentIndicator.status == .blocked
+            store.setAgentIndicator(AgentIndicator(status: update.status, blink: update.blink ?? false,
+                                                   autoReset: update.autoReset ?? false,
+                                                   color: update.color, statusPane: update.pane), forSession: id)
+            let blockedDefault = wasBlocked ? nil : SettingsStore().load().blockedStatusSoundName
+            if let sound = update.status.effectiveSound(perCall: update.sound, blockedDefault: blockedDefault) {
+                StatusSoundPlayer.shared.play(sound)
+            }
+            rebuildSidebar()
+            updateAttentionButton()
+            return ok(id)
+        }
+    }
+
+    func splitSession(_ target: String?, window: String?, mode: String?) -> ControlResponse {
+        switch resolveSessionResponse(target) {
+        case .failure(let response): return response
+        case .success(let id):
+            guard let session = store.session(withID: id) else { return err("no such session") }
+            guard let parsed = ControlToggleMode.parse(mode) else { return err("invalid split mode: \(mode ?? "toggle")") }
+            if parsed.desiredValue(current: session.isSplit) != session.isSplit {
+                store.toggleSplit(id)
+            }
+            reconcile()
+            focusedSurface(for: id)?.grabFocus()
+            return ok(id)
+        }
+    }
+
+    func scratchSession(_ target: String?, window: String?, mode: String?, command: String?) -> ControlResponse {
+        switch resolveSessionResponse(target) {
+        case .failure(let response): return response
+        case .success(let id):
+            guard let session = store.session(withID: id) else { return err("no such session") }
+            guard let parsed = ControlToggleMode.parse(mode) else { return err("invalid scratch mode: \(mode ?? "toggle")") }
+            if parsed.desiredValue(current: session.scratchActive) != session.scratchActive {
+                store.toggleScratch(id)
+            }
+            reconcile()
+            updateToggleIcons()
+            return ok(id)
+        }
+    }
+
+    func focusSessionPane(_ target: String?, window: String?, pane: String?) -> ControlResponse {
+        switch resolveSessionResponse(target) {
+        case .failure(let response): return response
+        case .success(let id):
+            guard let session = store.session(withID: id), session.hasSplit else { return err("session has no split") }
+            guard let parsed = ControlPaneFocusMode.parse(pane) else {
+                return err("invalid pane: \(pane ?? "other")")
+            }
+            let toSplit = parsed.wantsSplit(currentSplitFocused: session.splitFocused)
+            store.setPaneFocus(toSplit, forSession: id)
+            syncSplit(session)
+            rebuildSidebar()
+            updateTitle()
+            (toSplit ? splitSurfaces[id] : surfaces[id])?.grabFocus()
+            return ok(id)
+        }
+    }
+
+    func resizeSplit(_ target: String?, window: String?, resize: ControlSplitResize) -> ControlResponse {
+        switch resolveSessionResponse(target) {
+        case .failure(let response): return response
+        case .success(let id):
+            guard let session = store.session(withID: id), session.hasSplit else { return err("session has no split") }
+            let current = session.splitRatio ?? AppStore.splitRatioDefault
+            let ratio: Double
+            switch resize {
+            case .ratio(let value): ratio = value
+            case .delta(let delta): ratio = current + delta
+            }
+            _ = store.applySplitRatio(ratio, forSession: id)
+            if let paned = sessionPanes[id] {
+                let width = max(1, gtk_widget_get_width(W(paned)))
+                gtk_paned_set_position(paned, Int32(Double(width) * (session.splitRatio ?? AppStore.splitRatioDefault)))
+            }
+            return ok(id)
+        }
+    }
+
+    func font(_ target: String?, window: String?, action: String) -> ControlResponse {
+        switch resolveSessionResponse(target) {
+        case .failure(let response): return response
+        case .success(let id):
+            guard let surface = focusedSurface(for: id) else { return err("session not realized") }
+            surface.performBindingAction(action)
+            return ok(id)
+        }
+    }
+
+    func reloadKeymap() -> ControlResponse {
+        let diagnostics = reloadKeymapDiagnostics()
+        return ControlResponse(ok: true, result: ControlResult(count: diagnostics))
+    }
+
+    func reloadGhosttyConfig() -> ControlResponse {
+        reloadConfig()
+        return ok()
+    }
+
+    func sendNotification(_ target: String?, window: String?, title: String?, body: String) -> ControlResponse {
+        let id: UUID?
+        if target != nil {
+            switch resolveSessionResponse(target) {
+            case .failure(let response): return response
+            case .success(let resolved): id = resolved
+            }
+        } else {
+            id = store.selectedSessionID
+        }
+        if let id {
+            _ = store.recordTerminalNotification(TerminalNotificationRecord(sessionID: id, windowID: windowID, pane: .main,
+                                                                            title: title ?? "", body: body,
                                                                             firingIsFocused: false,
                                                                             appActive: false))
-            rebuildSidebar()   // reflect the badge bump
+            rebuildSidebar()
         }
-        let target = session.map { TerminalNotification.identity(windowID: windowID, sessionID: $0, pane: .main) }
-        if NotificationManager.bannersEnabled { NotificationManager.send(title: title, body: body, sessionID: session, target: target) }
+        let notificationTarget = id.map { TerminalNotification.identity(windowID: windowID, sessionID: $0, pane: .main) }
+        if NotificationManager.bannersEnabled {
+            NotificationManager.send(title: title ?? "", body: body, sessionID: id, target: notificationTarget)
+        }
+        return ok(id)
     }
-    var blockedStatusSoundName: String? { SettingsStore().load().blockedStatusSoundName }
-    func statusSoundError(for name: String) -> String? { StatusSoundPlayer.shared.statusSoundError(for: name) }
-    func playStatusSound(_ name: String) { StatusSoundPlayer.shared.play(name) }
-    func clearSavedCommands() {
-        for ctl in gWindows.values {
-            for ws in ctl.store.workspaces {
-                for s in ws.sessions {
-                    s.foregroundCommand = nil
-                    s.splitForegroundCommand = nil
+
+    func setTheme(name: String?) -> ControlResponse {
+        applyTheme(name)
+        return ok()
+    }
+
+    func listThemes() -> ControlResponse {
+        ControlResponse(ok: true, result: ControlResult(theme: currentTheme, themes: Self.bundledThemes()))
+    }
+
+    func setSidebarVisibility(_ mode: ControlToggleMode) -> ControlResponse {
+        let want = mode.desiredValue(current: store.sidebarVisible)
+        if store.sidebarVisible != want {
+            store.setSidebarVisible(want)
+            adw_overlay_split_view_set_show_sidebar(splitView, want ? 1 : 0)
+        }
+        return ok()
+    }
+
+    func setSidebarViewMode(_ mode: ControlSidebarViewMode) -> ControlResponse {
+        let want: SidebarMode
+        switch mode {
+        case .tree: want = .tree
+        case .flagged: want = .flagged
+        case .toggle: want = store.sidebarMode == .tree ? .flagged : .tree
+        }
+        store.setSidebarMode(want)
+        rebuildSidebar()
+        syncSidebarSelection()
+        return ok()
+    }
+
+    func expandSidebar(window: String?) -> ControlResponse {
+        expandWorkspaces()
+        return ok()
+    }
+
+    func collapseSidebar(window: String?) -> ControlResponse {
+        collapseOtherWorkspaces()
+        return ok()
+    }
+
+    func typeSession(_ target: String?, window: String?, options: ControlSessionTypeOptions) async -> ControlResponse {
+        switch resolveSessionResponse(target) {
+        case .failure(let response): return response
+        case .success(let id):
+            if options.select {
+                selectSession(id)
+                reconcile()
+            }
+            for _ in 0..<12 {
+                while g_main_context_iteration(nil, 0) != 0 {}
+                if let surface = focusedSurface(for: id) {
+                    surface.inject(text: options.text)
+                    return ok(id)
                 }
+                usleep(30_000)
+            }
+            return err("session not realized")
+        }
+    }
+
+    func copySessionSelection(_ target: String?, window: String?) -> ControlResponse {
+        switch resolveSessionResponse(target) {
+        case .failure(let response): return response
+        case .success(let id):
+            guard let text = focusedSurface(for: id)?.readSelection(), !text.isEmpty else {
+                return err("no selection")
+            }
+            return ControlResponse(ok: true, result: ControlResult(id: id.uuidString, text: text))
+        }
+    }
+
+    func openSessionOverlay(_ target: String?, window: String?,
+                            options: ControlSessionOverlayOpenOptions) -> ControlResponse {
+        switch resolveSessionResponse(target) {
+        case .failure(let response): return response
+        case .success(let id):
+            guard store.openOverlay(id, command: options.command, cwd: options.cwd, wait: options.wait,
+                                    sizePercent: options.sizePercent,
+                                    backgroundColor: options.backgroundColor) else {
+                return err("overlay already open")
+            }
+            if options.sizePercent != nil { selectSession(id) }
+            reconcile()
+            return ok(id)
+        }
+    }
+
+    func closeSessionOverlay(_ target: String?, window: String?) -> ControlResponse {
+        switch resolveSessionResponse(target) {
+        case .failure(let response): return response
+        case .success(let id):
+            guard store.closeOverlay(id) else { return err("no overlay") }
+            reconcile()
+            return ok(id)
+        }
+    }
+
+    func sessionOverlayResult(_ target: String?, window: String?) -> ControlResponse {
+        switch resolveSessionResponse(target) {
+        case .failure(let response): return response
+        case .success(let id):
+            guard let session = store.session(withID: id) else { return err("no such session") }
+            if session.overlayActive { return err(OverlayResultError.stillRunning) }
+            guard let code = session.overlayExitCode else { return err(OverlayResultError.noResult) }
+            return ControlResponse(ok: true, result: ControlResult(id: id.uuidString, exitCode: code))
+        }
+    }
+
+    func setSessionBackground(_ target: String?, window: String?,
+                              options: ControlSessionBackgroundOptions) -> ControlResponse {
+        switch resolveSessionResponse(target) {
+        case .failure(let response): return response
+        case .success(let id):
+            _ = store.setBackgroundWatermark(options.watermark, forSession: id)
+            if let session = store.session(withID: id) {
+                (session.surface as? GhosttySurface)?.applyWatermarkFromSession()
+                (session.splitSurface as? GhosttySurface)?.applyWatermarkFromSession()
+            }
+            return ok(id)
+        }
+    }
+
+    func readSessionText(_ target: String?, window: String?, options: ControlSessionTextOptions) -> ControlResponse {
+        switch resolveSessionResponse(target) {
+        case .failure(let response): return response
+        case .success(let id):
+            guard let session = store.session(withID: id) else { return err("no such session") }
+            let surface: GhosttySurface?
+            switch options.pane {
+            case nil: surface = session.onScreenSurface as? GhosttySurface
+            case "left": surface = session.surface as? GhosttySurface
+            case "right": surface = session.splitSurface as? GhosttySurface
+            case "scratch": surface = session.scratchSurface as? GhosttySurface
+            default: surface = nil
+            }
+            guard let text = surface?.readScreenText(all: options.all, lines: options.lines) else {
+                return err("session not realized")
+            }
+            return ControlResponse(ok: true, result: ControlResult(id: id.uuidString, text: text))
+        }
+    }
+
+    func windowRename(_ target: String?, name: String) -> ControlResponse {
+        switch resolveWindowResponse(target) {
+        case .failure(let response): return response
+        case .success(let id):
+            library.renameWindow(id, to: name)
+            return ok(id)
+        }
+    }
+
+    func windowResize(_ target: String?, width: Int, height: Int) -> ControlResponse {
+        switch resolveWindowResponse(target) {
+        case .failure(let response): return response
+        case .success(let id):
+            guard let ctl = gWindows[id] else { return err("window not open — window.select it first") }
+            gtk_window_set_default_size(WIN(ctl.windowPointer), Int32(width), Int32(height))
+            return ok(id)
+        }
+    }
+
+    func windowMove(_ target: String?, x: Int, y: Int, display: Int?) -> ControlResponse {
+        err("window.move is not supported on this platform (the compositor controls window position)")
+    }
+
+    func windowZoom(_ target: String?) -> ControlResponse {
+        err("window.zoom is not supported on this platform")
+    }
+
+    func clearRestoreCommands() -> ControlResponse {
+        for ctl in gWindows.values {
+            for session in ctl.store.workspaces.flatMap(\.sessions) {
+                session.foregroundCommand = nil
+                session.splitForegroundCommand = nil
             }
         }
         gLibrary.saveAllOpen()
-    }
-    func listThemes() -> [String] { Self.bundledThemes() }
-    // `currentTheme` (the protocol's get) is already a property on AppController.
-
-    // window seam: the shared WindowLibrary (the `library` stored property, set in init) is the host-free
-    // state; here are the on-screen GTK ops the dispatcher needs. `presentWindow` calls the free `openWindow`
-    // (WindowManager); close/resize touch the live GtkWindow and return false when it isn't open.
-    func presentWindow(_ id: UUID) { openWindow(id) }
-    func closeWindow(_ id: UUID) -> Bool {
-        guard let ctl = gWindows[id] else { return false }
-        gtk_window_close(WIN(ctl.windowPointer)); return true
-    }
-    func resizeWindow(_ id: UUID, width: Int, height: Int) -> Bool {
-        guard let ctl = gWindows[id] else { return false }
-        gtk_window_set_default_size(WIN(ctl.windowPointer), Int32(width), Int32(height)); return true
+        return ok()
     }
 }

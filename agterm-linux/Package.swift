@@ -7,6 +7,9 @@ let vendor = "\(packageRoot)/vendor/ghostty"
 
 let package = Package(
     name: "agterm-linux",
+    platforms: [
+        .macOS(.v14),
+    ],
     dependencies: [
         .package(name: "agtermCore", path: "../agtermCore"),
     ],

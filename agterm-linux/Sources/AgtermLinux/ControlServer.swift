@@ -88,9 +88,11 @@ final class ControlServer: @unchecked Sendable {
         let box = ResponseBox()
         runOnMain {
             MainActor.assumeIsolated {
-                box.value = Self.route(for: req).response(for: req)
+                Task { @MainActor in
+                    box.value = await Self.route(for: req).response(for: req)
+                    sem.signal()
+                }
             }
-            sem.signal()
         }
         sem.wait()
         return box.value
@@ -100,10 +102,10 @@ final class ControlServer: @unchecked Sendable {
         case controller(AppController?)
         case failure(String)
 
-        @MainActor func response(for req: ControlRequest) -> ControlResponse {
+        @MainActor func response(for req: ControlRequest) async -> ControlResponse {
             switch self {
             case .controller(let controller):
-                return controller?.handleControl(req) ?? ControlResponse(ok: false, error: "no controller")
+                return await controller?.handleControl(req) ?? ControlResponse(ok: false, error: "no controller")
             case .failure(let error):
                 return ControlResponse(ok: false, error: error)
             }
@@ -112,7 +114,19 @@ final class ControlServer: @unchecked Sendable {
 
     @MainActor private static func route(for req: ControlRequest) -> ControllerRoute {
         if let window = req.args?.window, !window.isEmpty {
-            guard let library = gLibrary, let id = library.resolveWindow(window), let controller = gWindows[id] else {
+            guard let library = gLibrary else {
+                return .failure("window not open")
+            }
+            let id: UUID
+            switch library.resolveWindow(window) {
+            case .resolved(let resolved):
+                id = resolved
+            case .ambiguous(let hits):
+                return .failure(ControlResolve.ambiguousMessage("window", target: window, matches: hits))
+            case .notFound:
+                return .failure(ControlResolve.notFoundMessage("window", target: window))
+            }
+            guard let controller = gWindows[id] else {
                 return .failure("window not open")
             }
             return .controller(controller)

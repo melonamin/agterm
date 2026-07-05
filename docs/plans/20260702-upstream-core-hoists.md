@@ -91,6 +91,13 @@ Progress update 2026-07-05:
   notification delivery helper (`NotificationDelivery`/`TerminalNotificationRecord` plus an
   `AppStore.recordTerminalNotification` wrapper) is the only plausible optional follow-up, but it is not
   a control-surface blocker and should not be mixed into the dispatcher/window cleanup.
+- Linux rebase checkpoint: once the upstream dispatcher/control surface is present on `master`, the
+  Linux branch should drop its old shared-controller implementation and consume upstream `agtermCore`
+  directly. If the Linux UI still references pure helpers that were never upstreamed, keep them as
+  Linux-local compatibility shims under `agterm-linux` rather than reintroducing them into `agtermCore`.
+  Those helpers are candidates for later upstream PRs only when they remove macOS duplication, preserve
+  exact macOS behavior, and can be reviewed as small host-free slices. They are not blockers for the
+  Linux UI rebase.
 - Non-blocking maintainer follow-ups to fold in only if nearby code is touched:
   - From PR #128: `readSessionText` still carries validation and a stale raw-socket comment even though
     the dispatcher owns that validation now.
@@ -474,7 +481,11 @@ duplication or makes macOS behavior more testable.
    `setPaneFocus`, and treat terminal notification delivery as optional polish only.
 3. Optional pure utilities one at a time, only when the PR removes macOS duplication or pins behavior:
    `PasteDecoder`, `DeletePrompt`, `SessionSwitcherModel`, or Ghostty resource/default helpers.
-4. Stop upstream slicing when the remaining candidates are Linux-only proof points rather than macOS
+4. Rebase `linux-port` onto fresh upstream after the final dispatcher cleanup. Prefer upstream
+   `agtermCore` over the branch's old shared-controller implementation. Any still-needed Linux-only pure
+   helpers should live in the Linux frontend as compatibility shims, with comments or plan notes that
+   they are local consumers/proof points, not automatic upstream targets.
+5. Stop upstream slicing when the remaining candidates are Linux-only proof points rather than macOS
    simplifications.
 
 ## PR description template

@@ -25,7 +25,7 @@ extension AppController {
     /// custom-command leader matcher, and the id→command lookup. Returns the parse-diagnostic count.
     /// Called at startup and from the `keymap.reload` control command.
     @discardableResult
-    func reloadKeymap() -> Int {
+    func reloadKeymapDiagnostics() -> Int {
         let (km, diagnostics) = KeymapStore(configDirectory: configDirectory(), defaults: .linux).load()
         keymap = km
 
