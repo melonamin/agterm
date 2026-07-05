@@ -1,8 +1,21 @@
-# agterm - modern terminal for agentic flow
+# agterm-linux - Linux-maintained agterm fork
 
-[![Build Status](https://github.com/umputun/agterm/workflows/build/badge.svg)](https://github.com/umputun/agterm/actions) [![Coverage Status](https://coveralls.io/repos/github/umputun/agterm/badge.svg?branch=master)](https://coveralls.io/github/umputun/agterm?branch=master)
+[![Build Status](https://github.com/melonamin/agterm-linux/workflows/build/badge.svg)](https://github.com/melonamin/agterm-linux/actions)
 
-`agterm` is a native macOS terminal for working with AI coding agents across many sessions at once. It is intentionally opinionated: rather than scattering shells across tabs, it organizes them into named workspaces, each holding the sessions for one project or context, so several agent-driven sessions can run side by side and you can move between them without losing track of which is which. The motivation is specific: running several coding agents at once means many long-lived sessions, each progressing on its own, and a tabbed terminal loses track of them quickly. agterm keeps them organized and makes it obvious which session needs you. None of this is limited to agents. It also works as a capable general-purpose terminal for everyday multi-project work.
+`agterm-linux` is a Linux-maintained fork of [agterm](https://github.com/umputun/agterm).
+It exists to maintain the GTK/libadwaita Linux frontend while tracking upstream agterm as closely
+as possible.
+
+Fork goals:
+
+- Maintain 1:1 feature parity with upstream macOS agterm where the Linux platform allows it.
+- Keep shared controller/core behavior upstream-compatible and host-free.
+- Keep Linux-specific code isolated to the Linux UI, Linux packaging, and platform adapters.
+- Avoid product, protocol, or UX divergence unless required by Linux platform constraints.
+
+For macOS builds, releases, and support, use [upstream agterm](https://github.com/umputun/agterm).
+
+Upstream `agterm` is a native macOS terminal for working with AI coding agents across many sessions at once; this fork carries that model to Linux. It is intentionally opinionated: rather than scattering shells across tabs, it organizes them into named workspaces, each holding the sessions for one project or context, so several agent-driven sessions can run side by side and you can move between them without losing track of which is which. The motivation is specific: running several coding agents at once means many long-lived sessions, each progressing on its own, and a tabbed terminal loses track of them quickly. agterm keeps them organized and makes it obvious which session needs you. None of this is limited to agents. It also works as a capable general-purpose terminal for everyday multi-project work.
 
 The design is deliberately minimal: it covers the use cases above and stops there. Features come in two kinds. One is just enough to get the work done. The other is the small set of things other terminals get wrong, done the way they should have been. There is no deep agent integration and no attempt to invent a new way of working with agents. You get a sensible minimum out of the box, plus a complete control API and CLI on top. Almost everything is scriptable, so anything past the defaults you build yourself instead of waiting for it to ship.
 
@@ -65,21 +78,25 @@ A file open in the quick terminal, the window's shared scratch overlay:
 
 ## Install
 
-Pre-built releases are for **Apple Silicon (arm64) Macs running macOS 14 or later**.
+### Linux
 
-Releases are signed with a Developer ID certificate and notarized by Apple, so macOS Gatekeeper opens them with no extra steps.
+Linux releases are published from this fork as relocatable `agterm-linux` tarballs. Download the
+latest Linux artifact from the [agterm-linux releases page](https://github.com/melonamin/agterm-linux/releases).
 
-Homebrew:
+The tarball bundles the Swift runtime, libghostty, Ghostty resources, and a launcher. GTK4 and
+libadwaita are expected from the host distribution.
 
 ```sh
-brew install --cask umputun/apps/agterm
+tar xzf agterm-linux-dist.tar.gz
+./agterm-linux/bin/agterm-linux
 ```
 
-The cask also installs the `agtermctl` command-line tool, so cask users should not run the in-app installer as well.
+### macOS
 
-Direct download:
+This fork does not publish macOS builds. Use [upstream agterm](https://github.com/umputun/agterm)
+for macOS releases and Homebrew installation.
 
-Download the latest `.dmg` from the [releases page](https://github.com/umputun/agterm/releases), open it, and drag `agterm.app` into `/Applications`.
+Pre-built upstream releases are for **Apple Silicon (arm64) Macs running macOS 14 or later**.
 
 ### Optional Help-menu installers
 
@@ -93,6 +110,38 @@ The app's **Help** menu has three one-time installers. None are needed to use ag
 
 <details>
 <summary>Build steps</summary>
+
+### Linux
+
+Requirements:
+
+- Swift 6.3.2.
+- GTK4, libadwaita, libepoxy, pkg-config, git, curl, ca-certificates, xz.
+- Zig 0.15.2 for the vendored libghostty build.
+
+```sh
+scripts/setup-linux.sh
+cd agterm-linux && swift build
+```
+
+For a release build and relocatable tarball:
+
+```sh
+scripts/setup-linux.sh
+cd agterm-linux && swift build -c release
+cd ..
+scripts/dist-linux.sh
+```
+
+Local helper scripts:
+
+- `scripts/run-linux.sh` builds and runs the GTK app from the checkout.
+- `scripts/install-linux.sh` installs a personal build into `~/.local`.
+- `scripts/flatpak-linux.sh` builds and installs the local Flatpak manifest.
+
+### macOS
+
+macOS source builds are kept for upstream parity, but this fork does not publish macOS artifacts.
 
 Requirements:
 
@@ -120,6 +169,19 @@ xcodebuild test -project agterm.xcodeproj -scheme agterm -destination 'platform=
 ```
 
 </details>
+
+## Fork maintenance
+
+The maintained Linux branch tracks upstream through the `upstream` remote:
+
+```sh
+git fetch upstream
+git switch linux-port
+git merge upstream/master
+```
+
+Shared `agtermCore` changes should stay portable and upstream-compatible. Linux-only behavior belongs
+under `agterm-linux/`, `linux/`, `packaging/linux/`, or Linux-specific scripts.
 
 ## Concepts
 

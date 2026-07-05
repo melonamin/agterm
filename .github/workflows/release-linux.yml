@@ -1,0 +1,68 @@
+name: linux release
+
+on:
+  push:
+    tags:
+      - "linux-v*"
+      - "v*-linux*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, for example linux-v0.8.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release-linux:
+    name: Build Linux release
+    runs-on: ubuntu-latest
+    container: swift:6.3.2
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Install GTK4 + libadwaita + GL + zig
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            libgtk-4-dev libadwaita-1-dev libepoxy-dev pkg-config git curl ca-certificates xz-utils
+          curl -fsSL https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz | tar -xJ -C /opt
+          echo "/opt/zig-x86_64-linux-0.15.2" >> "$GITHUB_PATH"
+      - name: Cache vendored libghostty
+        uses: actions/cache@v6
+        with:
+          path: agterm-linux/vendor/ghostty
+          key: libghostty-${{ hashFiles('scripts/setup-linux.sh', 'linux/patches/ghostty-embedded-opengl.patch') }}
+      - name: Build libghostty
+        run: scripts/setup-linux.sh
+      - name: Build agterm-linux
+        working-directory: agterm-linux
+        run: swift build -c release
+      - name: Package tarball
+        run: scripts/dist-linux.sh
+      - name: Write release notes
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          FORK_COMMIT="$(git rev-parse --short HEAD)"
+          UPSTREAM_BASE="$(git merge-base HEAD origin/master 2>/dev/null || true)"
+          {
+            echo "agterm-linux ${TAG}"
+            echo
+            echo "Linux-maintained agterm fork release."
+            echo
+            echo "- Fork commit: ${FORK_COMMIT}"
+            if [ -n "$UPSTREAM_BASE" ]; then
+              echo "- Upstream base: $(git rev-parse --short "$UPSTREAM_BASE")"
+            fi
+            echo
+            echo "macOS users should install upstream agterm: https://github.com/umputun/agterm"
+          } > release-notes.md
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: agterm-linux-dist.tar.gz
+          name: agterm-linux ${{ github.event.inputs.tag || github.ref_name }}
+          body_path: release-notes.md

@@ -2,9 +2,9 @@ name: build
 
 on:
   push:
-    branches: [master]
+    branches: [linux-port]
   pull_request:
-    branches: [master]
+    branches: [linux-port]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -25,119 +25,33 @@ jobs:
             swift:
               - "**/*.swift"
               - "agtermCore/**"
-              - "agterm/**"
               - "agterm-linux/**"
               - "linux/**"
-              - "packaging/**"
-              - "project.yml"
+              - "packaging/linux/**"
               - "scripts/**"
               - ".swiftlint.yml"
-              - "agtermUITests/.swiftlint.yml"
               - ".github/workflows/ci.yml"
-
-  test:
-    name: Unit tests
-    needs: changes
-    if: needs.changes.outputs.swift == 'true'
-    runs-on: macos-26
-    steps:
-      - uses: actions/checkout@v7
-      - name: swift test (with coverage)
-        working-directory: agtermCore
-        run: swift test --enable-code-coverage
-      - name: export lcov
-        working-directory: agtermCore
-        # rewrite the absolute SF: paths llvm-cov emits to repo-relative so the
-        # separate linux coverage job can resolve them against its own checkout
-        run: |
-          BIN=$(swift build --show-bin-path)
-          xcrun llvm-cov export \
-            "$BIN/agtermCorePackageTests.xctest/Contents/MacOS/agtermCorePackageTests" \
-            -instr-profile "$BIN/codecov/default.profdata" \
-            -format=lcov \
-            -ignore-filename-regex='(\.build|Tests|checkouts)/' \
-            | sed "s|SF:$GITHUB_WORKSPACE/|SF:|g" > coverage.lcov
-      - name: upload lcov artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-lcov
-          path: agtermCore/coverage.lcov
-
-  coverage:
-    name: Coverage upload
-    needs: [changes, test]
-    if: needs.changes.outputs.swift == 'true'
-    # the coveralls action installs its reporter via a brew tap on macOS (now blocked
-    # by homebrew's tap-trust gate); on linux it downloads a binary, so upload here
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v4
-        with:
-          name: coverage-lcov
-      - name: submit coverage to coveralls
-        continue-on-error: true
-        uses: coverallsapp/github-action@v2
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          file: coverage.lcov
-          format: lcov
-
-  lint:
-    name: swiftlint
-    needs: changes
-    if: needs.changes.outputs.swift == 'true'
-    runs-on: macos-26
-    steps:
-      - uses: actions/checkout@v7
-      - name: Install swiftlint
-        run: brew install swiftlint
-      - name: swiftlint (strict)
-        run: swiftlint lint --strict
+              - ".github/workflows/release-linux.yml"
 
   test-linux:
     name: Unit tests (Linux)
     needs: changes
     if: needs.changes.outputs.swift == 'true'
     runs-on: ubuntu-latest
-    # The host-free agtermCore package must stay green on Linux too (it backs the agterm-linux GTK
-    # port). The official Swift image matches the toolchain version, so the Arch-only libncurses/
-    # libxml2 compat shims the local run needs are unnecessary here. Adjust the tag if 6.3.2 is not a
-    # published image.
+    # Keep the shared, host-free controller package green on Linux because it backs the GTK frontend.
     container: swift:6.3.2
     steps:
       - uses: actions/checkout@v7
       - name: swift test
         working-directory: agtermCore
-        run: swift test
-
-  build:
-    name: Build app
-    needs: changes
-    if: needs.changes.outputs.swift == 'true'
-    runs-on: macos-26
-    steps:
-      - uses: actions/checkout@v7
-      - name: Cache libghostty (GhosttyKit + resources)
-        uses: actions/cache@v6
-        with:
-          path: |
-            GhosttyKit.xcframework
-            agterm/Resources/ghostty
-            agterm/Resources/terminfo
-          key: ghosttykit-${{ hashFiles('scripts/setup.sh') }}
-      - name: Install xcodegen
-        run: brew install xcodegen
-      - name: Build libghostty + app (Release)
-        run: scripts/build.sh
 
   build-linux:
     name: Build app (Linux GTK)
-    needs: changes
+    needs: [changes, test-linux]
     if: needs.changes.outputs.swift == 'true'
     runs-on: ubuntu-latest
-    # Compile-check the GTK port (the agtermCore unit tests already run in `test-linux`). The official
-    # Swift image carries the toolchain; apt adds GTK4/libadwaita + the GL deps and zig builds libghostty.
+    # Compile-check the GTK port. The official Swift image carries the toolchain; apt adds GTK4,
+    # libadwaita, GL deps, and zig builds libghostty.
     container: swift:6.3.2
     steps:
       - uses: actions/checkout@v7
