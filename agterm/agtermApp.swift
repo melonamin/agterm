@@ -201,16 +201,7 @@ struct agtermApp: App {
         view.session = session
         let sessionID = session.id
         view.onExit = {
-            let promoted = store.session(withID: sessionID)?.splitSurface as? GhosttySurfaceView
             store.closePrimaryPane(sessionID)
-            if let promoted, (store.session(withID: sessionID)?.surface as? GhosttySurfaceView) === promoted {
-                promoted.isSplitPane = false
-                promoted.onExit = {
-                    store.closePrimaryPane(sessionID)
-                    let target = store.session(withID: sessionID)?.activeSurface ?? store.activeSession?.activeSurface
-                    (target as? GhosttySurfaceView)?.focusAfterReparent()
-                }
-            }
             // focus the surviving (now maximized) pane; if the whole (single) session closed instead,
             // focus the session it reselected to. the collapse/switch re-hosts the target, so use the retry.
             let target = store.session(withID: sessionID)?.activeSurface ?? store.activeSession?.activeSurface
