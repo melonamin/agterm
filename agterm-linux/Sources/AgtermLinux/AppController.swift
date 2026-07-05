@@ -957,9 +957,10 @@ final class AppController {
         func ok(_ id: UUID? = nil) -> ControlResponse { ControlResponse(ok: true, result: ControlResult(id: id?.uuidString)) }
         func err(_ m: String) -> ControlResponse { ControlResponse(ok: false, error: m) }
 
-        // The shared ControlDispatcher owns the migrated commands; the rest fall through to the inline
-        // switch below (which shrinks as more commands move into the dispatcher).
-        if let resp = ControlDispatcher(actions: self).dispatchSync(req) { return resp }
+        // The Linux-local dispatcher owns the migrated synchronous commands; the rest fall through to the
+        // inline switch below. Keep it in the Linux target so GTK control-flow needs do not leak into
+        // upstream macOS-only core code.
+        if let resp = LinuxControlDispatcher(actions: self).dispatch(req) { return resp }
 
         switch req.cmd {
         case .sessionType:

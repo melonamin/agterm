@@ -23,13 +23,11 @@ export LD_LIBRARY_PATH="$COMPAT${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 BIN_DIR="$HOME/.local/bin"
 APP_DIR="$HOME/.local/share/applications"
 
-echo "Building agterm-linux (Release)…"
+echo "Building agterm-linux + agtermctl (Release)…"
 ( cd agterm-linux && swift build -c release )
-echo "Building agtermctl (Release)…"
-( cd agtermCore && swift build -c release --product agtermctl )
 
 install -Dm755 "agterm-linux/.build/release/AgtermLinux" "$BIN_DIR/agterm-linux"
-install -Dm755 "agtermCore/.build/release/agtermctl"     "$BIN_DIR/agtermctl"
+install -Dm755 "agterm-linux/.build/release/agtermctl-linux" "$BIN_DIR/agtermctl"
 
 # Install the vendored ghostty resources (shell-integration + sibling terminfo) so a session resolves
 # xterm-ghostty + gets shell-integration without a system ghostty package. The app's resolver checks

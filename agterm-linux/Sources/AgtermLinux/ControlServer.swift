@@ -2,7 +2,8 @@
 // per connection and dispatches it onto the shared AppController/AppStore, writing
 // one ControlResponse back. Mirrors the macOS ControlServer, but hops to the GTK
 // main thread via g_idle (runOnMain) + a semaphore instead of DispatchQueue.main.
-// The wire protocol (ControlProtocol) and the agtermctl CLI are shared from agtermCore.
+// The wire protocol (ControlProtocol) is shared from agtermCore; the Linux agtermctl wrapper lives in
+// agterm-linux so Glibc socket code stays inside the Linux boundary.
 import Foundation
 import agtermCore
 #if canImport(Glibc)

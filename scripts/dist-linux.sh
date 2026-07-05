@@ -7,18 +7,18 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="$ROOT/agterm-linux"
 
-# Prefer a release build; fall back to debug (with a warning) so the script is usable mid-iteration.
 BIN="$APP/.build/release/AgtermLinux"
-[ -f "$BIN" ] || BIN="$APP/.build/debug/AgtermLinux"
-[ -f "$BIN" ] || { echo "no agterm-linux build found — run 'swift build -c release' in agterm-linux/ first" >&2; exit 1; }
-case "$BIN" in *debug*) echo "WARN: bundling a DEBUG build — run 'swift build -c release' for a release tarball" >&2 ;; esac
+CTL="$APP/.build/release/agtermctl-linux"
+[ -f "$BIN" ] || { echo "no agterm-linux release build found — run 'swift build -c release' in agterm-linux/ first" >&2; exit 1; }
+[ -f "$CTL" ] || { echo "no agtermctl-linux release build found — run 'swift build -c release' in agterm-linux/ first" >&2; exit 1; }
 
 STAGE="$(mktemp -d)/agterm-linux"
 mkdir -p "$STAGE/bin" "$STAGE/lib" "$STAGE/share"
 
 cp "$BIN" "$STAGE/bin/agterm-linux.bin"
-# Bundle only the NON-system libs the binary links (the Swift runtime + libghostty); GTK/glibc stay host.
-ldd "$BIN" | awk '/=> \// {print $3}' | grep -E '/(swift|ghostty)|libghostty|swift-linux-compat' | sort -u \
+cp "$CTL" "$STAGE/bin/agtermctl"
+# Bundle only the NON-system libs the binaries link (the Swift runtime + libghostty); GTK/glibc stay host.
+{ ldd "$BIN"; ldd "$CTL"; } | awk '/=> \// {print $3}' | grep -E '/(swift|ghostty)|libghostty|swift-linux-compat' | sort -u \
   | while read -r lib; do [ -f "$lib" ] && cp -L "$lib" "$STAGE/lib/" || true; done
 
 # Ghostty resources (shell-integration + themes) plus the sibling terminfo used by xterm-ghostty;

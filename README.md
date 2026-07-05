@@ -146,6 +146,10 @@ scripts/setup-linux.sh
 cd agterm-linux && swift build
 ```
 
+This builds the GTK app and the Linux-local `agtermctl` executable from `agterm-linux/`.
+The Linux CLI intentionally lives in the Linux package so Glibc/socket portability code does not leak into
+upstream macOS-owned `agtermCore`.
+
 For a release build and relocatable tarball:
 
 ```sh
@@ -207,8 +211,9 @@ git switch linux-port
 git merge master
 ```
 
-Shared `agtermCore` changes should stay portable and upstream-compatible. Linux-only behavior belongs
-under `agterm-linux/`, `linux/`, `packaging/linux/`, or Linux-specific scripts.
+Shared `agtermCore` changes should stay portable, upstream-compatible, and acceptable to the macOS upstream.
+Linux-only behavior, including Glibc/socket portability and Linux CLI glue, belongs under `agterm-linux/`,
+`linux/`, `packaging/linux/`, or Linux-specific scripts.
 
 Release tags should be created from `linux-port`, for example:
 
@@ -266,11 +271,12 @@ The app bundles `agtermctl` inside `agterm.app`. The easiest way to put it on yo
 
 To let a coding agent drive agterm without you explaining the API, install the bundled agent skill with **Help ▸ Install Agent Skill…**. Claude Code and Codex share the same skill format, so it installs to whichever you have, `~/.claude/skills/agterm/` and/or `~/.codex/skills/agterm/`. The skill teaches the agent the control model and the full `agtermctl` command set, so an agent running inside agterm can create sessions, run overlays, manage windows, and reload the keymap on its own. It drives the app through `agtermctl`, so install the CLI too.
 
-`agtermctl` also lives in the `agtermCore` Swift package and builds standalone without Xcode or libghostty:
+On macOS, upstream `agtermctl` lives in the `agtermCore` Swift package.
+On Linux, this fork builds the CLI from the Linux package to keep Linux socket code out of upstream-owned core:
 
 ```sh
-cd agtermCore && swift build -c release
-# the binary is at agtermCore/.build/release/agtermctl
+cd agterm-linux && swift build -c release --product agtermctl-linux
+# the binary is at agterm-linux/.build/release/agtermctl-linux
 ```
 
 Each command targets a session or workspace by its UUID, a unique prefix of that UUID (git-style), or the keyword `active` (the selected session / current workspace). `--target` defaults to `active`, so the current one rarely needs to be named. Mutating commands print the affected id; `tree` prints the workspace and session tree. Add `--json` for the raw response, or `--socket PATH` to override the socket path. The exit code is zero on success, non-zero on error.

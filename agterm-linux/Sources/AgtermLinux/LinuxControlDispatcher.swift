@@ -1,145 +1,45 @@
 import Foundation
+import agtermCore
 
-/// App-facing operations a host must provide for commands routed through `ControlDispatcher`.
-/// The dispatcher owns command parsing and response shape; the host keeps target resolution and
-/// platform-specific side effects.
+/// Linux-local synchronous control dispatcher.
+///
+/// Upstream `agtermCore.ControlDispatcher` is async because macOS may need to realize SwiftUI/AppKit
+/// surfaces before handling some commands.
+/// The GTK control server already dispatches on the GTK main thread and needs a synchronous route from
+/// its C socket callback, so the Linux fork keeps this adapter inside the Linux target instead of adding
+/// Linux-driven API surface to `agtermCore`.
 @MainActor
-public protocol ControlActions {
-    func controlTree(window: String?) -> ControlResponse
-    func createSession(_ options: ControlSessionCreateOptions) -> ControlResponse
-    func selectSession(_ target: String?, window: String?) -> ControlResponse
-    func goSession(window: String?, direction: SessionNavigation) -> ControlResponse
-    func closeSession(_ target: String?, window: String?) -> ControlResponse
-    func renameSession(_ target: String?, window: String?, name: String) -> ControlResponse
-    func createWorkspace(window: String?, name: String?) -> ControlResponse
-    func selectWorkspace(_ target: String?, window: String?) -> ControlResponse
-    func renameWorkspace(_ target: String?, window: String?, name: String) -> ControlResponse
-    func deleteWorkspace(_ target: String?, window: String?) -> ControlResponse
-    func moveSession(_ target: String?, window: String?, move: ControlSessionMove) -> ControlResponse
-    func moveWorkspace(_ target: String?, window: String?, direction: ReorderDirection) -> ControlResponse
-    func focusWorkspace(_ target: String?, window: String?, mode: String?) -> ControlResponse
-    func setSessionFlag(_ target: String?, window: String?, mode: String?) -> ControlResponse
-    func setSessionStatus(_ target: String?, window: String?, update: ControlSessionStatusUpdate) -> ControlResponse
-    func splitSession(_ target: String?, window: String?, mode: String?) -> ControlResponse
-    func scratchSession(_ target: String?, window: String?, mode: String?, command: String?) -> ControlResponse
-    func focusSessionPane(_ target: String?, window: String?, pane: String?) -> ControlResponse
-    func resizeSplit(_ target: String?, window: String?, resize: ControlSplitResize) -> ControlResponse
-    func font(_ target: String?, window: String?, action: String) -> ControlResponse
-    func reloadKeymap() -> ControlResponse
-    func reloadGhosttyConfig() -> ControlResponse
-    func sendNotification(_ target: String?, window: String?, title: String?, body: String) -> ControlResponse
-    func setTheme(name: String?) -> ControlResponse
-    func listThemes() -> ControlResponse
-    func setSidebarVisibility(_ mode: ControlToggleMode) -> ControlResponse
-    func setSidebarViewMode(_ mode: ControlSidebarViewMode) -> ControlResponse
-    func expandSidebar(window: String?) -> ControlResponse
-    func collapseSidebar(window: String?) -> ControlResponse
-    func setQuickTerminal(mode: String?) -> ControlResponse
-    func typeSession(_ target: String?, window: String?, options: ControlSessionTypeOptions) async -> ControlResponse
-    func copySessionSelection(_ target: String?, window: String?) -> ControlResponse
-    func searchSession(_ target: String?, window: String?,
-                       text: String?, to: String?) async -> ControlResponse
-    func openSessionOverlay(_ target: String?, window: String?,
-                            options: ControlSessionOverlayOpenOptions) -> ControlResponse
-    func closeSessionOverlay(_ target: String?, window: String?) -> ControlResponse
-    func sessionOverlayResult(_ target: String?, window: String?) -> ControlResponse
-    func setSessionBackground(_ target: String?, window: String?,
-                              options: ControlSessionBackgroundOptions) -> ControlResponse
-    func readSessionText(_ target: String?, window: String?, options: ControlSessionTextOptions) -> ControlResponse
-    func windowNew(name: String?) -> ControlResponse
-    func windowList() -> ControlResponse
-    func windowSelect(_ target: String?) async -> ControlResponse
-    func windowClose(_ target: String?) async -> ControlResponse
-    func windowRename(_ target: String?, name: String) -> ControlResponse
-    func windowDelete(_ target: String?) -> ControlResponse
-    func windowResize(_ target: String?, width: Int, height: Int) -> ControlResponse
-    func windowMove(_ target: String?, x: Int, y: Int, display: Int?) -> ControlResponse
-    func windowZoom(_ target: String?) -> ControlResponse
-    func clearRestoreCommands() -> ControlResponse
-}
+struct LinuxControlDispatcher {
+    private let actions: AppController
 
-public struct ControlSessionTypeOptions: Equatable, Sendable {
-    public let text: String
-    public let select: Bool
-    public let pane: String?
-
-    public init(text: String, select: Bool, pane: String?) {
-        self.text = text
-        self.select = select
-        self.pane = pane
-    }
-}
-
-public struct ControlSessionOverlayOpenOptions: Equatable, Sendable {
-    public let command: String
-    public let cwd: String?
-    public let wait: Bool
-    public let sizePercent: Int?
-    public let backgroundColor: String?
-    public let follow: Bool
-
-    public init(command: String, cwd: String?, wait: Bool, sizePercent: Int?, backgroundColor: String?,
-                follow: Bool = false) {
-        self.command = command
-        self.cwd = cwd
-        self.wait = wait
-        self.sizePercent = sizePercent
-        self.backgroundColor = backgroundColor
-        self.follow = follow
-    }
-}
-
-public struct ControlSessionBackgroundOptions: Equatable, Sendable {
-    public let watermark: BackgroundWatermark?
-
-    public init(watermark: BackgroundWatermark?) {
-        self.watermark = watermark
-    }
-}
-
-public struct ControlSessionTextOptions: Equatable, Sendable {
-    public let pane: String?
-    public let all: Bool
-    public let lines: Int?
-
-    public init(pane: String?, all: Bool, lines: Int?) {
-        self.pane = pane
-        self.all = all
-        self.lines = lines
-    }
-}
-
-/// Routes control commands through a host-provided action seam. The dispatcher owns command parsing and
-/// response shape; host actions keep target resolution, AppKit state, and terminal-surface side effects.
-@MainActor
-public struct ControlDispatcher {
-    private let actions: any ControlActions
-
-    public init(actions: any ControlActions) {
+    init(actions: AppController) {
         self.actions = actions
     }
 
-    public func dispatch(_ request: ControlRequest) async -> ControlResponse? {
+    func dispatch(_ request: ControlRequest) -> ControlResponse? {
         switch request.cmd {
         case .tree:
             return actions.controlTree(window: request.args?.window)
         case .sessionNew, .sessionSelect, .sessionGo, .sessionClose, .sessionRename,
                 .sessionMove, .sessionFlag, .sessionStatus:
             return dispatchSessionCommand(request)
-        case .sessionSplit, .sessionScratch, .sessionFocus, .sessionResize, .sessionType,
-                .sessionCopy, .sessionSearch, .sessionOverlayOpen, .sessionOverlayClose,
-                .sessionOverlayResult, .sessionBackground, .sessionText:
-            return await dispatchSessionSurfaceCommand(request)
+        case .sessionSplit, .sessionScratch, .sessionFocus, .sessionResize,
+                .sessionCopy, .sessionOverlayOpen, .sessionOverlayClose, .sessionOverlayResult,
+                .sessionBackground, .sessionText:
+            return dispatchSessionSurfaceCommand(request)
+        case .sessionType:
+            return nil
         case .workspaceNew, .workspaceSelect, .workspaceRename, .workspaceDelete,
                 .workspaceMove, .workspaceFocus:
             return dispatchWorkspaceCommand(request)
-        case .quick, .fontInc, .fontDec, .fontReset, .keymapReload, .configReload, .notify,
+        case .fontInc, .fontDec, .fontReset, .keymapReload, .configReload, .notify,
                 .themeSet, .themeList, .sidebar, .sidebarMode, .sidebarExpand,
                 .sidebarCollapse, .restoreClear:
             return dispatchAppCommand(request)
-        case .windowNew, .windowList, .windowSelect, .windowClose, .windowRename,
-                .windowDelete, .windowResize, .windowMove, .windowZoom:
-            return await dispatchWindowCommand(request)
+        case .windowRename, .windowResize, .windowMove, .windowZoom:
+            return dispatchWindowCommand(request)
+        default:
+            return nil
         }
     }
 
@@ -150,7 +50,6 @@ public struct ControlDispatcher {
             if args?.after != nil, args?.before != nil {
                 return ControlResponse(ok: false, error: "use either --after or --before, not both")
             }
-            // The anchor sid carries its own workspace, so placement can't also name one.
             if args?.after != nil || args?.before != nil, args?.workspace != nil || args?.workspaceName != nil {
                 return ControlResponse(ok: false, error: "session.new takes --after/--before or a workspace, not both")
             }
@@ -174,7 +73,6 @@ public struct ControlDispatcher {
         case .sessionSelect:
             return actions.selectSession(request.target, window: request.args?.window)
         case .sessionGo:
-            // unknown/missing `to` is a structured error.
             guard let dir = (request.args?.to).flatMap(SessionNavigation.init(wire:)) else {
                 return ControlResponse(ok: false, error: "session.go requires --to next|prev|first|last|next-attention|prev-attention")
             }
@@ -191,8 +89,6 @@ public struct ControlDispatcher {
             if args?.after != nil, args?.before != nil {
                 return ControlResponse(ok: false, error: "use either --after or --before, not both")
             }
-            // Placement mode: the anchor sid self-identifies the destination workspace, so it's
-            // mutually exclusive with --to and with a workspace parameter.
             if let anchor = args?.after ?? args?.before {
                 if args?.to != nil {
                     return ControlResponse(ok: false, error: "session.move takes --after/--before or --to, not both")
@@ -248,7 +144,7 @@ public struct ControlDispatcher {
         case .workspaceSelect:
             return actions.selectWorkspace(request.target, window: request.args?.window)
         case .workspaceRename:
-            guard let name = request.args?.name?.trimmedOrNil else {
+            guard let name = request.args?.name?.linuxTrimmedOrNil else {
                 return ControlResponse(ok: false, error: "workspace.rename requires a name")
             }
             return actions.renameWorkspace(request.target, window: request.args?.window, name: name)
@@ -269,7 +165,7 @@ public struct ControlDispatcher {
         }
     }
 
-    private func dispatchSessionSurfaceCommand(_ request: ControlRequest) async -> ControlResponse {
+    private func dispatchSessionSurfaceCommand(_ request: ControlRequest) -> ControlResponse {
         switch request.cmd {
         case .sessionSplit:
             return actions.splitSession(request.target, window: request.args?.window, mode: request.args?.mode)
@@ -289,21 +185,8 @@ public struct ControlDispatcher {
             case (nil, .some(let delta)):
                 return actions.resizeSplit(request.target, window: request.args?.window, resize: .delta(delta))
             }
-        case .sessionType:
-            guard let text = request.args?.text else {
-                return ControlResponse(ok: false, error: "session.type requires text")
-            }
-            return await actions.typeSession(request.target, window: request.args?.window,
-                                             options: ControlSessionTypeOptions(
-                                                text: text,
-                                                select: request.args?.select ?? false,
-                                                pane: request.args?.pane
-                                             ))
         case .sessionCopy:
             return actions.copySessionSelection(request.target, window: request.args?.window)
-        case .sessionSearch:
-            return await actions.searchSession(request.target, window: request.args?.window,
-                                               text: request.args?.text, to: request.args?.to)
         case .sessionOverlayOpen:
             guard let command = request.args?.command, !command.isEmpty else {
                 return ControlResponse(ok: false, error: "session.overlay.open requires a command")
@@ -317,8 +200,7 @@ public struct ControlDispatcher {
                                                 cwd: request.args?.cwd,
                                                 wait: request.args?.wait ?? false,
                                                 sizePercent: request.args?.sizePercent,
-                                                backgroundColor: request.args?.color,
-                                                follow: request.args?.follow ?? false
+                                                backgroundColor: request.args?.color
                                               ))
         case .sessionOverlayClose:
             return actions.closeSessionOverlay(request.target, window: request.args?.window)
@@ -336,13 +218,11 @@ public struct ControlDispatcher {
     private func dispatchAppCommand(_ request: ControlRequest) -> ControlResponse {
         switch request.cmd {
         case .fontInc:
-            return actions.font(request.target, window: request.args?.window, action: "increase_font_size:1")
+            return actions.font(request.target, window: request.args?.window, action: FontBindingAction.increase)
         case .fontDec:
-            return actions.font(request.target, window: request.args?.window, action: "decrease_font_size:1")
+            return actions.font(request.target, window: request.args?.window, action: FontBindingAction.decrease)
         case .fontReset:
-            return actions.font(request.target, window: request.args?.window, action: "reset_font_size")
-        case .quick:
-            return actions.setQuickTerminal(mode: request.args?.mode)
+            return actions.font(request.target, window: request.args?.window, action: FontBindingAction.reset)
         case .keymapReload:
             return actions.reloadKeymap()
         case .configReload:
@@ -379,8 +259,6 @@ public struct ControlDispatcher {
     }
 
     private func dispatchSessionBackground(_ request: ControlRequest) -> ControlResponse {
-        // The args bag is normalized into the option struct here so the app-side adapter stays a small
-        // fixed-arity signature (swiftlint function_parameter_count) rather than a 10-parameter dispatch.
         if let fit = request.args?.fit, !WatermarkConfig.isValidFit(fit) {
             return ControlResponse(ok: false, error: "invalid fit: \(fit) (contain|cover|stretch|none)")
         }
@@ -419,8 +297,6 @@ public struct ControlDispatcher {
                                             fit: request.args?.fit.flatMap(BackgroundWatermark.Fit.init(rawValue:)),
                                             position: request.args?.position.flatMap(BackgroundWatermark.Position.init(rawValue:)))
         case "color":
-            // No per-call opacity: a solid color honors the window translucency set in Settings, applied at
-            // emit time via `WatermarkConfig.overlayText(windowOpacity:)` (see `GhosttySurfaceView`).
             guard let color = request.args?.color, !color.isEmpty else {
                 return ControlResponse(ok: false, error: "session.background color requires a color")
             }
@@ -453,23 +329,13 @@ public struct ControlDispatcher {
                                                                           lines: lines))
     }
 
-    private func dispatchWindowCommand(_ request: ControlRequest) async -> ControlResponse {
+    private func dispatchWindowCommand(_ request: ControlRequest) -> ControlResponse {
         switch request.cmd {
-        case .windowNew:
-            return actions.windowNew(name: request.args?.name)
-        case .windowList:
-            return actions.windowList()
-        case .windowSelect:
-            return await actions.windowSelect(request.target)
-        case .windowClose:
-            return await actions.windowClose(request.target)
         case .windowRename:
-            guard let name = request.args?.name?.trimmedOrNil else {
+            guard let name = request.args?.name?.linuxTrimmedOrNil else {
                 return ControlResponse(ok: false, error: "window.rename requires a name")
             }
             return actions.windowRename(request.target, name: name)
-        case .windowDelete:
-            return actions.windowDelete(request.target)
         case .windowResize:
             guard let width = request.args?.width, let height = request.args?.height,
                   width > 0, height > 0 else {

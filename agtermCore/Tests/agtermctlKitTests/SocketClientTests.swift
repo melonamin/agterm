@@ -1,9 +1,5 @@
 import ArgumentParser
-#if canImport(Darwin)
 import Darwin
-#elseif canImport(Glibc)
-import Glibc
-#endif
 import Foundation
 import Testing
 import agtermCore
@@ -90,10 +86,10 @@ struct SocketClientTests {
         let pipe = Pipe()
         let saved = dup(STDOUT_FILENO)
         defer { close(saved) }
-        fflush(nil)
+        fflush(stdout)
         dup2(pipe.fileHandleForWriting.fileDescriptor, STDOUT_FILENO)
         try body()
-        fflush(nil)
+        fflush(stdout)
         dup2(saved, STDOUT_FILENO)
         try pipe.fileHandleForWriting.close()
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
@@ -304,7 +300,7 @@ private final class StubServer: @unchecked Sendable {
     }
 
     func start() throws {
-        let fd = makeUnixSocket()
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { throw SocketClientError("stub socket() failed") }
         unlink(path)
 
@@ -334,7 +330,7 @@ private final class StubServer: @unchecked Sendable {
     }
 
     private func accept(_ fd: Int32) {
-        let conn = systemAccept(fd)
+        let conn = Darwin.accept(fd, nil, nil)
         lock.lock(); let done = stopped; lock.unlock()
         // stop() woke this accept only to join it — don't serve a request on a stopping server.
         if done { if conn >= 0 { close(conn) }; return }
@@ -381,7 +377,7 @@ private final class StubServer: @unchecked Sendable {
 /// both stub servers so `stop()` can JOIN the accept loop before the listen fd is closed, which is what
 /// keeps a lingering loop from serving the next server's client on a reused fd number.
 private func wakeAccept(_ path: String) {
-    let fd = makeUnixSocket()
+    let fd = socket(AF_UNIX, SOCK_STREAM, 0)
     guard fd >= 0 else { return }
     defer { close(fd) }
     var addr = sockaddr_un()
@@ -394,7 +390,7 @@ private func wakeAccept(_ path: String) {
     }
     _ = withUnsafePointer(to: &addr) { ptr in
         ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
-            systemConnect(fd, sa, socklen_t(MemoryLayout<sockaddr_un>.size))
+            Darwin.connect(fd, sa, socklen_t(MemoryLayout<sockaddr_un>.size))
         }
     }
 }
@@ -417,7 +413,7 @@ private final class ScriptedStubServer: @unchecked Sendable {
     }
 
     func start() throws {
-        let fd = makeUnixSocket()
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { throw SocketClientError("scripted socket() failed") }
         unlink(path)
 
@@ -448,7 +444,7 @@ private final class ScriptedStubServer: @unchecked Sendable {
 
     private func acceptLoop(_ fd: Int32) {
         while true {
-            let conn = systemAccept(fd)
+            let conn = Darwin.accept(fd, nil, nil)
             lock.lock(); let done = stopped; lock.unlock()
             // stop() flips `stopped` then self-connects to wake this accept; observing it here is what
             // lets the loop exit (and be joined) before the fd is closed, so it can never run accept on a
@@ -491,30 +487,6 @@ private final class ScriptedStubServer: @unchecked Sendable {
         close(listenFD); listenFD = -1
         unlink(path)
     }
-}
-
-private func makeUnixSocket() -> Int32 {
-    #if canImport(Darwin)
-    return socket(AF_UNIX, SOCK_STREAM, 0)
-    #else
-    return socket(AF_UNIX, Int32(SOCK_STREAM.rawValue), 0)
-    #endif
-}
-
-private func systemAccept(_ fd: Int32) -> Int32 {
-    #if canImport(Darwin)
-    return Darwin.accept(fd, nil, nil)
-    #else
-    return Glibc.accept(fd, nil, nil)
-    #endif
-}
-
-private func systemConnect(_ fd: Int32, _ addr: UnsafePointer<sockaddr>, _ len: socklen_t) -> Int32 {
-    #if canImport(Darwin)
-    return Darwin.connect(fd, addr, len)
-    #else
-    return Glibc.connect(fd, addr, len)
-    #endif
 }
 
 /// Scripts the `--block` round trips: `session.overlay.open` returns a fixed id; `session.overlay.result`
