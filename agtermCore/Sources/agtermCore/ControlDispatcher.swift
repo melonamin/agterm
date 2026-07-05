@@ -143,6 +143,37 @@ public struct ControlDispatcher {
         }
     }
 
+    /// Synchronous route for hosts whose control server already runs on the UI thread and cannot safely
+    /// hop through Swift concurrency from a C/GTK callback. `session.type` is intentionally excluded
+    /// because the macOS implementation needs async realization before injecting text; such hosts should
+    /// handle that command inline or call `dispatch(_:)`.
+    public func dispatchSync(_ request: ControlRequest) -> ControlResponse? {
+        switch request.cmd {
+        case .tree:
+            return actions.controlTree(window: request.args?.window)
+        case .sessionNew, .sessionSelect, .sessionGo, .sessionClose, .sessionRename,
+                .sessionMove, .sessionFlag, .sessionStatus:
+            return dispatchSessionCommand(request)
+        case .sessionSplit, .sessionScratch, .sessionFocus, .sessionResize,
+                .sessionCopy, .sessionOverlayOpen, .sessionOverlayClose, .sessionOverlayResult,
+                .sessionBackground, .sessionText:
+            return dispatchSessionSurfaceCommandSync(request)
+        case .sessionType:
+            return nil
+        case .workspaceNew, .workspaceSelect, .workspaceRename, .workspaceDelete,
+                .workspaceMove, .workspaceFocus:
+            return dispatchWorkspaceCommand(request)
+        case .fontInc, .fontDec, .fontReset, .keymapReload, .configReload, .notify,
+                .themeSet, .themeList, .sidebar, .sidebarMode, .sidebarExpand,
+                .sidebarCollapse, .restoreClear:
+            return dispatchAppCommand(request)
+        case .windowRename, .windowResize, .windowMove, .windowZoom:
+            return dispatchWindowCommand(request)
+        default:
+            return nil
+        }
+    }
+
     private func dispatchSessionCommand(_ request: ControlRequest) -> ControlResponse {
         switch request.cmd {
         case .sessionNew:
@@ -270,6 +301,21 @@ public struct ControlDispatcher {
     }
 
     private func dispatchSessionSurfaceCommand(_ request: ControlRequest) async -> ControlResponse {
+        if request.cmd != .sessionType {
+            return dispatchSessionSurfaceCommandSync(request)
+        }
+        guard let text = request.args?.text else {
+            return ControlResponse(ok: false, error: "session.type requires text")
+        }
+        return await actions.typeSession(request.target, window: request.args?.window,
+                                         options: ControlSessionTypeOptions(
+                                            text: text,
+                                            select: request.args?.select ?? false,
+                                            pane: request.args?.pane
+                                         ))
+    }
+
+    private func dispatchSessionSurfaceCommandSync(_ request: ControlRequest) -> ControlResponse {
         switch request.cmd {
         case .sessionSplit:
             return actions.splitSession(request.target, window: request.args?.window, mode: request.args?.mode)
@@ -289,16 +335,6 @@ public struct ControlDispatcher {
             case (nil, .some(let delta)):
                 return actions.resizeSplit(request.target, window: request.args?.window, resize: .delta(delta))
             }
-        case .sessionType:
-            guard let text = request.args?.text else {
-                return ControlResponse(ok: false, error: "session.type requires text")
-            }
-            return await actions.typeSession(request.target, window: request.args?.window,
-                                             options: ControlSessionTypeOptions(
-                                                text: text,
-                                                select: request.args?.select ?? false,
-                                                pane: request.args?.pane
-                                             ))
         case .sessionCopy:
             return actions.copySessionSelection(request.target, window: request.args?.window)
         case .sessionSearch:

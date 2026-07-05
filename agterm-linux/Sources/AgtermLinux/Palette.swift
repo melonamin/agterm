@@ -13,9 +13,14 @@ extension AppController {
         // Each fixed command shows its current keybind (kitty syntax) as a suffix when one resolves — the
         // palette-row "shortcut" widening. Searching matches the suffix too, so you can find by chord.
         // Omit fixed commands that would be no-ops in the current UI state (shared visibility predicates).
-        let paletteContext = PaletteContext(hasFlaggedSessions: !store.flaggedSessions.isEmpty,
-                                            workspaceCount: store.workspaces.count,
-                                            sidebarShowsFlaggedOnly: store.sidebarMode == .flagged)
+        let activeSession = store.selectedSessionID.flatMap { store.session(withID: $0) }
+        let paletteContext = PaletteContext(canRemoveWorkspace: store.canRemoveWorkspace,
+                                            hasFlaggedSessions: !store.flaggedSessions.isEmpty,
+                                            sidebarShowsWorkspaceTree: store.sidebarMode == .tree,
+                                            sidebarShowsFlaggedOnly: store.sidebarMode == .flagged,
+                                            activeSessionFlagged: activeSession?.flagged ?? false,
+                                            hasFocusedWorkspace: store.focusedWorkspaceID != nil,
+                                            activeSessionHasSplit: activeSession?.hasSplit ?? false)
         var items: [(String, () -> Void)] = PaletteCommand.allCases.filter { $0.isVisible(in: paletteContext) }.map { cmd in
             let entry = Self.entry(for: cmd)
             let chord = entry.builtin.flatMap { a in resolvedBuiltinChords.first(where: { $0.value == a })?.key }
@@ -69,33 +74,42 @@ extension AppController {
         switch cmd {
         case .newSession: return (.newSession, { gController?.newSession() })
         case .newWorkspace: return (.newWorkspace, { gController?.newWorkspace() })
-        case .newWindow: return (.newWindow, { gController?.openNewWindow() })
+        case .openDirectory: return (.openDirectory, { gController?.openDirectory() })
+        case .renameSession: return (.renameSession, { gController?.startRenameActive() })
+        case .renameWorkspace: return (.renameWorkspace, { if let ws = gController?.store.currentWorkspaceID { gController?.beginRename(id: ws, isWorkspace: true) } })
         case .closeSession: return (.closeSession, { if let id = gController?.store.selectedSessionID { gController?.closeSession(id) } })
+        case .clearStatus: return (.clearStatus, { gController?.clearActiveStatus() })
+        case .previousSession: return (.previousSession, { gController?.navigate(.previous) })
+        case .nextSession: return (.nextSession, { gController?.navigate(.next) })
+        case .previousAttentionSession: return (.previousAttentionSession, { gController?.navigate(.previousAttention) })
+        case .nextAttentionSession: return (.nextAttentionSession, { gController?.navigate(.nextAttention) })
+        case .firstSession: return (.firstSession, { gController?.navigate(.first) })
+        case .lastSession: return (.lastSession, { gController?.navigate(.last) })
+        case .showAttention: return (.showAttention, { gController?.showAttentionPalette() })
         case .toggleSplit: return (.toggleSplit, { gController?.toggleSplit() })
         case .toggleScratch: return (.toggleScratch, { gController?.toggleScratch() })
         case .toggleSidebar: return (.toggleSidebar, { gController?.toggleSidebar() })
-        case .renameSession: return (.renameSession, { gController?.startRenameActive() })
-        case .flagSession: return (.toggleFlag, { gController?.toggleFlagActive() })
-        case .showFlagged: return (.toggleFlaggedView, { gController?.toggleFlaggedView() })
-        case .changeTheme: return (.selectTheme, { gController?.showThemePicker() })
+        case .toggleFlag: return (.toggleFlag, { gController?.toggleFlagActive() })
+        case .focusWorkspace: return (.focusWorkspace, { gController?.focusActiveWorkspace() })
         case .find: return (.toggleSearch, { gController?.toggleSearch() })
+        case .quickTerminal: return (.quickTerminal, { gController?.toggleQuick() })
         case .increaseFontSize: return (.increaseFontSize, { gController?.activeSurface()?.performBindingAction(FontBindingAction.increase) })
         case .decreaseFontSize: return (.decreaseFontSize, { gController?.activeSurface()?.performBindingAction(FontBindingAction.decrease) })
         case .resetFontSize: return (.resetFontSize, { gController?.activeSurface()?.performBindingAction(FontBindingAction.reset) })
-        case .nextSession: return (.nextSession, { gController?.navigate(.next) })
-        case .previousSession: return (.previousSession, { gController?.navigate(.previous) })
-        case .firstSession: return (.firstSession, { gController?.navigate(.first) })
-        case .lastSession: return (.lastSession, { gController?.navigate(.last) })
-        case .nextAttention: return (.nextAttentionSession, { gController?.navigate(.nextAttention) })
-        case .previousAttention: return (.previousAttentionSession, { gController?.navigate(.previousAttention) })
-        case .clearStatus: return (.clearStatus, { gController?.clearActiveStatus() })
+        case .selectTheme: return (.selectTheme, { gController?.showThemePicker() })
+        case .deleteWorkspace: return (.deleteWorkspace, { if let ws = gController?.store.currentWorkspaceID { gController?.store.removeWorkspace(ws); gController?.reconcile() } })
+        case .toggleFlaggedView: return (.toggleFlaggedView, { gController?.toggleFlaggedView() })
+        case .focusLeftPane: return (.focusLeftPane, { gController?.focusPane(left: true) })
+        case .focusRightPane: return (.focusRightPane, { gController?.focusPane(left: false) })
         // palette-only (no rebindable built-in)
         case .expandWorkspaces: return (nil, { gController?.expandWorkspaces() })
         case .collapseWorkspaces: return (nil, { gController?.collapseOtherWorkspaces() })
         case .editKeymap: return (nil, { gController?.editKeymap() })
+        case .reloadKeymap: return (nil, { _ = gController?.reloadKeymapDiagnostics() })
         case .editGhosttyConfig: return (nil, { gController?.editGhosttyConfig() })
         case .reloadConfig: return (nil, { gController?.reloadConfig() })
         case .clearFlagged: return (nil, { gController?.clearFlagged() })
+        case .clearFocus: return (nil, { gController?.focusWorkspace(nil) })
         }
     }
 

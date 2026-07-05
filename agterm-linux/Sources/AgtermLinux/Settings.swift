@@ -20,7 +20,7 @@ extension AppController {
 
         let copyRow = OpaquePointer(adw_switch_row_new())
         "Copy on select".withCString { adw_preferences_row_set_title(cast(copyRow), $0) }
-        adw_switch_row_set_active(copyRow, s.copyOnSelect == true ? 1 : 0)
+        adw_switch_row_set_active(copyRow, (s.rightClickPaste ?? true) ? 1 : 0)
         connect(copyRow, "notify::active", unsafeBitCast(onCopyOnSelectToggled as @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void, to: GCallback.self))
         adw_preferences_group_add(cast(group), W(copyRow))
 
@@ -182,7 +182,7 @@ extension AppController {
     }
 
     func setCopyOnSelect(_ on: Bool) {
-        persist(\.copyOnSelect, on)
+        persist(\.rightClickPaste, on ? nil : false)
         reloadConfig()
     }
 

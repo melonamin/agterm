@@ -147,29 +147,31 @@ struct ConfigPathsTests {
 
     @Test func editorCommandResolvesExportedEditorAndPreservesPath() throws {
         // an exported $EDITOR resolves and a path with a space AND an embedded single quote survives the
-        // nested quoting, under zsh (a POSIX login shell, always present).
+        // nested quoting, under a POSIX shell.
         let tmp = try makeTmp(); defer { try? FileManager.default.removeItem(at: tmp) }
         let (editor, got) = try makeRecorder(in: tmp, named: "editor")
         let path = tmp.appendingPathComponent("a b/o'd.conf").path
-        let status = try runEditorCommand(forPath: path, tmp: tmp, env: ["SHELL": "/bin/zsh", "EDITOR": editor])
+        let status = try runEditorCommand(forPath: path, tmp: tmp, env: ["SHELL": "/bin/sh", "EDITOR": editor])
         #expect(status == 0)
         #expect((try? String(contentsOf: got, encoding: .utf8)) == path)
     }
 
     @Test func editorCommandPrefersVisualOverEditor() throws {
-        // $VISUAL wins over $EDITOR (the ${VISUAL:-${EDITOR:-vi}} precedence), under zsh.
+        // $VISUAL wins over $EDITOR (the ${VISUAL:-${EDITOR:-vi}} precedence), under a POSIX shell.
         let tmp = try makeTmp(); defer { try? FileManager.default.removeItem(at: tmp) }
         let (visual, visualGot) = try makeRecorder(in: tmp, named: "visual")
         let (editor, editorGot) = try makeRecorder(in: tmp, named: "editor")
         let path = tmp.appendingPathComponent("k.conf").path
         let status = try runEditorCommand(forPath: path, tmp: tmp,
-                                          env: ["SHELL": "/bin/zsh", "VISUAL": visual, "EDITOR": editor])
+                                          env: ["SHELL": "/bin/sh", "VISUAL": visual, "EDITOR": editor])
         #expect(status == 0)
         #expect((try? String(contentsOf: visualGot, encoding: .utf8)) == path)
         #expect(!FileManager.default.fileExists(atPath: editorGot.path), "EDITOR must not run when VISUAL is set")
     }
 
-    @Test func editorCommandSourcesLoginShellRcForExportedEditor() throws {
+    @Test(.enabled(if: FileManager.default.isExecutableFile(atPath: "/bin/zsh"),
+                   "zsh is not installed here"))
+    func editorCommandSourcesLoginShellRcForExportedEditor() throws {
         // the `-ilc` hop is load-bearing: an $EDITOR exported only in the shell rc (NOT in the process env)
         // still resolves, because the login shell sources its rc before exec'ing /bin/sh. Without `-ilc` the
         // rc isn't sourced and this would fall back to vi.

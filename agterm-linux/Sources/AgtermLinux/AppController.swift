@@ -35,7 +35,7 @@ final class AppController {
     private var scratchToggleBtn: OpaquePointer?  // title-bar scratch toggle (swaps to .fill when active)
     private var attentionButton: OpaquePointer?   // optional title-bar attention indicator button
     private let sidebarBox: OpaquePointer    // GtkBox holding per-workspace sections
-    private var splitView: OpaquePointer!    // AdwOverlaySplitView (collapsible sidebar)
+    var splitView: OpaquePointer!    // AdwOverlaySplitView (collapsible sidebar)
 
     // Command palette (Ctrl+Shift+P)
     var paletteWindow: OpaquePointer?
@@ -72,7 +72,7 @@ final class AppController {
     private var scratchSurfaces: [UUID: GhosttySurface] = [:] // full-overlay scratch shell
     private var overlaySurfaces: [UUID: GhosttySurface] = [:]  // ephemeral overlay terminal (runs a command)
     private var floatingOverlayFrames: [UUID: OpaquePointer] = [:]  // overlay rendered as a floating sized panel
-    private var sessionPanes: [UUID: OpaquePointer] = [:]     // GtkPaned (main content) per session
+    var sessionPanes: [UUID: OpaquePointer] = [:]     // GtkPaned (main content) per session
     private var sessionStacks: [UUID: OpaquePointer] = [:]    // outer GtkStack (main <-> scratch), the deck page
     private var rowSession: [OpaquePointer: UUID] = [:]
     private var nameLabels: [OpaquePointer: (id: UUID, isWorkspace: Bool)] = [:]  // name label -> rename target (double-click)
@@ -466,7 +466,9 @@ final class AppController {
     func setQuick(_ visible: Bool) {
         if quickFrame == nil, visible, let overlay = deckOverlay {
             let q = GhosttySurface(sessionID: UUID(), cwd: Self.homeCwd,
-                                   env: SurfaceEnvironment.quick(windowID: windowID, socketPath: gControlServer.boundSocketPath),
+                                   env: SurfaceEnvironment.quickTerminal(windowID: windowID,
+                                                                         socketPath: gControlServer.boundSocketPath
+                                                                            ?? ControlServer.defaultSocketPath()),
                                    controller: self, reportsPaneState: false)
             q.onExit = { [weak self] in self?.closeQuick() }
             // A floating card panel over the FULL window content: rounded + shadowed (Adwaita "card"),
@@ -846,7 +848,7 @@ final class AppController {
     /// the system themes dir, which doesn't carry `agterm`. Without this the default look silently
     /// degrades to ghostty's built-in default. macOS stages the theme file, so this would be a no-op there.
     nonisolated static func ghosttyLines(for settings: AppSettings) -> [String] {
-        var lines = settings.ghosttyConfigLines(translucency: .rendererBlended)
+        var lines = settings.ghosttyConfigLines()
         if settings.theme == AppSettings.defaultTheme, themeFileLines(for: AppSettings.defaultTheme) == nil {
             lines.removeAll { $0 == "theme = \(AppSettings.defaultTheme)" }
             lines.append(contentsOf: AppSettings.agtermThemeLines)
@@ -951,15 +953,23 @@ final class AppController {
 
     // MARK: - Control channel dispatch (a core subset of the macOS ControlServer)
 
-    func handleControl(_ req: ControlRequest) async -> ControlResponse {
+    func handleControl(_ req: ControlRequest) -> ControlResponse {
         func ok(_ id: UUID? = nil) -> ControlResponse { ControlResponse(ok: true, result: ControlResult(id: id?.uuidString)) }
         func err(_ m: String) -> ControlResponse { ControlResponse(ok: false, error: m) }
 
         // The shared ControlDispatcher owns the migrated commands; the rest fall through to the inline
         // switch below (which shrinks as more commands move into the dispatcher).
-        if let resp = await ControlDispatcher(actions: self).dispatch(req) { return resp }
+        if let resp = ControlDispatcher(actions: self).dispatchSync(req) { return resp }
 
         switch req.cmd {
+        case .sessionType:
+            guard let text = req.args?.text else {
+                return ControlResponse(ok: false, error: "session.type requires text")
+            }
+            return typeSessionSync(req.target, window: req.args?.window,
+                                   options: ControlSessionTypeOptions(text: text,
+                                                                      select: req.args?.select ?? false,
+                                                                      pane: req.args?.pane))
         case .sessionSearch:
             guard let id = resolveSession(req.target) else { return sessionResolveError(req.target) }
             if req.args?.to == "close" {
@@ -1003,7 +1013,7 @@ final class AppController {
             setQuick(mode.desiredValue(current: quickVisible))
             return ok()
         case .windowNew:
-            let info = library.newWindow(name: req.args?.name?.trimmedOrNil)
+            let info = library.newWindow(name: req.args?.name?.linuxTrimmedOrNil)
             openWindow(info.id)
             return ok(info.id)
         case .windowList:
@@ -1053,9 +1063,9 @@ final class AppController {
     /// UUID?-returning resolver can't carry it). Re-resolves only on the already-failed path.
     private func resolveError(_ noun: String, target: String?, candidates: [UUID]) -> ControlResponse {
         if let target, case let .ambiguous(hits) = ControlResolve.resolve(target, candidates: candidates, active: nil) {
-            return ControlResponse(ok: false, error: ControlResolve.ambiguousMessage(noun, target: target, matches: hits))
+            return ControlResponse(ok: false, error: ControlResolve.ambiguousMessage(noun: noun, target: target, hits: hits))
         }
-        return ControlResponse(ok: false, error: ControlResolve.notFoundMessage(noun, target: target))
+        return ControlResponse(ok: false, error: ControlResolve.notFoundMessage(noun: noun, target: target ?? "active"))
     }
     private func sessionResolveError(_ target: String?) -> ControlResponse {
         resolveError("session", target: target, candidates: store.workspaces.flatMap { $0.sessions.map(\.id) })
@@ -1125,7 +1135,7 @@ final class AppController {
     private func sessionEnv(for s: Session) -> [String: String] {
         SurfaceEnvironment.session(sessionID: s.id, windowID: windowID,
                                    workspaceID: store.workspace(forSession: s.id)?.id,
-                                   socketPath: gControlServer.boundSocketPath)
+                                   socketPath: gControlServer.boundSocketPath ?? ControlServer.defaultSocketPath())
     }
 
     /// Each session's deck page is an outer GtkStack ("main" = a GtkPaned holding the
@@ -1306,7 +1316,7 @@ final class AppController {
     /// rebinds are not applied yet — see the keymap chord-convention note; custom commands have no such
     /// issue since the user picks the chord/runs them from the palette.)
     func loadKeymapCommands() -> (commands: [CustomCommand], diagnostics: Int) {
-        let (keymap, diags) = KeymapStore(configDirectory: configDirectory(), defaults: .linux).load()
+        let (keymap, diags) = KeymapStore(configDirectory: configDirectory()).load()
         return (keymap.commands, diags.count)
     }
 

@@ -5,6 +5,11 @@ import agtermCore
 // Linux adapter for agtermCore's upstream `ControlActions` seam. The dispatcher owns command parsing and
 // response shape; AppController keeps GTK/libghostty/window side effects.
 extension AppController: ControlActions {
+    private enum ResolveResponse<T> {
+        case success(T)
+        case failure(ControlResponse)
+    }
+
     private func ok(_ id: UUID? = nil) -> ControlResponse {
         ControlResponse(ok: true, result: ControlResult(id: id?.uuidString))
     }
@@ -15,12 +20,12 @@ extension AppController: ControlActions {
 
     private func resolveError(_ noun: String, target: String?, candidates: [UUID]) -> ControlResponse {
         if let target, case let .ambiguous(hits) = ControlResolve.resolve(target, candidates: candidates, active: nil) {
-            return err(ControlResolve.ambiguousMessage(noun, target: target, matches: hits))
+            return err(ControlResolve.ambiguousMessage(noun: noun, target: target, hits: hits))
         }
-        return err(ControlResolve.notFoundMessage(noun, target: target))
+        return err(ControlResolve.notFoundMessage(noun: noun, target: target ?? "active"))
     }
 
-    private func resolveSessionResponse(_ target: String?) -> Result<UUID, ControlResponse> {
+    private func resolveSessionResponse(_ target: String?) -> ResolveResponse<UUID> {
         let candidates = store.workspaces.flatMap { $0.sessions.map(\.id) }
         switch ControlResolve.resolve(target ?? "active", candidates: candidates, active: store.selectedSessionID) {
         case .resolved(let id): return .success(id)
@@ -28,7 +33,7 @@ extension AppController: ControlActions {
         }
     }
 
-    private func resolveWorkspaceResponse(_ target: String?) -> Result<UUID, ControlResponse> {
+    private func resolveWorkspaceResponse(_ target: String?) -> ResolveResponse<UUID> {
         let candidates = store.workspaces.map(\.id)
         switch ControlResolve.resolve(target ?? "active", candidates: candidates, active: store.currentWorkspaceID) {
         case .resolved(let id): return .success(id)
@@ -36,7 +41,7 @@ extension AppController: ControlActions {
         }
     }
 
-    private func resolveWindowResponse(_ target: String?) -> Result<UUID, ControlResponse> {
+    private func resolveWindowResponse(_ target: String?) -> ResolveResponse<UUID> {
         let candidates = library.windows.map(\.id)
         switch ControlResolve.resolve(target ?? "active", candidates: candidates, active: library.activeWindowID) {
         case .resolved(let id): return .success(id)
@@ -44,7 +49,7 @@ extension AppController: ControlActions {
         }
     }
 
-    private func resolveAnchorLocation(_ anchor: String) -> Result<(workspace: UUID, index: Int), ControlResponse> {
+    private func resolveAnchorLocation(_ anchor: String) -> ResolveResponse<(workspace: UUID, index: Int)> {
         let candidates = store.workspaces.flatMap { $0.sessions.map(\.id) }
         switch ControlResolve.resolve(anchor, candidates: candidates, active: store.selectedSessionID) {
         case .resolved(let id):
@@ -81,7 +86,7 @@ extension AppController: ControlActions {
         }
         let workspaceID: UUID
         if let name = options.workspaceName {
-            guard let needle = name.trimmedOrNil else { return err("workspace name must not be blank") }
+            guard let needle = name.linuxTrimmedOrNil else { return err("workspace name must not be blank") }
             if options.createWorkspace == true {
                 workspaceID = store.ensureWorkspace(named: needle)?.id ?? store.addWorkspace(name: needle).id
             } else if let workspace = store.workspace(named: needle) {
@@ -139,7 +144,7 @@ extension AppController: ControlActions {
     }
 
     func createWorkspace(window: String?, name: String?) -> ControlResponse {
-        let workspace = store.addWorkspace(name: name?.trimmedOrNil ?? store.defaultWorkspaceName)
+        let workspace = store.addWorkspace(name: name?.linuxTrimmedOrNil ?? store.defaultWorkspaceName)
         reconcile()
         return ok(workspace.id)
     }
@@ -416,6 +421,10 @@ extension AppController: ControlActions {
     }
 
     func typeSession(_ target: String?, window: String?, options: ControlSessionTypeOptions) async -> ControlResponse {
+        typeSessionSync(target, window: window, options: options)
+    }
+
+    func typeSessionSync(_ target: String?, window: String?, options: ControlSessionTypeOptions) -> ControlResponse {
         switch resolveSessionResponse(target) {
         case .failure(let response): return response
         case .success(let id):

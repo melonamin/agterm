@@ -1,6 +1,117 @@
 import Foundation
 import agtermCore
 
+enum FontBindingAction {
+    static let increase = "increase_font_size:1"
+    static let decrease = "decrease_font_size:1"
+    static let reset = "reset_font_size"
+}
+
+enum GhosttyDefaults {
+    static let baseConfLines = """
+    cursor-style = block
+
+    """
+}
+
+extension String {
+    var linuxTrimmedOrNil: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+extension AppSettings {
+    static let themeResetOSC = "\u{1B}]110\u{7}\u{1B}]111\u{7}"
+
+    static let agtermThemeLines = [
+        "background = #303030",
+        "foreground = #ffffff",
+        "selection-background = #5b5b5b",
+        "selection-foreground = #dfdfff",
+    ]
+
+    static func themeOSC(from lines: [String]) -> String {
+        let colors = ThemeColorResolver.colors(fromLines: lines)
+        var osc = ""
+        if let background = colors.background {
+            osc += "\u{1B}]11;\(background)\u{7}"
+        }
+        if let foreground = colors.foreground {
+            osc += "\u{1B}]10;\(foreground)\u{7}"
+        }
+        return osc
+    }
+}
+
+extension BuiltinAction {
+    var linuxDefaultChord: Chord? {
+        switch self {
+        case .newWindow: return Chord(mods: [.control, .shift], key: "n")
+        case .newWorkspace: return Chord(mods: [.control, .shift], key: "w")
+        case .newSession: return Chord(mods: [.control, .shift], key: "t")
+        case .openDirectory: return Chord(mods: [.control, .shift], key: "o")
+        case .closeSession: return Chord(mods: [.control, .shift], key: "q")
+        case .toggleSplit: return Chord(mods: [.control, .shift], key: "d")
+        case .toggleScratch: return Chord(mods: [.control, .shift], key: "j")
+        case .toggleSearch: return Chord(mods: [.control, .shift], key: "f")
+        case .toggleSidebar: return Chord(mods: [.control, .shift], key: "s")
+        case .toggleFlag: return Chord(mods: [.control, .shift], key: "g")
+        case .quickTerminal: return Chord(mods: [.control], key: "`")
+        case .sessionPalette: return Chord(mods: [.control], key: "p")
+        case .commandPalette: return Chord(mods: [.control, .shift], key: "p")
+        case .customCommandPalette: return Chord(mods: [.control, .shift], key: "o")
+        case .showAttention: return Chord(mods: [.control, .shift], key: "i")
+        default: return nil
+        }
+    }
+}
+
+extension ConfigPaths {
+    static func defaultNewSessionCwd() -> String {
+        FileManager.default.homeDirectoryForCurrentUser.path
+    }
+
+    static func starterGhosttyConfig() -> String {
+        """
+        # agterm-scoped ghostty config. This file is loaded after the bundled defaults.
+        # Put agterm-only terminal settings here.
+
+        """
+    }
+
+    static func starterRestoreDenylist() -> String {
+        """
+        # Commands that should not be automatically re-run by restore-running-command.
+        tmux
+        screen
+        zellij
+
+        """
+    }
+}
+
+extension WindowLibrary {
+    func geometry(forWindow _: UUID) -> WindowGeometry.Size? { nil }
+    func setGeometry(_: WindowGeometry.Size, forWindow _: UUID) {}
+}
+
+extension ShellEscape {
+    static func dropPayload(_ payload: String) -> String? {
+        if let paths = PasteDecoder.posixPaths(fromURIList: payload) {
+            return paths
+        }
+        return payload.isEmpty ? nil : payload
+    }
+}
+
+extension CommandRestore {
+    static func parseProcCmdline(_ data: Data) -> [String]? {
+        let parts = data.split(separator: 0).map { String(decoding: $0, as: UTF8.self) }
+        return parts.isEmpty ? nil : parts
+    }
+}
+
 struct NotificationDelivery: Sendable, Equatable {
     let title: String
     let body: String

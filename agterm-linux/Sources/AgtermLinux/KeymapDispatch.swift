@@ -26,7 +26,7 @@ extension AppController {
     /// Called at startup and from the `keymap.reload` control command.
     @discardableResult
     func reloadKeymapDiagnostics() -> Int {
-        let (km, diagnostics) = KeymapStore(configDirectory: configDirectory(), defaults: .linux).load()
+        let (km, diagnostics) = KeymapStore(configDirectory: configDirectory()).load()
         keymap = km
 
         // Reverse map: defaults for un-overridden actions first, then overrides (so an override REPLACES

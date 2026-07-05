@@ -204,7 +204,7 @@ private let onRevealAction: @convention(c) (OpaquePointer?, OpaquePointer?, gpoi
         gtk_window_present(WIN(ctl.windowPointer))
         ctl.selectSession(id)
         if let session = ctl.store.session(withID: id), session.hasSplit {
-            ctl.focusPane(toSplit: session.splitFocused, in: id)
+            ctl.focusPane(left: !session.splitFocused)
         }
         return
     }

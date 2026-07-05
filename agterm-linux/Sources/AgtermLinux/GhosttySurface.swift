@@ -224,7 +224,7 @@ final class GhosttySurface: TerminalSurface {
         guard let surface else { return }
         // Split into printable runs + Return keys via the shared segmenter (one typing policy for both
         // platforms); send each run as text and each line break as a real Return key press.
-        for segment in KeystrokeSegments.segment(text) {
+        for segment in KeystrokeSegments.split(text) {
             switch segment {
             case .text(let run):
                 run.withCString { ptr in
@@ -233,7 +233,7 @@ final class GhosttySurface: TerminalSurface {
                     ke.text = ptr
                     _ = ghostty_surface_key(surface, ke)
                 }
-            case .enter:
+            case .returnKey:
                 var ke = ghostty_input_key_s()
                 ke.keycode = 36   // Return (XKB)
                 ke.action = GHOSTTY_ACTION_PRESS

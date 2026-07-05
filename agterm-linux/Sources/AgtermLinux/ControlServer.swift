@@ -22,8 +22,8 @@ final class ControlServer: @unchecked Sendable {
     init() { path = Self.defaultSocketPath() }
 
     static func defaultSocketPath() -> String {
-        ControlResolve.defaultSocketPath(env: ProcessInfo.processInfo.environment,
-                                         appSupport: PersistenceStore.defaultDirectory.path)
+        ControlResolve.socketPath(stateDir: ProcessInfo.processInfo.environment["AGTERM_STATE_DIR"],
+                                  appSupport: PersistenceStore.defaultDirectory.path)
     }
 
     func start() {
@@ -88,10 +88,8 @@ final class ControlServer: @unchecked Sendable {
         let box = ResponseBox()
         runOnMain {
             MainActor.assumeIsolated {
-                Task { @MainActor in
-                    box.value = await Self.route(for: req).response(for: req)
-                    sem.signal()
-                }
+                box.value = Self.route(for: req).response(for: req)
+                sem.signal()
             }
         }
         sem.wait()
@@ -102,10 +100,10 @@ final class ControlServer: @unchecked Sendable {
         case controller(AppController?)
         case failure(String)
 
-        @MainActor func response(for req: ControlRequest) async -> ControlResponse {
+        @MainActor func response(for req: ControlRequest) -> ControlResponse {
             switch self {
             case .controller(let controller):
-                return await controller?.handleControl(req) ?? ControlResponse(ok: false, error: "no controller")
+                return controller?.handleControl(req) ?? ControlResponse(ok: false, error: "no controller")
             case .failure(let error):
                 return ControlResponse(ok: false, error: error)
             }
@@ -122,9 +120,9 @@ final class ControlServer: @unchecked Sendable {
             case .resolved(let resolved):
                 id = resolved
             case .ambiguous(let hits):
-                return .failure(ControlResolve.ambiguousMessage("window", target: window, matches: hits))
+                return .failure(ControlResolve.ambiguousMessage(noun: "window", target: window, hits: hits))
             case .notFound:
-                return .failure(ControlResolve.notFoundMessage("window", target: window))
+                return .failure(ControlResolve.notFoundMessage(noun: "window", target: window))
             }
             guard let controller = gWindows[id] else {
                 return .failure("window not open")
@@ -134,7 +132,8 @@ final class ControlServer: @unchecked Sendable {
         switch req.cmd {
         case .sessionClose, .sessionSelect, .sessionGo, .sessionRename, .sessionMove, .sessionType,
              .sessionStatus, .sessionFlag, .sessionSplit, .sessionScratch, .sessionFocus, .sessionCopy,
-             .sessionSearch, .sessionOverlayOpen, .sessionOverlayClose, .sessionOverlayResult, .notify,
+             .sessionSearch, .sessionOverlayOpen, .sessionOverlayClose, .sessionOverlayResult,
+             .sessionBackground, .sessionResize, .sessionText, .notify,
              .fontInc, .fontDec, .fontReset:
             return routeOwningSession(req.target) ?? .controller(gController)
         case .workspaceRename, .workspaceDelete, .workspaceSelect, .workspaceMove, .workspaceFocus:
@@ -143,7 +142,7 @@ final class ControlServer: @unchecked Sendable {
             return routeOwningWorkspace(req.args?.workspace) ?? .controller(gController)
         case .tree, .workspaceNew, .quick, .sidebar, .sidebarMode, .sidebarExpand, .sidebarCollapse,
              .windowNew, .windowList, .windowSelect, .windowClose, .windowRename, .windowDelete,
-             .windowResize, .windowMove, .keymapReload, .configReload, .themeSet, .themeList,
+             .windowResize, .windowMove, .windowZoom, .keymapReload, .configReload, .themeSet, .themeList,
              .restoreClear:
             return .controller(gController)
         }
@@ -163,9 +162,9 @@ final class ControlServer: @unchecked Sendable {
         case .resolved(let id):
             return .controller(controllers.first { $0.store.session(withID: id) != nil })
         case .ambiguous(let hits):
-            return .failure(ControlResolve.ambiguousMessage("session", target: target, matches: hits))
+            return .failure(ControlResolve.ambiguousMessage(noun: "session", target: target, hits: hits))
         case .notFound:
-            return .failure(ControlResolve.notFoundMessage("session", target: target))
+            return .failure(ControlResolve.notFoundMessage(noun: "session", target: target))
         }
     }
 
@@ -177,9 +176,9 @@ final class ControlServer: @unchecked Sendable {
         case .resolved(let id):
             return .controller(controllers.first { $0.store.workspaces.contains { $0.id == id } })
         case .ambiguous(let hits):
-            return .failure(ControlResolve.ambiguousMessage("workspace", target: target, matches: hits))
+            return .failure(ControlResolve.ambiguousMessage(noun: "workspace", target: target, hits: hits))
         case .notFound:
-            return .failure(ControlResolve.notFoundMessage("workspace", target: target))
+            return .failure(ControlResolve.notFoundMessage(noun: "workspace", target: target))
         }
     }
 
