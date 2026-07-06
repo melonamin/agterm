@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.8.1 - 2026-07-05
+
+### Bug Fixes
+
+- declare a microphone usage description so command-line tools running inside an agterm terminal can request microphone access #143 @umputun
+
 ## v0.8.0 - 2026-07-05
 
 ### New Features
