@@ -72,8 +72,40 @@ public enum WindowGeometry {
         return Point(x: clamp(requested.x, minX, maxX), y: clamp(requested.y, minY, maxY))
     }
 
+    /// Returns the display frame with the largest overlap with `frame`, or nil when `frame` overlaps no
+    /// current display. The app restore path uses nil as the disconnected-display signal and falls back to
+    /// the window/main screen instead of trusting stale coordinates.
+    public static func bestDisplayIndex(for frame: Rect, among displayFrames: [Rect]) -> Int? {
+        var bestIndex: Int?
+        var bestArea = 0.0
+        for (index, displayFrame) in displayFrames.enumerated() {
+            let area = intersectionArea(frame, displayFrame)
+            if area > bestArea {
+                bestArea = area
+                bestIndex = index
+            }
+        }
+        return bestArea > 0 ? bestIndex : nil
+    }
+
+    /// Constrains a saved window frame to a target display: shrink oversized frames to the display bounds,
+    /// grow undersized frames to the window minimum, then clamp the origin so a visible strip remains.
+    public static func constrain(frame: Rect, min minSize: Size, displayFrame: Rect) -> Rect {
+        let size = clampSize(frame.size, min: minSize, max: displayFrame.size)
+        let origin = clampOrigin(frame.origin, windowSize: size, displayFrame: displayFrame)
+        return Rect(origin: origin, size: size)
+    }
+
     /// Clamps `value` into `[lo, hi]`. If `lo > hi` (a degenerate range) the upper bound wins.
     private static func clamp(_ value: Double, _ lo: Double, _ hi: Double) -> Double {
         Swift.min(Swift.max(value, lo), hi)
+    }
+
+    private static func intersectionArea(_ lhs: Rect, _ rhs: Rect) -> Double {
+        let minX = Swift.max(lhs.origin.x, rhs.origin.x)
+        let maxX = Swift.min(lhs.origin.x + lhs.size.width, rhs.origin.x + rhs.size.width)
+        let minY = Swift.max(lhs.origin.y, rhs.origin.y)
+        let maxY = Swift.min(lhs.origin.y + lhs.size.height, rhs.origin.y + rhs.size.height)
+        return Swift.max(0, maxX - minX) * Swift.max(0, maxY - minY)
     }
 }
