@@ -151,6 +151,7 @@ struct WindowAccessor: NSViewRepresentable {
                         UserDefaults.standard.set(NSStringFromRect(window.frame), forKey: TitleProbeView.frameKey(windowID))
                     }
                     WindowRegistry.shared.unregister(windowID)
+                    store.finalizeAllPendingCloses()
                     // flush cwd drift since the last structural mutation before dropping the store —
                     // AppStore doesn't save on a live `cd`, so a closed-then-reopened window would
                     // otherwise load a stale snapshot. Skip it when the window is no longer open in the

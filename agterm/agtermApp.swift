@@ -14,6 +14,7 @@ struct agtermApp: App {
     @State var palette = PaletteController()
     @State private var sessionSwitcher: SessionSwitcher
     @State private var paneShortcuts: PaneShortcuts
+    @State private var undoCloseShortcut: UndoCloseShortcut
     @State var settingsModel: SettingsModel
     @State private var controlServer: ControlServer
     @State private var customCommandRunner: CustomCommandRunner
@@ -38,6 +39,7 @@ struct agtermApp: App {
         _controlServer = State(initialValue: controlServer)
         _sessionSwitcher = State(initialValue: SessionSwitcher(library: library))
         _paneShortcuts = State(initialValue: PaneShortcuts(library: library, actions: actions))
+        _undoCloseShortcut = State(initialValue: UndoCloseShortcut(actions: actions))
         // the custom-command runner needs the keymap (settings) and the bound socket path (control
         // server) for the `{AGT_SOCKET}` token; built last so both are available.
         _customCommandRunner = State(initialValue: CustomCommandRunner(
@@ -99,6 +101,9 @@ struct agtermApp: App {
                     sessionSwitcher.start()
                     // install the Ctrl-1/Ctrl-2 direct pane-focus key monitor (idempotent).
                     paneShortcuts.start()
+                    // install the undo-close shortcut (idempotent); it passes through text fields so
+                    // native edit undo still wins there.
+                    undoCloseShortcut.start()
                     // install the custom-command key monitor (idempotent); rebuilds its matcher from
                     // the keymap on `.agtermKeymapChanged`. Hand the delegate a reference so it can
                     // remove the monitor on terminate.

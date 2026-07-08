@@ -214,6 +214,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if settingsModel?.settings.restoreRunningCommand == true, let library {
             captureForegroundCommands(library: library)
         }
+        library?.finalizeAllPendingCloses()
         // flush every open window's store (per-window cwd changes since the last structural mutation
         // aren't auto-persisted) and the index. replaces the single-store save.
         library?.saveAllOpen()

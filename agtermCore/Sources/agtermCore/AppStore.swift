@@ -83,7 +83,17 @@ public final class AppStore {
     /// survives a relaunch.
     @ObservationIgnored public private(set) var sessionRecency = RecencyStack<UUID>()
 
+    /// The latest session/workspace close that can still be undone. The hidden sessions/workspaces live
+    /// in `pendingCloseRecords`; this observed summary is the host-free state the app target presents.
+    public var pendingCloseSummary: PendingCloseSummary?
+
+    @ObservationIgnored var pendingCloseRecords: [UUID: PendingCloseRecord] = [:]
+    @ObservationIgnored var pendingCloseOrder: [UUID] = []
+    @ObservationIgnored var pendingCloseTasks: [UUID: Task<Void, Never>] = [:]
+
     @ObservationIgnored private let persistence: PersistenceStore
+    @ObservationIgnored let recentClosedStore: RecentClosedStore?
+    @ObservationIgnored var recentClosedDidChange: (() -> Void)?
 
     /// Coalesces the high-frequency selection/font saves: a click-storm or a font ramp schedules one
     /// write ~0.3 s after the burst settles instead of hitting disk per event. `save()` cancels any
@@ -131,10 +141,14 @@ public final class AppStore {
     @ObservationIgnored var autoFollowSuppressionCount = 0
 
     public init(workspaces: [Workspace] = [], selectedSessionID: UUID? = nil,
-                persistence: PersistenceStore = PersistenceStore()) {
+                persistence: PersistenceStore = PersistenceStore(),
+                recentClosedStore: RecentClosedStore? = nil,
+                recentClosedDidChange: (() -> Void)? = nil) {
         self.workspaces = workspaces
         self.selectedSessionID = selectedSessionID
         self.persistence = persistence
+        self.recentClosedStore = recentClosedStore
+        self.recentClosedDidChange = recentClosedDidChange
     }
 
     /// The currently selected session, derived from `selectedSessionID`.
@@ -279,7 +293,7 @@ public final class AppStore {
     /// trip this — it stays the safety net only for the explicit cross-set cases. No-op when unfocused,
     /// when nothing is selected, or when the selection is inside the focused workspace. Persistence
     /// rides the caller's `selectSession` save.
-    private func autoUnfocusIfOutsideFocus(_ sessionID: UUID?) {
+    func autoUnfocusIfOutsideFocus(_ sessionID: UUID?) {
         guard let focusedWorkspaceID, let sessionID else { return }
         if workspace(forSession: sessionID)?.id != focusedWorkspaceID { self.focusedWorkspaceID = nil }
     }
@@ -309,8 +323,12 @@ public final class AppStore {
 
     /// Pushes the current selection to the front of the recency stack (the Ctrl-Tab order).
     /// No-op when nothing is selected.
-    private func recordRecency() {
+    func recordRecency() {
         if let selectedSessionID { sessionRecency.push(selectedSessionID) }
+    }
+
+    func removeFromRecency(_ id: UUID) {
+        sessionRecency.remove(id)
     }
 
     /// Sets a session's custom name. An empty (or whitespace-only) name clears
@@ -335,7 +353,10 @@ public final class AppStore {
     public func closeSession(_ sessionID: UUID) {
         guard let location = location(ofSession: sessionID) else { return }
         let wasActive = selectedSessionID == sessionID
+        let workspace = workspaces[location.workspaceIndex]
         let removed = workspaces[location.workspaceIndex].sessions.remove(at: location.sessionIndex)
+        recordRecentClosedSession(removed, workspaceID: workspace.id, workspaceName: workspace.name,
+                                  workspaceIndex: location.workspaceIndex, sessionIndex: location.sessionIndex)
         removed.surface?.teardown()
         removed.splitSurface?.teardown()
         removed.overlaySurface?.teardown()
@@ -362,8 +383,10 @@ public final class AppStore {
     /// no sessions remain.
     public func removeWorkspace(_ workspaceID: UUID) {
         guard canRemoveWorkspace, let index = workspaces.firstIndex(where: { $0.id == workspaceID }) else { return }
-        let removingActive = selectedSessionID.map { id in workspaces[index].sessions.contains { $0.id == id } } ?? false
-        for session in workspaces[index].sessions {
+        let workspace = workspaces[index]
+        let removingActive = selectedSessionID.map { id in workspace.sessions.contains { $0.id == id } } ?? false
+        recordRecentClosedWorkspace(workspace, selectedSessionID: removingActive ? selectedSessionID : nil)
+        for session in workspace.sessions {
             session.surface?.teardown()
             session.splitSurface?.teardown()
             session.overlaySurface?.teardown()
@@ -686,16 +709,7 @@ public final class AppStore {
     /// `@MainActor`; the resulting value is `Sendable` and safe to hand to a writer.
     public func snapshot() -> Snapshot {
         let workspaceSnapshots = workspaces.map { workspace in
-            let sessions = workspace.sessions.map { session in
-                SessionSnapshot(id: session.id, customName: session.customName, cwd: session.currentCwd ?? session.initialCwd,
-                                isSplit: session.isSplit, fontSize: session.fontSize,
-                                splitCwd: session.splitCwd ?? session.initialSplitCwd, splitRatio: session.splitRatio,
-                                flagged: session.flagged,
-                                foregroundCommand: session.foregroundCommand,
-                                splitForegroundCommand: session.splitForegroundCommand,
-                                initialCommand: session.initialCommand,
-                                backgroundWatermark: session.backgroundWatermark)
-            }
+            let sessions = workspace.sessions.map(sessionSnapshot)
             // only a collapsed workspace writes the flag; an expanded one omits it (nil) so an all-expanded
             // tree serializes identically to a legacy snapshot.
             return WorkspaceSnapshot(id: workspace.id, name: workspace.name, sessions: sessions,
@@ -716,23 +730,7 @@ public final class AppStore {
     /// at a session that no longer exists, it is cleared to keep selection valid.
     public func restore(from snapshot: Snapshot) {
         workspaces = snapshot.workspaces.map { workspaceSnapshot in
-            let sessions = workspaceSnapshot.sessions.map { sessionSnapshot -> Session in
-                let session = Session(id: sessionSnapshot.id, initialCwd: sessionSnapshot.cwd, customName: sessionSnapshot.customName)
-                session.isSplit = sessionSnapshot.isSplit ?? false
-                session.hasSplit = session.isSplit
-                session.fontSize = sessionSnapshot.fontSize
-                session.initialSplitCwd = sessionSnapshot.splitCwd
-                // clamp on restore (like sidebarWidth) so a corrupt snapshot can't feed an out-of-range
-                // fraction into NSSplitView.setPosition; nil stays nil (the even default).
-                session.splitRatio = sessionSnapshot.splitRatio.map { min(AppStore.splitRatioMax, max(AppStore.splitRatioMin, $0)) }
-                session.flagged = sessionSnapshot.flagged ?? false
-                session.foregroundCommand = sessionSnapshot.foregroundCommand
-                session.splitForegroundCommand = sessionSnapshot.splitForegroundCommand
-                session.initialCommand = sessionSnapshot.initialCommand
-                session.wasRestored = true
-                session.backgroundWatermark = sessionSnapshot.backgroundWatermark
-                return session
-            }
+            let sessions = workspaceSnapshot.sessions.map(session(from:))
             // absent/nil collapsed → expanded (back-compat with snapshots written before the field existed).
             return Workspace(id: workspaceSnapshot.id, name: workspaceSnapshot.name, sessions: sessions,
                              isExpanded: !(workspaceSnapshot.collapsed ?? false))
@@ -810,7 +808,7 @@ public final class AppStore {
         return nil
     }
 
-    private func location(ofSession sessionID: UUID) -> (workspaceIndex: Int, sessionIndex: Int)? {
+    func location(ofSession sessionID: UUID) -> (workspaceIndex: Int, sessionIndex: Int)? {
         for (wi, workspace) in workspaces.enumerated() {
             if let si = workspace.sessions.firstIndex(where: { $0.id == sessionID }) { return (wi, si) }
         }
@@ -820,7 +818,7 @@ public final class AppStore {
     /// Picks the next selection after removing the session at `location`. Prefers
     /// the session that shifted into the removed slot, then the previous one in
     /// that workspace, then the first session of any remaining workspace.
-    private func reselectionTarget(after location: (workspaceIndex: Int, sessionIndex: Int)) -> UUID? {
+    func reselectionTarget(after location: (workspaceIndex: Int, sessionIndex: Int)) -> UUID? {
         let sessions = workspaces[location.workspaceIndex].sessions
         if location.sessionIndex < sessions.count { return sessions[location.sessionIndex].id }
         if location.sessionIndex > 0 { return sessions[location.sessionIndex - 1].id }
@@ -829,4 +827,42 @@ public final class AppStore {
         }
         return nil
     }
+
+    func sessionSnapshot(_ session: Session) -> SessionSnapshot {
+        SessionSnapshot(id: session.id, customName: session.customName, cwd: session.currentCwd ?? session.initialCwd,
+                        isSplit: session.isSplit, fontSize: session.fontSize,
+                        splitCwd: session.splitCwd ?? session.initialSplitCwd, splitRatio: session.splitRatio,
+                        flagged: session.flagged,
+                        foregroundCommand: session.foregroundCommand,
+                        splitForegroundCommand: session.splitForegroundCommand,
+                        initialCommand: session.initialCommand,
+                        backgroundWatermark: session.backgroundWatermark)
+    }
+
+    func workspaceSnapshot(_ workspace: Workspace) -> WorkspaceSnapshot {
+        WorkspaceSnapshot(id: workspace.id, name: workspace.name, sessions: workspace.sessions.map(sessionSnapshot),
+                          collapsed: workspace.isExpanded ? nil : true)
+    }
+
+    func session(from snapshot: SessionSnapshot) -> Session {
+        let session = Session(id: snapshot.id, initialCwd: snapshot.cwd, customName: snapshot.customName)
+        session.isSplit = snapshot.isSplit ?? false
+        session.hasSplit = session.isSplit
+        session.fontSize = snapshot.fontSize
+        session.initialSplitCwd = snapshot.splitCwd
+        session.splitRatio = snapshot.splitRatio.map { min(AppStore.splitRatioMax, max(AppStore.splitRatioMin, $0)) }
+        session.flagged = snapshot.flagged ?? false
+        session.foregroundCommand = snapshot.foregroundCommand
+        session.splitForegroundCommand = snapshot.splitForegroundCommand
+        session.initialCommand = snapshot.initialCommand
+        session.wasRestored = true
+        session.backgroundWatermark = snapshot.backgroundWatermark
+        return session
+    }
+
+    func workspace(from snapshot: WorkspaceSnapshot) -> Workspace {
+        Workspace(id: snapshot.id, name: snapshot.name, sessions: snapshot.sessions.map(session(from:)),
+                  isExpanded: !(snapshot.collapsed ?? false))
+    }
+
 }

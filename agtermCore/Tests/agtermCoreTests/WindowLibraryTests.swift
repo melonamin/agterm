@@ -74,6 +74,143 @@ final class WindowLibraryTests {
         #expect(library.totalUnseenCount == 2)
     }
 
+    @Test func closingSessionRecordsAndReopensRecentItem() {
+        let library = WindowLibrary(directory: directory)
+        let store = try! #require(library.activeStore)
+        let originalWorkspace = store.addWorkspace(name: "project")
+        let first = try! #require(store.addSession(toWorkspace: originalWorkspace.id, cwd: "/first", name: "first"))
+        let session = try! #require(store.addSession(toWorkspace: originalWorkspace.id, cwd: "/project", name: "api"))
+        let last = try! #require(store.addSession(toWorkspace: originalWorkspace.id, cwd: "/last", name: "last"))
+        _ = store.addWorkspace(name: "other")
+
+        store.closeSession(session.id)
+
+        let recent = try! #require(library.recentClosedItems.first)
+        #expect(recent.kind == .session)
+        #expect(recent.title == "api")
+        #expect(recent.subtitle == originalWorkspace.name)
+        #expect(store.session(withID: session.id) == nil)
+
+        #expect(library.reopenRecentClosed(recent.id))
+        let restored = try! #require(store.session(withID: session.id))
+        #expect(restored.initialCwd == "/project")
+        #expect(restored.customName == "api")
+        let restoredWorkspace = try! #require(store.workspaces.first { $0.id == originalWorkspace.id })
+        #expect(restoredWorkspace.sessions.map(\.id) == [first.id, session.id, last.id])
+        #expect(store.selectedSessionID == session.id)
+        #expect(library.recentClosedItems.isEmpty)
+    }
+
+    @Test func reopeningRecentSessionRecreatesMissingOriginalWorkspace() {
+        let library = WindowLibrary(directory: directory)
+        let store = try! #require(library.activeStore)
+        let originalWorkspace = store.addWorkspace(name: "project")
+        let session = try! #require(store.addSession(toWorkspace: originalWorkspace.id, cwd: "/project", name: "api"))
+
+        store.closeSession(session.id)
+        let recent = try! #require(library.recentClosedItems.first)
+        store.removeWorkspace(originalWorkspace.id)
+
+        #expect(library.reopenRecentClosed(recent.id))
+        let restoredWorkspace = try! #require(store.workspaces.first { $0.id == originalWorkspace.id })
+        #expect(restoredWorkspace.name == "project")
+        #expect(restoredWorkspace.sessions.map(\.id) == [session.id])
+        #expect(store.selectedSessionID == session.id)
+    }
+
+    @Test func reopeningStaleRecentSessionSelectsExistingSessionInsteadOfDuplicatingID() {
+        let library = WindowLibrary(directory: directory)
+        let store = try! #require(library.activeStore)
+        let workspace = store.addWorkspace(name: "project")
+        let session = try! #require(store.addSession(toWorkspace: workspace.id, cwd: "/project", name: "api"))
+
+        store.closeSession(session.id)
+        let recent = try! #require(library.recentClosedItems.first)
+        #expect(store.restoreRecentClosed(recent))
+        #expect(store.restoreRecentClosed(recent))
+
+        let matching = store.workspaces.flatMap(\.sessions).filter { $0.id == session.id }
+        #expect(matching.count == 1)
+        #expect(store.selectedSessionID == session.id)
+    }
+
+    @Test func closingWorkspaceRecordsAndReopensRecentItem() {
+        let library = WindowLibrary(directory: directory)
+        let store = try! #require(library.activeStore)
+        let workspace = store.addWorkspace(name: "project")
+        let session = try! #require(store.addSession(toWorkspace: workspace.id, cwd: "/project", name: "api"))
+
+        store.removeWorkspace(workspace.id)
+
+        let recent = try! #require(library.recentClosedItems.first)
+        #expect(recent.kind == .workspace)
+        #expect(recent.title == "project")
+        #expect(recent.subtitle == "1 session")
+        #expect(store.workspaces.contains { $0.id == workspace.id } == false)
+
+        #expect(library.reopenRecentClosed(recent.id))
+        let restoredWorkspace = try! #require(store.workspaces.first { $0.id == workspace.id })
+        #expect(restoredWorkspace.name == "project")
+        #expect(restoredWorkspace.sessions.map(\.id) == [session.id])
+        #expect(store.selectedSessionID == session.id)
+        #expect(library.recentClosedItems.isEmpty)
+    }
+
+    @Test func reopeningStaleRecentWorkspaceSelectsExistingWorkspaceInsteadOfDuplicatingIDs() {
+        let library = WindowLibrary(directory: directory)
+        let store = try! #require(library.activeStore)
+        let workspace = store.addWorkspace(name: "project")
+        let session = try! #require(store.addSession(toWorkspace: workspace.id, cwd: "/project", name: "api"))
+
+        store.removeWorkspace(workspace.id)
+        let recent = try! #require(library.recentClosedItems.first)
+        #expect(store.restoreRecentClosed(recent))
+        #expect(store.restoreRecentClosed(recent))
+
+        let matchingWorkspaces = store.workspaces.filter { $0.id == workspace.id }
+        let matchingSessions = store.workspaces.flatMap(\.sessions).filter { $0.id == session.id }
+        #expect(matchingWorkspaces.count == 1)
+        #expect(matchingSessions.count == 1)
+        #expect(store.selectedSessionID == session.id)
+    }
+
+    @Test func reopeningRecentDuringGraceRestoresPendingSessionWithoutRebuildingSnapshot() {
+        let library = WindowLibrary(directory: directory)
+        let store = try! #require(library.activeStore)
+        let workspace = store.workspaces[0]
+        let session = try! #require(store.addSession(toWorkspace: workspace.id, cwd: "/grace", name: "grace"))
+        let surface = SpySurface()
+        session.surface = surface
+
+        #expect(store.softCloseSession(session.id, grace: 60))
+        let recent = try! #require(library.recentClosedItems.first)
+        #expect(library.reopenRecentClosed(recent.id))
+
+        let restored = try! #require(store.session(withID: session.id))
+        #expect(restored === session)
+        #expect(surface.teardownCount == 0)
+        #expect(library.recentClosedItems.isEmpty)
+    }
+
+    @Test func graceUndoRecordsRecentAndUndoRemovesIt() {
+        let library = WindowLibrary(directory: directory)
+        let store = try! #require(library.activeStore)
+        let workspace = store.workspaces[0]
+        let undone = try! #require(store.addSession(toWorkspace: workspace.id, cwd: "/undo", name: "undo"))
+        #expect(store.softCloseSession(undone.id, grace: 60))
+        #expect(library.recentClosedItems.map(\.title) == ["undo"])
+        #expect(store.undoPendingClose())
+        #expect(library.recentClosedItems.isEmpty)
+
+        let finalized = try! #require(store.addSession(toWorkspace: workspace.id, cwd: "/final", name: "final"))
+        #expect(store.softCloseSession(finalized.id, grace: 60))
+        store.finalizeAllPendingCloses()
+
+        let recent = try! #require(library.recentClosedItems.first)
+        #expect(recent.kind == .session)
+        #expect(recent.title == "final")
+    }
+
     @Test func defaultWindowNameCountsUp() {
         let library = WindowLibrary(directory: directory)
         #expect(library.defaultWindowName == "window 2")

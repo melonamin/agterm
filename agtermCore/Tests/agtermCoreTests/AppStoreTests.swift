@@ -382,6 +382,143 @@ struct AppStoreTests {
         #expect(split.teardownCount == 1)
     }
 
+    @Test func softCloseSessionHidesWithoutTearingDownAndUndoRestoresSameSession() throws {
+        let store = makeStore()
+        let ws = store.addWorkspace(name: "work")
+        let first = try #require(store.addSession(toWorkspace: ws.id, cwd: "/a", name: "alpha"))
+        let second = try #require(store.addSession(toWorkspace: ws.id, cwd: "/b", name: "beta"))
+        let surface = SpySurface()
+        first.surface = surface
+        store.selectSession(first.id)
+
+        #expect(store.softCloseSession(first.id, grace: 60))
+
+        #expect(store.workspaces[0].sessions.map(\.id) == [second.id])
+        #expect(store.selectedSessionID == second.id)
+        #expect(surface.teardownCount == 0)
+        let summary = try #require(store.pendingCloseSummary)
+        #expect(summary.kind == .session)
+        #expect(summary.title == "alpha")
+
+        #expect(store.undoPendingClose(summary.id))
+
+        #expect(store.workspaces[0].sessions.map(\.id) == [first.id, second.id])
+        #expect(store.selectedSessionID == first.id)
+        #expect(store.workspaces[0].sessions[0] === first)
+        #expect(surface.teardownCount == 0)
+        #expect(store.pendingCloseSummary == nil)
+    }
+
+    @Test func finalizedSoftCloseSessionTearsDownAndCannotUndo() throws {
+        let store = makeStore()
+        let ws = store.addWorkspace(name: "work")
+        let session = try #require(store.addSession(toWorkspace: ws.id, cwd: "/a"))
+        let surface = SpySurface()
+        session.surface = surface
+
+        #expect(store.softCloseSession(session.id, grace: 60))
+        let summary = try #require(store.pendingCloseSummary)
+        store.finalizePendingClose(summary.id)
+
+        #expect(surface.teardownCount == 1)
+        #expect(!store.undoPendingClose(summary.id))
+        #expect(store.pendingCloseSummary == nil)
+    }
+
+    @Test func undoingLatestPendingClosePromotesPreviousPendingClose() throws {
+        let store = makeStore()
+        let ws = store.addWorkspace(name: "work")
+        let first = try #require(store.addSession(toWorkspace: ws.id, cwd: "/a", name: "alpha"))
+        let second = try #require(store.addSession(toWorkspace: ws.id, cwd: "/b", name: "beta"))
+        let third = try #require(store.addSession(toWorkspace: ws.id, cwd: "/c", name: "gamma"))
+
+        #expect(store.softCloseSession(first.id, grace: 60))
+        #expect(store.pendingCloseSummary?.title == "alpha")
+        #expect(store.softCloseSession(second.id, grace: 60))
+        #expect(store.pendingCloseSummary?.title == "beta")
+
+        #expect(store.undoPendingClose())
+        #expect(store.workspaces[0].sessions.map(\.id) == [second.id, third.id])
+        #expect(store.pendingCloseSummary?.title == "alpha")
+
+        #expect(store.undoPendingClose())
+        #expect(store.workspaces[0].sessions.map(\.id) == [first.id, second.id, third.id])
+        #expect(store.pendingCloseSummary == nil)
+    }
+
+    @Test func undoBeforeScheduledFinalizeMakesTimerFireNoOp() async throws {
+        let store = makeStore()
+        let ws = store.addWorkspace(name: "work")
+        let session = try #require(store.addSession(toWorkspace: ws.id, cwd: "/a"))
+        let surface = SpySurface()
+        session.surface = surface
+
+        #expect(store.softCloseSession(session.id, grace: 0.01))
+        let summary = try #require(store.pendingCloseSummary)
+        #expect(store.undoPendingClose(summary.id))
+        try await Task.sleep(nanoseconds: 30_000_000)
+
+        #expect(store.session(withID: session.id) === session)
+        #expect(surface.teardownCount == 0)
+        #expect(store.pendingCloseSummary == nil)
+    }
+
+    @Test func scheduledFinalizeTearsDownAfterGrace() async throws {
+        let store = makeStore()
+        let ws = store.addWorkspace(name: "work")
+        let session = try #require(store.addSession(toWorkspace: ws.id, cwd: "/a"))
+        let surface = SpySurface()
+        session.surface = surface
+
+        #expect(store.softCloseSession(session.id, grace: 0.01))
+        try await Task.sleep(nanoseconds: 30_000_000)
+
+        #expect(store.session(withID: session.id) == nil)
+        #expect(surface.teardownCount == 1)
+        #expect(store.pendingCloseSummary == nil)
+    }
+
+    @Test func softRemoveWorkspaceHidesWithoutTearingDownAndUndoRestores() throws {
+        let store = makeStore()
+        let keep = store.addWorkspace(name: "keep")
+        let doomed = store.addWorkspace(name: "doomed")
+        let session = try #require(store.addSession(toWorkspace: doomed.id, cwd: "/a"))
+        let surface = SpySurface()
+        session.surface = surface
+        _ = store.addSession(toWorkspace: keep.id, cwd: "/b")
+
+        #expect(store.softRemoveWorkspace(doomed.id, grace: 60))
+
+        #expect(store.workspaces.map(\.id) == [keep.id])
+        #expect(surface.teardownCount == 0)
+        let summary = try #require(store.pendingCloseSummary)
+        #expect(summary.kind == .workspace)
+        #expect(summary.title == "doomed")
+
+        #expect(store.undoPendingClose(summary.id))
+
+        #expect(store.workspaces.map(\.id) == [keep.id, doomed.id])
+        #expect(store.workspaces[1].sessions[0] === session)
+        #expect(store.selectedSessionID == session.id)
+        #expect(surface.teardownCount == 0)
+    }
+
+    @Test func finalizedSoftRemoveWorkspaceTearsDownSessions() throws {
+        let store = makeStore()
+        _ = store.addWorkspace(name: "keep")
+        let doomed = store.addWorkspace(name: "doomed")
+        let session = try #require(store.addSession(toWorkspace: doomed.id, cwd: "/a"))
+        let surface = SpySurface()
+        session.surface = surface
+
+        #expect(store.softRemoveWorkspace(doomed.id, grace: 60))
+        let summary = try #require(store.pendingCloseSummary)
+        store.finalizePendingClose(summary.id)
+
+        #expect(surface.teardownCount == 1)
+        #expect(store.workspaces.map(\.name) == ["keep"])
+    }
+
     @Test func removeWorkspaceTearsDownSessionsAndPrunesRecency() {
         let store = makeStore()
         let keep = store.addWorkspace(name: "keep")

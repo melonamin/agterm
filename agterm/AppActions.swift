@@ -1,5 +1,6 @@
 import agtermCore
 import AppKit
+import SwiftUI
 
 /// The user-facing actions shared by the toolbar / bottom-bar buttons (`ContentView`) and the
 /// menu bar (`agtermApp`'s `.commands`), so the two never drift. `@MainActor`; holds the store, and
@@ -146,7 +147,7 @@ final class AppActions {
         // ⌘W was handled either way — on cancel we return true so the File menu doesn't fall back to
         // closing the whole window.
         guard confirmCloseSession(session) else { return true }
-        store.closeSession(session.id)
+        closeSessionAfterConfirmation(session.id, in: store)
         focusActiveSession()
         return true
     }
@@ -160,7 +161,31 @@ final class AppActions {
     func closeSession(_ id: UUID, in store: AppStore) {
         guard let session = store.session(withID: id) else { return }
         guard confirmCloseSession(session) else { return }
-        store.closeSession(id)
+        closeSessionAfterConfirmation(id, in: store)
+    }
+
+    /// Undo the latest grace-period session/workspace close in the frontmost window.
+    func undoClose() {
+        guard let store else { return }
+        let restored = withAnimation(.easeInOut(duration: 0.16)) {
+            store.undoPendingClose()
+        }
+        guard restored else { return }
+        focusActiveSession()
+    }
+
+    func openRecentClosed(_ id: RecentClosedItem.ID) {
+        guard library.reopenRecentClosed(id) else { return }
+        focusActiveSession()
+    }
+
+    func openLatestRecentClosed() {
+        guard library.reopenLatestRecentClosed() else { return }
+        focusActiveSession()
+    }
+
+    func clearRecentClosedItems() {
+        library.clearRecentClosedItems()
     }
 
     /// A native warning confirm before closing `session`, gated by `AppSettings.confirmCloseSession`.
@@ -171,10 +196,26 @@ final class AppActions {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Close “\(session.displayName)”?"
-        alert.informativeText = "The session and everything running in it will be closed."
+        alert.informativeText = closeGraceUndoEnabled
+            ? "The session will close after a short undo window."
+            : "The session will close immediately and can be reopened from File > Open Recent."
         alert.addButton(withTitle: "Close")
         alert.addButton(withTitle: "Cancel")
         return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    private var closeGraceUndoEnabled: Bool {
+        settingsModel?.settings.closeGraceUndoEnabled ?? true
+    }
+
+    private func closeSessionAfterConfirmation(_ id: UUID, in store: AppStore) {
+        if closeGraceUndoEnabled {
+            withAnimation(.easeInOut(duration: 0.16)) {
+                _ = store.softCloseSession(id)
+            }
+        } else {
+            store.closeSession(id)
+        }
     }
 
     /// Clear the active session's agent-status indicator back to idle (the same effect as `agtermctl
@@ -278,7 +319,13 @@ final class AppActions {
         guard let store, store.canRemoveWorkspace,
               let workspace = store.workspaces.first(where: { $0.id == workspaceID }) else { return }
         if !workspace.sessions.isEmpty, !confirmDeleteWorkspace(workspace) { return }
-        store.removeWorkspace(workspaceID)
+        if closeGraceUndoEnabled {
+            withAnimation(.easeInOut(duration: 0.16)) {
+                _ = store.softRemoveWorkspace(workspaceID)
+            }
+        } else {
+            store.removeWorkspace(workspaceID)
+        }
     }
 
     /// Delete the current workspace (the one new sessions land in) — used by the menu bar and the
@@ -299,9 +346,12 @@ final class AppActions {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Delete “\(name)”?"
+        let suffix = closeGraceUndoEnabled
+            ? "after a short undo window."
+            : "immediately. You can reopen it from File > Open Recent."
         alert.informativeText = sessionCount == 1
-            ? "This closes its session and ends the running shell."
-            : "This closes \(sessionCount) sessions and ends their running shells."
+            ? "This closes its session \(suffix)"
+            : "This closes \(sessionCount) sessions \(suffix)"
         alert.addButton(withTitle: "Delete")
         alert.addButton(withTitle: "Cancel")
         return alert.runModal() == .alertFirstButtonReturn

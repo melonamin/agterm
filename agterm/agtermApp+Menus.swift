@@ -50,6 +50,11 @@ extension agtermApp {
         return KeyboardShortcut(key, modifiers: modifiers)
     }
 
+    private func recentTitle(_ item: RecentClosedItem) -> String {
+        guard let subtitle = item.subtitle, !subtitle.isEmpty else { return item.title }
+        return "\(item.title) - \(subtitle)"
+    }
+
     @CommandsBuilder
     var appCommands: some Commands {
             // App menu: replace the default "About Agterm" with one that opens the standard
@@ -103,6 +108,34 @@ extension agtermApp {
                     .keyboardShortcut(shortcut(for: .newSession))
                 Button("Open Directory…") { actions.openDirectory() }
                     .keyboardShortcut(shortcut(for: .openDirectory))
+                Menu("Open Recent") {
+                    let recentSessions = library.recentClosedItems.filter { $0.kind == .session }
+                    let recentWorkspaces = library.recentClosedItems.filter { $0.kind == .workspace }
+                    if recentSessions.isEmpty && recentWorkspaces.isEmpty {
+                        Text("No Recent Items")
+                    } else {
+                        if !recentSessions.isEmpty {
+                            Section("Sessions") {
+                                ForEach(recentSessions) { item in
+                                    Button(recentTitle(item)) { actions.openRecentClosed(item.id) }
+                                }
+                            }
+                        }
+                        if !recentWorkspaces.isEmpty {
+                            Section("Workspaces") {
+                                ForEach(recentWorkspaces) { item in
+                                    Button(recentTitle(item)) { actions.openRecentClosed(item.id) }
+                                }
+                            }
+                        }
+                        Divider()
+                        Button("Clear Menu") { actions.clearRecentClosedItems() }
+                    }
+                }
+                .disabled(library.recentClosedItems.isEmpty)
+                Button("Reopen Last Closed Item") { actions.openLatestRecentClosed() }
+                    .keyboardShortcut(shortcut(for: .reopenRecent))
+                    .disabled(library.recentClosedItems.isEmpty)
                 Button("Rename Session") { actions.renameActiveSession() }
                     .keyboardShortcut(shortcut(for: .renameSession))
                     .disabled(library.activeStore?.activeSession == nil)
@@ -112,6 +145,8 @@ extension agtermApp {
                     if !actions.closeActiveSession() { NSApp.keyWindow?.performClose(nil) }
                 }
                 .keyboardShortcut(shortcut(for: .closeSession))
+                Button("Reopen Closed Item") { actions.undoClose() }
+                    .disabled(library.activeStore?.pendingCloseSummary == nil)
                 Button("Clear Status") { actions.clearActiveSessionStatus() }
                     .keyboardShortcut(shortcut(for: .clearStatus))
                     .disabled(library.activeStore?.activeSession == nil)

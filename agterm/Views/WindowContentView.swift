@@ -165,6 +165,8 @@ struct WindowContentView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         }
         .safeAreaInset(edge: .bottom) { bottomBar }
+        .overlay(alignment: .bottom) { pendingCloseToast.padding(.horizontal, 8).padding(.bottom, 34) }
+        .animation(.easeInOut(duration: 0.16), value: store.pendingCloseSummary?.id)
         // the lighter/darker sidebar tint: a wash behind the transparent outline + bottom bar, so the
         // whole column reads as one surface a touch darker/lighter than the terminal. Behind the column
         // content (so it never tints row text) and over the window background (so it composes with
@@ -846,6 +848,48 @@ struct WindowContentView: View {
         .foregroundStyle(chromeText)
         // no explicit background: the sidebar is transparent (the window's terminal color shows
         // through), so a `.bar` material here would paint a mismatched darker strip.
+    }
+
+    @ViewBuilder private var pendingCloseToast: some View {
+        if let summary = store.pendingCloseSummary {
+            HStack(spacing: 8) {
+                Image(systemName: summary.kind == .workspace ? "rectangle.stack" : "terminal")
+                    .imageScale(.small)
+                Text("Closed \(summary.title)")
+                    .font(.caption)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 4)
+                Button {
+                    let restored = withAnimation(.easeInOut(duration: 0.16)) {
+                        store.undoPendingClose(summary.id)
+                    }
+                    if restored {
+                        actions.focusActiveSession()
+                    }
+                } label: {
+                    Text("Reopen")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(Color.white.opacity(0.16), in: RoundedRectangle(cornerRadius: 5))
+                }
+                .buttonStyle(.borderless)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .foregroundStyle(.white)
+            .background(Color.black.opacity(0.86), in: RoundedRectangle(cornerRadius: 8))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color.white.opacity(0.16), lineWidth: 1)
+            }
+            .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
+            .frame(maxWidth: 300)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+            .accessibilityIdentifier("pending-close-toast")
+        }
     }
 
 }

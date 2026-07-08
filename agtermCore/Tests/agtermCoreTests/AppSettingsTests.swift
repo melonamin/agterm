@@ -17,6 +17,14 @@ struct AppSettingsTests {
         #expect(decoded.fontSize == 16)
         #expect(decoded.fontFamily == nil)
         #expect(decoded.theme == nil)
+        #expect(decoded.closeGraceUndoEnabled == nil)
+    }
+
+    @Test func closeGraceUndoSettingRoundTripsAndDefaultsToNil() throws {
+        let disabled = AppSettings(closeGraceUndoEnabled: false)
+        let decoded = try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(disabled))
+        #expect(decoded.closeGraceUndoEnabled == false)
+        #expect(AppSettings().closeGraceUndoEnabled == nil)
     }
 
     @Test func emptySettingsEmitOnlyAlwaysOnDefaults() {

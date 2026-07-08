@@ -9,6 +9,8 @@ public struct PaletteContext: Sendable, Equatable {
     public let activeSessionFlagged: Bool
     public let hasFocusedWorkspace: Bool
     public let activeSessionHasSplit: Bool
+    public let hasPendingClose: Bool
+    public let hasRecentClosed: Bool
 
     public init(canRemoveWorkspace: Bool = false,
                 hasFlaggedSessions: Bool = false,
@@ -16,7 +18,9 @@ public struct PaletteContext: Sendable, Equatable {
                 sidebarShowsFlaggedOnly: Bool = false,
                 activeSessionFlagged: Bool = false,
                 hasFocusedWorkspace: Bool = false,
-                activeSessionHasSplit: Bool = false) {
+                activeSessionHasSplit: Bool = false,
+                hasPendingClose: Bool = false,
+                hasRecentClosed: Bool = false) {
         self.canRemoveWorkspace = canRemoveWorkspace
         self.hasFlaggedSessions = hasFlaggedSessions
         self.sidebarShowsWorkspaceTree = sidebarShowsWorkspaceTree
@@ -24,13 +28,15 @@ public struct PaletteContext: Sendable, Equatable {
         self.activeSessionFlagged = activeSessionFlagged
         self.hasFocusedWorkspace = hasFocusedWorkspace
         self.activeSessionHasSplit = activeSessionHasSplit
+        self.hasPendingClose = hasPendingClose
+        self.hasRecentClosed = hasRecentClosed
     }
 }
 
 /// Static action-palette rows, in the same order the macOS palette presents them before dynamic rows.
 public enum PaletteCommand: String, CaseIterable, Sendable {
     case newSession, newWorkspace, openDirectory
-    case renameSession, renameWorkspace, closeSession, clearStatus
+    case renameSession, renameWorkspace, closeSession, reopenRecent, undoClose, clearStatus
     case previousSession, nextSession, previousAttentionSession, nextAttentionSession
     case firstSession, lastSession, showAttention
     case toggleSplit, toggleScratch, toggleSidebar, toggleFlag, focusWorkspace
@@ -54,6 +60,10 @@ public enum PaletteCommand: String, CaseIterable, Sendable {
             return context.sidebarShowsWorkspaceTree
         case .focusLeftPane, .focusRightPane:
             return context.activeSessionHasSplit
+        case .undoClose:
+            return context.hasPendingClose
+        case .reopenRecent:
+            return context.hasRecentClosed
         default:
             return true
         }
@@ -71,6 +81,8 @@ public enum PaletteCommand: String, CaseIterable, Sendable {
         case .renameSession: return "Rename Session"
         case .renameWorkspace: return "Rename Workspace"
         case .closeSession: return "Close Session"
+        case .reopenRecent: return "Reopen Last Closed Item"
+        case .undoClose: return "Reopen Closed Item"
         case .clearStatus: return "Clear Status"
         case .previousSession: return "Previous Session"
         case .nextSession: return "Next Session"
@@ -114,6 +126,8 @@ public enum PaletteCommand: String, CaseIterable, Sendable {
         case .renameSession: return .renameSession
         case .renameWorkspace: return .renameWorkspace
         case .closeSession: return .closeSession
+        case .reopenRecent: return .reopenRecent
+        case .undoClose: return .undoClose
         case .clearStatus: return .clearStatus
         case .previousSession: return .previousSession
         case .nextSession: return .nextSession

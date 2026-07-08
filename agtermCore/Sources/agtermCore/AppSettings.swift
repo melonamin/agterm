@@ -171,6 +171,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
     /// app-level behavior flag read on demand by `AppActions`, NOT a ghostty key — it never appears in
     /// `ghosttyConfigLines()`; the control channel's `session.close` closes without a prompt.
     public var confirmCloseSession: Bool?
+    /// Whether GUI closes keep a short undo grace period before final teardown. nil means the default
+    /// (on). When off, GUI closes are immediate but still enter File > Open Recent.
+    public var closeGraceUndoEnabled: Bool?
     /// The user-idle timeout that auto-follows the window's selection to the oldest blocked session, as an
     /// `AutoFollowAttention` raw value; nil means the default (`off` — disabled). An app-level per-window
     /// behavior value driving `AppStore`'s idle controller, NOT a ghostty key — it never appears in
@@ -192,7 +195,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
                 inheritGlobalGhosttyConfig: Bool? = nil, attentionButtonEnabled: Bool? = nil,
                 blockedStatusSoundName: String? = nil, rightClickPaste: Bool? = nil,
                 newSessionDirectory: String? = nil, newSessionCustomDirectory: String? = nil,
-                confirmCloseSession: Bool? = nil, autoFollowAttention: String? = nil,
+                confirmCloseSession: Bool? = nil, closeGraceUndoEnabled: Bool? = nil,
+                autoFollowAttention: String? = nil,
                 autoFollowStayOnActive: Bool? = nil) {
         self.fontFamily = fontFamily
         self.fontSize = fontSize
@@ -219,6 +223,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.newSessionDirectory = newSessionDirectory
         self.newSessionCustomDirectory = newSessionCustomDirectory
         self.confirmCloseSession = confirmCloseSession
+        self.closeGraceUndoEnabled = closeGraceUndoEnabled
         self.autoFollowAttention = autoFollowAttention
         self.autoFollowStayOnActive = autoFollowStayOnActive
     }

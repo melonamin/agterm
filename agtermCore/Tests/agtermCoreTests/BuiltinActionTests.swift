@@ -23,8 +23,10 @@ struct BuiltinActionTests {
         #expect(BuiltinAction.toggleFlag.rawValue == "toggle_flag")
         #expect(BuiltinAction.focusWorkspace.rawValue == "focus_workspace")
         #expect(BuiltinAction.showAttention.rawValue == "show_attention")
+        #expect(BuiltinAction.reopenRecent.rawValue == "reopen_recent")
+        #expect(BuiltinAction.undoClose.rawValue == "undo_close")
         #expect(BuiltinAction.toggleFullscreen.rawValue == "toggle_fullscreen")
-        #expect(BuiltinAction.allCases.count == 36)
+        #expect(BuiltinAction.allCases.count == 38)
     }
 
     @Test func rejectsUnknownName() {
@@ -63,6 +65,8 @@ struct BuiltinActionTests {
             .openDirectory: Chord(mods: [.command], key: "o"),
             .renameSession: nil,
             .closeSession: Chord(mods: [.command], key: "w"),
+            .reopenRecent: Chord(mods: [.command, .shift], key: "t"),
+            .undoClose: Chord(mods: [.command], key: "z"),
             .clearStatus: nil,
             .increaseFontSize: Chord(mods: [.command], key: "+"),
             .decreaseFontSize: Chord(mods: [.command], key: "-"),

@@ -28,7 +28,9 @@ extension AppActions {
             sidebarShowsFlaggedOnly: activeStore?.sidebarMode == .flagged,
             activeSessionFlagged: activeStore?.activeSession?.flagged == true,
             hasFocusedWorkspace: activeStore?.focusedWorkspaceID != nil,
-            activeSessionHasSplit: activeStore?.activeSession?.hasSplit == true
+            activeSessionHasSplit: activeStore?.activeSession?.hasSplit == true,
+            hasPendingClose: activeStore?.pendingCloseSummary != nil,
+            hasRecentClosed: !library.recentClosedItems.isEmpty
         )
     }
 
@@ -47,6 +49,8 @@ extension AppActions {
         case .renameSession: renameActiveSession()
         case .renameWorkspace: renameActiveWorkspace()
         case .closeSession: closeActiveSession()
+        case .reopenRecent: openLatestRecentClosed()
+        case .undoClose: undoClose()
         case .clearStatus: clearActiveSessionStatus()
         case .previousSession: selectPreviousSession()
         case .nextSession: selectNextSession()

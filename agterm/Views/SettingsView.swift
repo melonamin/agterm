@@ -114,6 +114,8 @@ private struct GeneralSettingsView: View {
                     .accessibilityIdentifier("settings-restore-running-command")
                 Toggle("Confirm before closing a session", isOn: confirmCloseSession)
                     .accessibilityIdentifier("settings-confirm-close-session")
+                Toggle("Allow undo after closing sessions and workspaces", isOn: closeGraceUndoEnabled)
+                    .accessibilityIdentifier("settings-close-grace-undo")
             }
 
             Section("Ghostty Config") {
@@ -138,6 +140,12 @@ private struct GeneralSettingsView: View {
     private var confirmCloseSession: Binding<Bool> {
         Binding(get: { model.settings.confirmCloseSession ?? false },
                 set: { model.setConfirmCloseSession($0 ? true : nil) })
+    }
+
+    /// nil (the default) reads as ON; turning it off stores false and makes GUI closes immediate.
+    private var closeGraceUndoEnabled: Binding<Bool> {
+        Binding(get: { model.settings.closeGraceUndoEnabled ?? true },
+                set: { model.setCloseGraceUndoEnabled($0 ? nil : false) })
     }
 
     /// 1:1 with the toggle; nil (the default) reads as OFF, so on → true / off → nil keeps settings.json
