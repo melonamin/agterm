@@ -23,6 +23,11 @@ extension WorkspaceSidebar.Coordinator {
         case .workspace:
             pbItem.setString(node.id.uuidString, forType: workspacePasteboardType)
         }
+        if let text = publicDragText(for: node) {
+            pbItem.setString(text, forType: .string)
+            pbItem.setString(text, forType: plainTextPasteboardType)
+            pbItem.setString(text, forType: publicTextPasteboardType)
+        }
         return pbItem
     }
 
@@ -31,29 +36,68 @@ extension WorkspaceSidebar.Coordinator {
                      proposedItem item: Any?,
                      proposedChildIndex index: Int) -> NSDragOperation {
         if draggedWorkspaceID(from: info) != nil {
+            cancelSpringLoadedExpansion()
             guard let move = resolveWorkspaceMove(from: info, in: outlineView) else { return [] }
             // workspace reorder lives at the top level: highlight a between-rows slot under the root.
             outlineView.setDropItem(nil, dropChildIndex: move.dropChildIndex)
             return .move
         }
-        guard let move = resolveSessionMove(from: info, item: item, childIndex: index) else { return [] }
-        // redraw the drop highlight on the target workspace row at the resolved insert slot.
-        outlineView.setDropItem(workspaceNode(forID: move.workspace), dropChildIndex: move.dropChildIndex)
-        return .move
+        if draggedSessionID(from: info) != nil {
+            guard let move = resolveSessionMove(from: info, item: item, childIndex: index) else {
+                cancelSpringLoadedExpansion()
+                return []
+            }
+            // redraw the drop highlight on the target workspace row at the resolved insert slot.
+            outlineView.setDropItem(workspaceNode(forID: move.workspace), dropChildIndex: move.dropChildIndex)
+            scheduleSpringLoadedExpansion(of: move.workspace, in: outlineView)
+            return .move
+        }
+        guard let drop = resolveDirectoryDrop(from: info, item: item) else {
+            cancelSpringLoadedExpansion()
+            return []
+        }
+        outlineView.setDropItem(workspaceNode(forID: drop.workspaceID), dropChildIndex: SidebarDrop.onItemIndex)
+        scheduleSpringLoadedExpansion(of: drop.workspaceID, in: outlineView)
+        return .copy
     }
 
     func outlineView(_ outlineView: NSOutlineView,
                      acceptDrop info: NSDraggingInfo,
                      item: Any?,
                      childIndex index: Int) -> Bool {
+        cancelSpringLoadedExpansion()
         if draggedWorkspaceID(from: info) != nil {
             guard let move = resolveWorkspaceMove(from: info, in: outlineView) else { return false }
             store.moveWorkspace(move.workspaceID, at: move.destination)
             return true
         }
-        guard let move = resolveSessionMove(from: info, item: item, childIndex: index) else { return false }
-        store.moveSessions(move.sessionIDs, toWorkspace: move.workspace, at: move.destination)
+        if draggedSessionID(from: info) != nil {
+            guard let move = resolveSessionMove(from: info, item: item, childIndex: index) else { return false }
+            store.moveSessions(move.sessionIDs, toWorkspace: move.workspace, at: move.destination)
+            return true
+        }
+        guard let drop = resolveDirectoryDrop(from: info, item: item) else { return false }
+        var created = false
+        for url in drop.urls {
+            created = store.addSession(toWorkspace: drop.workspaceID, cwd: url.path) != nil || created
+        }
+        guard created else { return false }
+        store.noteUserActivity()
+        actions.focusActiveSession()
         return true
+    }
+
+    func outlineView(_ outlineView: NSOutlineView,
+                     draggingSession session: NSDraggingSession,
+                     endedAt screenPoint: NSPoint,
+                     operation: NSDragOperation) {
+        cancelSpringLoadedExpansion()
+    }
+
+    /// A Finder folder drop resolved to the workspace that should receive the new session(s).
+    private struct DirectoryDrop {
+        let urls: [URL]
+        let workspaceID: UUID
     }
 
     /// The resolved session drop. `dropChildIndex` is the PRE-removal slot to highlight; `destination`
@@ -63,6 +107,19 @@ extension WorkspaceSidebar.Coordinator {
         let workspace: UUID
         let dropChildIndex: Int
         let destination: Int
+    }
+
+    private func publicDragText(for node: SidebarNode) -> String? {
+        let text: String?
+        switch node.kind {
+        case .session:
+            guard let session = store.session(withID: node.id) else { return nil }
+            text = session.focusedCwd.isEmpty ? session.displayName : session.focusedCwd
+        case .workspace:
+            text = store.workspaces.first(where: { $0.id == node.id })?.name
+        }
+        let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     /// Resolves a proposed session drop into the move it would perform, or nil when the drop is
@@ -93,6 +150,65 @@ extension WorkspaceSidebar.Coordinator {
         else { return nil }
         return SessionMove(sessionIDs: sessionIDs, workspace: move.workspace,
                            dropChildIndex: move.dropChildIndex, destination: move.destination)
+    }
+
+    /// Resolves a Finder drop to existing directory URLs and a destination workspace. Dropping on a
+    /// workspace row adds there; dropping on a session row adds to that session's workspace; dropping into
+    /// empty sidebar space uses the current workspace, matching other "new session" entry points.
+    private func resolveDirectoryDrop(from info: NSDraggingInfo, item: Any?) -> DirectoryDrop? {
+        let urls = directoryURLs(from: info)
+        guard !urls.isEmpty, let workspaceID = targetWorkspaceID(for: item) else { return nil }
+        return DirectoryDrop(urls: urls, workspaceID: workspaceID)
+    }
+
+    private func targetWorkspaceID(for item: Any?) -> UUID? {
+        guard let node = item as? SidebarNode else { return store.currentWorkspaceID }
+        switch node.kind {
+        case .workspace:
+            return node.id
+        case .session:
+            return store.workspace(forSession: node.id)?.id
+        }
+    }
+
+    /// Reads only real directories from a Finder file-url drag. Plain files are rejected here so the
+    /// terminal keeps owning "drop a path as escaped text" while the sidebar owns "drop a folder to open it".
+    private func directoryURLs(from info: NSDraggingInfo) -> [URL] {
+        let options: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
+        let urls = info.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: options) as? [URL]
+        return urls?.filter { url in
+            guard url.isFileURL else { return false }
+            var isDirectory: ObjCBool = false
+            return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) && isDirectory.boolValue
+        } ?? []
+    }
+
+    private func scheduleSpringLoadedExpansion(of workspaceID: UUID, in outlineView: NSOutlineView) {
+        guard store.sidebarMode == .tree, let node = workspaceNode(forID: workspaceID),
+              !outlineView.isItemExpanded(node)
+        else {
+            cancelSpringLoadedExpansion()
+            return
+        }
+        if pendingSpringLoadedExpansion?.workspaceID == workspaceID { return }
+        cancelSpringLoadedExpansion()
+        let workItem = DispatchWorkItem { [weak self, weak outlineView] in
+            guard let self, let outlineView, let node = self.workspaceNode(forID: workspaceID),
+                  !outlineView.isItemExpanded(node) else { return }
+            self.suppressExpansionPersist = true
+            outlineView.expandItem(node)
+            self.suppressExpansionPersist = false
+            if self.pendingSpringLoadedExpansion?.workspaceID == workspaceID {
+                self.pendingSpringLoadedExpansion = nil
+            }
+        }
+        pendingSpringLoadedExpansion = (workspaceID, workItem)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.65, execute: workItem)
+    }
+
+    func cancelSpringLoadedExpansion() {
+        pendingSpringLoadedExpansion?.workItem.cancel()
+        pendingSpringLoadedExpansion = nil
     }
 
     /// Resolves a workspace drop into the top-level reorder it would perform, or nil when it is a no-op

@@ -97,6 +97,10 @@ final class SettingsModel {
         }
     }
 
+    /// The frontmost session's focused-pane cwd, used only to seed directory-picking panels near the
+    /// user's current work. Settings views still mutate through this model; they don't need library access.
+    var activeSessionCwd: String? { library.activeStore?.activeSession?.focusedCwd }
+
     /// The appearance side the last config feed applied, used to suppress redundant re-posts of
     /// `.agtermSystemAppearanceChanged` on the same side (KVO `[.initial]` seeds one at launch, and the
     /// debounce can coalesce a burst). Starts `false` because a host-loaded config is always resolved to

@@ -157,6 +157,8 @@ extension agtermApp {
                 Button("Rename Session") { actions.renameActiveSession() }
                     .keyboardShortcut(shortcut(for: .renameSession))
                     .disabled(library.activeStore?.activeSession == nil || zoomed)
+                Button("Reveal in Finder") { actions.revealActiveSessionInFinder() }
+                    .disabled(library.activeStore?.activeSession == nil)
                 Button("Close Session") {
                     // closeActiveSession dismisses any cover (quick terminal / overlay / scratch) or closes the
                     // active session; only when it handled nothing (no cover, no session) fall back to the window.

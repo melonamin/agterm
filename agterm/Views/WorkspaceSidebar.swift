@@ -10,6 +10,14 @@ let sessionPasteboardType = NSPasteboard.PasteboardType("com.umputun.agterm.sess
 /// drags (within the outline) use this to identify the workspace being reordered.
 let workspacePasteboardType = NSPasteboard.PasteboardType("com.umputun.agterm.workspace")
 
+/// Explicit public plain-text UTI for external drag destinations that don't negotiate AppKit's legacy
+/// `.string` pasteboard type when accepting text drops (Messages is one of the picky ones).
+let plainTextPasteboardType = NSPasteboard.PasteboardType("public.utf8-plain-text")
+
+/// Broad public text UTI for drag destinations that ask for `public.text` instead of a concrete text
+/// representation. Keeping this alongside `.string` makes sidebar drags more cooperative with other apps.
+let publicTextPasteboardType = NSPasteboard.PasteboardType("public.text")
+
 /// AppKit `NSOutlineView` sidebar (`.plain` style + a custom row height and top/left content insets that
 /// match the terminal's ghostty padding) hosted in SwiftUI via `NSViewRepresentable`. Replaces the
 /// SwiftUI `List` sidebar so cross-workspace drag-and-drop works natively: a session row can be dragged
@@ -61,11 +69,15 @@ struct WorkspaceSidebar: NSViewRepresentable {
         outline.outlineTableColumn = column
 
         // native drag-and-drop: session rows reorder within / move across workspaces; workspace
-        // rows reorder among themselves. Registering BOTH types is load-bearing — without the
-        // workspace type AppKit never delivers validate/accept for a workspace drag.
-        outline.registerForDraggedTypes([sessionPasteboardType, workspacePasteboardType])
-        outline.setDraggingSourceOperationMask(.move, forLocal: true)
-        outline.setDraggingSourceOperationMask([], forLocal: false)
+        // rows reorder among themselves; Finder folder drops create sessions rooted at those folders.
+        // Registering BOTH private types is load-bearing — without the workspace type AppKit never
+        // delivers validate/accept for a workspace drag.
+        outline.registerForDraggedTypes([sessionPasteboardType, workspacePasteboardType, .fileURL])
+        // Local sidebar drops still choose .move; terminals/text targets can choose .copy from the public
+        // text representation. External drags are copy-only so rows can be dragged out without exporting
+        // agterm's private move semantics to other apps.
+        outline.setDraggingSourceOperationMask([.move, .copy], forLocal: true)
+        outline.setDraggingSourceOperationMask(.copy, forLocal: false)
 
         context.coordinator.outlineView = outline
         context.coordinator.renameController.outlineView = outline
@@ -164,11 +176,14 @@ struct WorkspaceSidebar: NSViewRepresentable {
         /// reveal or focus zoom-in never burns a workspace's deliberately-persisted collapse. Only a genuine
         /// user toggle (row click / disclosure triangle) — which fires the callback with this false —
         /// persists. `expandAll`/`collapseOthers` set it too and persist once explicitly at the end.
-        private var suppressExpansionPersist = false
+        var suppressExpansionPersist = false
         /// Scheduled single-click workspace expand/collapse, deferred by the double-click interval so a
         /// double-click (rename) can cancel it — otherwise the first click of a rename double-click would
         /// flip the workspace open/closed on its way into edit mode. See `handleSingleClick`.
         var pendingRowToggle: DispatchWorkItem?
+        /// Scheduled spring-loaded workspace expand while a drag hovers over a collapsed workspace row.
+        /// View-only like selection reveal: it opens the target for this drag without persisting expansion.
+        var pendingSpringLoadedExpansion: (workspaceID: UUID, workItem: DispatchWorkItem)?
 
         /// Stable pseudo-workspace id for the flat flagged group's `TreeShape`, so within flagged mode only
         /// a change to the flagged session list (not a per-call fresh id) triggers a rebuild.
@@ -221,7 +236,10 @@ struct WorkspaceSidebar: NSViewRepresentable {
                                                    name: .agtermAppearanceChanged, object: nil)
         }
 
-        deinit { NotificationCenter.default.removeObserver(self) }
+        isolated deinit {
+            pendingSpringLoadedExpansion?.workItem.cancel()
+            NotificationCenter.default.removeObserver(self)
+        }
 
         /// Re-tint the visible rows' text/icon to the current selection state and redraw the selection
         /// pills, without a reloadData — used both when the selection changes (AppKit doesn't redraw on
@@ -781,6 +799,11 @@ final class SidebarOutlineView: NSOutlineView {
     // AppKit re-set `isEmphasized` on the rows — an extra repaint that flicks the selection pill on every
     // click. Programmatic selection (palette/Ctrl-Tab) never bounces, so it's already smooth.
     override var acceptsFirstResponder: Bool { false }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        super.draggingExited(sender)
+        (delegate as? WorkspaceSidebar.Coordinator)?.cancelSpringLoadedExpansion()
+    }
 
     override func menu(for event: NSEvent) -> NSMenu? {
         let point = convert(event.locationInWindow, from: nil)

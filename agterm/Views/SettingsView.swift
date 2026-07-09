@@ -191,6 +191,7 @@ private struct GeneralSettingsView: View {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
+        panel.directoryURL = DirectoryPanelDefaults.url(paths: customDirectory, model.activeSessionCwd)
         panel.prompt = "Choose"
         panel.message = "Choose a directory for new sessions"
         guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -615,6 +616,7 @@ private struct KeyMappingSettingsView: View {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
+        panel.directoryURL = DirectoryPanelDefaults.url(paths: configDirectoryPath, model.activeSessionCwd)
         panel.prompt = "Choose"
         panel.message = "Choose a directory for keymap.conf"
         guard panel.runModal() == .OK, let url = panel.url else { return }
