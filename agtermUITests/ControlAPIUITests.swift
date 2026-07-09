@@ -233,6 +233,32 @@ final class ControlAPIUITests: ControlAPITestCase {
         XCTAssertTrue(pollSessionCount(1, timeout: 10), "closing the session should remove its row")
     }
 
+    // session.close with multiple targets is the control surface for the GUI batch close: one request
+    // hides all targeted sessions together (the save is deferred by the grace window, so assert via tree).
+    func testSessionCloseMultipleTargets() throws {
+        let firstID = UUID(uuidString: "AA100000-0000-0000-0000-000000000001")!
+        let secondID = UUID(uuidString: "AA200000-0000-0000-0000-000000000002")!
+        let thirdID = UUID(uuidString: "AA300000-0000-0000-0000-000000000003")!
+        let snapshot = """
+        {"version":1,"selectedSessionID":"\(firstID.uuidString)","workspaces":[\
+        {"id":"\(UUID().uuidString)","name":"workspace 1","sessions":[\
+        {"id":"\(firstID.uuidString)","customName":null,"cwd":"\(NSHomeDirectory())"},\
+        {"id":"\(secondID.uuidString)","customName":null,"cwd":"\(NSHomeDirectory())"},\
+        {"id":"\(thirdID.uuidString)","customName":null,"cwd":"\(NSHomeDirectory())"}]}]}
+        """
+        try relaunch(withSnapshot: snapshot)
+
+        let closed = try sendCommand(#"{"cmd":"session.close","args":{"targets":["\#(secondID.uuidString)","\#(thirdID.uuidString)"]}}"#)
+        XCTAssertEqual(closed["ok"] as? Bool, true, "batch session.close should succeed: \(closed)")
+        XCTAssertEqual((closed["result"] as? [String: Any])?["count"] as? Int, 2, "batch close should report the closed count")
+
+        let tree = try sendCommand(#"{"cmd":"tree"}"#)
+        let node = try XCTUnwrap(sessionNode(tree, id: firstID.uuidString), "the first session should remain")
+        XCTAssertEqual(node["id"] as? String, firstID.uuidString)
+        XCTAssertNil(sessionNode(tree, id: secondID.uuidString), "the second session should be hidden by the grouped close")
+        XCTAssertNil(sessionNode(tree, id: thirdID.uuidString), "the third session should be hidden by the grouped close")
+    }
+
     // session.new --command runs the command AS the session's process (no shell echo): create a session
     // whose command writes a marker file, then read it back — proof the command ran as the process, not
     // typed into a shell. The session closes when the command exits (kitty-style).
@@ -963,6 +989,32 @@ final class ControlAPIUITests: ControlAPITestCase {
         let before = try sendCommand(#"{"cmd":"session.move","target":"\#(firstID.uuidString)","args":{"before":"\#(secondID.uuidString)"}}"#)
         XCTAssertEqual(before["ok"] as? Bool, true, "session.move --before should succeed: \(before)")
         XCTAssertTrue(pollSessionOrder([thirdID, firstID, secondID], timeout: 10), "before should place first right before second")
+    }
+
+    // session.move with multiple targets removes the whole block first, then inserts it at the
+    // post-removal slot. A loop over single moves would need to recompute the anchor after each call.
+    func testSessionMoveMultipleTargetsWithinWorkspaceBeforeAnchor() throws {
+        let firstID = UUID(uuidString: "BB100000-0000-0000-0000-000000000001")!
+        let secondID = UUID(uuidString: "BB200000-0000-0000-0000-000000000002")!
+        let thirdID = UUID(uuidString: "BB300000-0000-0000-0000-000000000003")!
+        let fourthID = UUID(uuidString: "BB400000-0000-0000-0000-000000000004")!
+        let fifthID = UUID(uuidString: "BB500000-0000-0000-0000-000000000005")!
+        let snapshot = """
+        {"version":1,"selectedSessionID":"\(firstID.uuidString)","workspaces":[\
+        {"id":"\(UUID().uuidString)","name":"workspace 1","sessions":[\
+        {"id":"\(firstID.uuidString)","customName":null,"cwd":"\(NSHomeDirectory())"},\
+        {"id":"\(secondID.uuidString)","customName":null,"cwd":"\(NSHomeDirectory())"},\
+        {"id":"\(thirdID.uuidString)","customName":null,"cwd":"\(NSHomeDirectory())"},\
+        {"id":"\(fourthID.uuidString)","customName":null,"cwd":"\(NSHomeDirectory())"},\
+        {"id":"\(fifthID.uuidString)","customName":null,"cwd":"\(NSHomeDirectory())"}]}]}
+        """
+        try relaunch(withSnapshot: snapshot)
+
+        let moved = try sendCommand(#"{"cmd":"session.move","args":{"targets":["\#(firstID.uuidString)","\#(secondID.uuidString)"],"before":"\#(fifthID.uuidString)"}}"#)
+        XCTAssertEqual(moved["ok"] as? Bool, true, "batch session.move --before should succeed: \(moved)")
+        XCTAssertEqual((moved["result"] as? [String: Any])?["count"] as? Int, 2, "batch move should report the moved count")
+        XCTAssertTrue(pollSessionOrder([thirdID, fourthID, firstID, secondID, fifthID], timeout: 10),
+                      "the batch should land before fifth after removing both moved rows first")
     }
 
     // session.move --after with an anchor in ANOTHER workspace relocates the session to the anchor's

@@ -59,6 +59,45 @@ final class ReorderUITests: XCTestCase {
                       "dragging aaa down onto the middle row ccc should land it between ccc and ddd")
     }
 
+    // Shift-click creates a range, Command-click toggles one row out, and right-clicking inside the
+    // remaining multi-selection must keep it for batch context-menu actions. Right-clicking outside the
+    // selection should narrow to that clicked row. The oracle is the persisted flag state because AppKit's
+    // transient outline multi-selection is not serialized.
+    func testMultiSelectContextMenuKeepsAndNarrowsSelection() throws {
+        try relaunchWithSessions(["aaa", "bbb", "ccc", "ddd"])
+
+        sessionRow(named: "aaa").click()
+        modifiedClick(sessionRow(named: "ccc"), modifiers: .shift)
+        modifiedClick(sessionRow(named: "bbb"), modifiers: .command)
+
+        sessionRow(named: "aaa").rightClick()
+        let flagSessions = presentedMenuItem("Flag Sessions")
+        XCTAssertTrue(flagSessions.waitForExistence(timeout: 5), "multi-selection context menu should offer Flag Sessions")
+        flagSessions.click()
+        XCTAssertTrue(pollFlagged(["aaa": true, "bbb": false, "ccc": true, "ddd": false], timeout: 8),
+                      "batch flag should affect the Shift/Cmd-click multi-selection only")
+
+        sessionRow(named: "ddd").rightClick()
+        let flag = presentedMenuItem("Flag")
+        XCTAssertTrue(flag.waitForExistence(timeout: 5), "right-click outside the selection should narrow to one row")
+        flag.click()
+        XCTAssertTrue(pollFlagged(["aaa": true, "bbb": false, "ccc": true, "ddd": true], timeout: 8),
+                      "outside right-click should flag only the clicked row")
+    }
+
+    // Dragging from any selected row should move the whole selected block, not just the row under the
+    // pointer. Dropping bbb/ccc onto ddd inserts the block after ddd:
+    // [aaa, bbb, ccc, ddd, eee] -> [aaa, ddd, bbb, ccc, eee].
+    func testDragSelectedSessionsMovesBlock() throws {
+        try relaunchWithSessions(["aaa", "bbb", "ccc", "ddd", "eee"])
+        sessionRow(named: "bbb").click()
+        modifiedClick(sessionRow(named: "ccc"), modifiers: .shift)
+
+        dragSelectedRow(named: "bbb", onto: "ddd")
+        XCTAssertTrue(pollSessionNames(["aaa", "ddd", "bbb", "ccc", "eee"], timeout: 10),
+                      "dragging a selected block onto ddd should move bbb+ccc together after ddd")
+    }
+
     // Drag a workspace UP above a higher sibling and confirm the persisted order changed through the
     // full sidebar drop path (validateDrop → acceptDrop → moveWorkspace). Three workspaces are created
     // (workspace 1/2/3). Dropping "workspace 3" near the TOP edge of "workspace 1" lands a top-level
@@ -99,6 +138,34 @@ final class ReorderUITests: XCTestCase {
         }
         XCTAssertTrue(pollSessionNames(names, timeout: 10),
                       "the renamed sessions should persist in creation order")
+    }
+
+    /// Relaunches with a prewritten window snapshot so tests that specifically exercise selection/drag
+    /// gestures don't depend on the slower inline-rename fixture.
+    private func relaunchWithSessions(_ names: [String]) throws {
+        let snapshotFile = stateDir.windowSnapshotFile()
+        app.terminate()
+
+        let workspaceID = UUID().uuidString
+        let sessionIDs = names.map { _ in UUID().uuidString }
+        let sessions = zip(names, sessionIDs).map { name, id -> [String: Any] in
+            ["id": id, "customName": name, "cwd": NSHomeDirectory()]
+        }
+        let snapshot: [String: Any] = [
+            "version": 1,
+            "selectedSessionID": sessionIDs[0],
+            "workspaces": [
+                ["id": workspaceID, "name": "workspace 1", "sessions": sessions],
+            ],
+            "sidebarVisible": true,
+        ]
+        let data = try JSONSerialization.data(withJSONObject: snapshot, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: snapshotFile, options: .atomic)
+
+        app = XCUIApplication()
+        app.launchEnvironment["AGTERM_STATE_DIR"] = stateDir.path
+        app.launchForUITest()
+        XCTAssertTrue(pollSessionNames(names, timeout: 10), "seeded snapshot sessions should be visible in order")
     }
 
     /// Adds two more workspaces to the seeded one, leaving the tree holding
@@ -192,6 +259,32 @@ final class ReorderUITests: XCTestCase {
         start.click(forDuration: 0.7, thenDragTo: end, withVelocity: 180, thenHoldForDuration: 0.25)
     }
 
+    /// Drags from a row that is already part of the current selection. Unlike `dragRow`, this must not
+    /// click the source first: a plain click would collapse the multi-selection before the drag begins.
+    private func dragSelectedRow(named source: String, onto target: String) {
+        let from = sessionRow(named: source)
+        let to = sessionRow(named: target)
+        XCTAssertTrue(from.waitForHittable(timeout: 10), "\(source) row should be hittable to drag")
+        XCTAssertTrue(to.waitForHittable(timeout: 10), "\(target) row should be hittable as a drop target")
+        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        let start = from.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        let end = to.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        start.click(forDuration: 0.7, thenDragTo: end, withVelocity: 180, thenHoldForDuration: 0.25)
+    }
+
+    /// Xcode's macOS XCUIElement has no modifier-click overload, so apply XCTest key modifiers
+    /// around a coordinate click to exercise AppKit's normal Shift/Cmd selection path.
+    private func modifiedClick(_ element: XCUIElement, modifiers: XCUIElement.KeyModifierFlags) {
+        XCTAssertTrue(element.waitForHittable(timeout: 10), "row should be hittable for modified click")
+        app.activate()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        let coordinate = element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        XCUIElement.perform(withKeyModifiers: modifiers) {
+            coordinate.click()
+        }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+    }
+
     /// Adds a new session to the current workspace via the bottom-bar add-session menu.
     private func addSession() {
         let add = app.descendants(matching: .any).matching(identifier: "add-session").firstMatch
@@ -216,6 +309,7 @@ final class ReorderUITests: XCTestCase {
             if field.waitForExistence(timeout: 2) { editing = true; break }
         }
         XCTAssertTrue(editing, "rename did not enter edit mode for \(currentName) (field never appeared)")
+        field.click()
         app.typeKey("a", modifierFlags: .command)
         app.typeText("\(newName)\r")
         XCTAssertTrue(sessionRow(named: newName).waitForExistence(timeout: 5), "renamed session row should appear")
@@ -239,6 +333,20 @@ final class ReorderUITests: XCTestCase {
             guard let workspaces = obj["workspaces"] as? [[String: Any]],
                   let sessions = workspaces.first?["sessions"] as? [[String: Any]] else { return nil }
             return sessions.compactMap { $0["customName"] as? String }
+        }
+    }
+
+    /// Polls the seeded workspace until every named session's persisted `flagged` field matches.
+    private func pollFlagged(_ expected: [String: Bool], timeout: TimeInterval) -> Bool {
+        stateDir.pollSnapshot(equals: expected, timeout: timeout) { obj in
+            guard let workspaces = obj["workspaces"] as? [[String: Any]],
+                  let sessions = workspaces.first?["sessions"] as? [[String: Any]] else { return nil }
+            var result: [String: Bool] = [:]
+            for session in sessions {
+                guard let name = session["customName"] as? String, expected.keys.contains(name) else { continue }
+                result[name] = session["flagged"] as? Bool ?? false
+            }
+            return result.count == expected.count ? result : nil
         }
     }
 

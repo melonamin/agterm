@@ -463,6 +463,16 @@ final class AppActions {
         store.setFlag(!session.flagged, forSession: sessionID)
     }
 
+    /// Toggle one or more session flags in a specific window-local store. This mirrors `closeSessions`:
+    /// sidebar context menus pass their own store so a background window never routes through the
+    /// frontmost store by accident.
+    func toggleFlags(_ sessionIDs: [UUID], in store: AppStore) {
+        let sessions = sessionIDs.compactMap { store.session(withID: $0) }
+        guard !sessions.isEmpty else { return }
+        let allFlagged = sessions.allSatisfy(\.flagged)
+        store.setFlag(!allFlagged, forSessions: sessions.map(\.id))
+    }
+
     /// Toggle the active session's flag — used by the menu bar and the action palette, which have no
     /// clicked row. No-op when nothing is selected.
     func toggleFlagActiveSession() {

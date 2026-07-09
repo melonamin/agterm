@@ -32,19 +32,6 @@ public struct SidebarSelectionController: Equatable, Sendable {
         setSelection(selectedSessionIDs, visibleSessionIDs: visibleSessionIDs)
     }
 
-    /// The sessions a context-menu command should affect.
-    ///
-    /// Right-clicking an already-selected row keeps the full multi-selection. Right-clicking an
-    /// unselected row intentionally narrows the command to that row, matching standard Mac list behavior.
-    /// A nil clicked row falls back to the current multi-selection, then to the active session.
-    public func targets(forContextSession clickedID: UUID?, fallbackSessionID: UUID?) -> [UUID] {
-        if let clickedID {
-            return selectedSessionIDs.contains(clickedID) ? selectedSessionIDs : [clickedID]
-        }
-        if !selectedSessionIDs.isEmpty { return selectedSessionIDs }
-        return fallbackSessionID.map { [$0] } ?? []
-    }
-
     /// Filters duplicate/unknown ids and returns them in the supplied visible order.
     public static func normalized(_ ids: [UUID], visibleSessionIDs: [UUID]) -> [UUID] {
         let requested = Set(ids)

@@ -178,6 +178,22 @@ extension ControlServer: ControlActions {
         }
     }
 
+    func closeSessions(_ targets: [String], window: String?) -> ControlResponse {
+        resolveBatchSessions(targets, window: window) { store, ids in
+            guard ids.count > 1 else {
+                guard let id = ids.first else { return ControlResponse(ok: false, error: "session.close requires at least one --target") }
+                store.closeSession(id)
+                return ControlResponse(ok: true, result: ControlResult(id: id.uuidString))
+            }
+            // Batch close intentionally uses the grace/undo path: that is the GUI behavior this API
+            // makes scriptable, and looping single hard closes cannot produce one grouped undo record.
+            guard store.softCloseSessions(ids) else {
+                return ControlResponse(ok: false, error: "no sessions closed")
+            }
+            return ControlResponse(ok: true, result: ControlResult(count: ids.count))
+        }
+    }
+
     func renameSession(_ target: String?, window: String?, name: String) -> ControlResponse {
         resolver.resolveSession(target, window: window) { store, id in
             store.renameSession(id, to: name)
@@ -510,6 +526,23 @@ extension ControlServer: ControlActions {
         }
     }
 
+    func moveSessions(_ targets: [String], window: String?, move: ControlSessionMove) -> ControlResponse {
+        switch move {
+        case .reorder:
+            return ControlResponse(ok: false, error: "session.move --target can be repeated only with a workspace or --after/--before")
+        case .workspace(let workspace):
+            return resolveBatchSessions(targets, window: window) { store, ids in
+                resolver.resolve(workspace, candidates: store.workspaces.map(\.id),
+                        active: store.currentWorkspaceID, noun: "workspace") { workspaceID in
+                    store.moveSessions(ids, toWorkspace: workspaceID)
+                    return ControlResponse(ok: true, result: ControlResult(count: ids.count))
+                }
+            }
+        case .place(let anchor, let after):
+            return placeSessions(targets, window: window, anchor: anchor, after: after)
+        }
+    }
+
     /// Resolve the moved session and its anchor within the same store, then relocate + position via the
     /// host-free `SidebarDrop.resolveRelative` drop math. The anchor is resolved across the whole store
     /// (all workspaces), so it self-identifies the destination workspace. A nil resolution (anchor==self
@@ -528,6 +561,61 @@ extension ControlServer: ControlActions {
                 }
                 return ControlResponse(ok: true, result: ControlResult(id: sessionID.uuidString))
             }
+        }
+    }
+
+    /// Batch variant of `placeSession`: resolve every moved session in one store, compute the
+    /// post-removal insertion slot with the same host-free drop math as sidebar drag, then move the block
+    /// with a single `AppStore.moveSessions` call.
+    private func placeSessions(_ targets: [String], window: String?, anchor: String, after: Bool) -> ControlResponse {
+        resolveBatchSessions(targets, window: window) { store, ids in
+            let sources = ids.compactMap { id -> SidebarDrop.SessionSource? in
+                guard let source = store.sessionLocation(ofSession: id) else { return nil }
+                return SidebarDrop.SessionSource(workspace: source.workspace, index: source.index)
+            }
+            guard sources.count == ids.count else {
+                return ControlResponse(ok: false, error: "no such session")
+            }
+            return resolveAnchorLocation(anchor, in: store) { anchorLoc in
+                let target = SidebarDrop.SessionDropTarget.sessionRow(workspace: anchorLoc.workspace,
+                                                                      sessionIndex: anchorLoc.index,
+                                                                      sessionCount: anchorLoc.count)
+                if let resolution = SidebarDrop.resolveSessions(
+                    sources: sources,
+                    target: target,
+                    childIndex: after ? SidebarDrop.onItemIndex : anchorLoc.index
+                ) {
+                    store.moveSessions(ids, toWorkspace: resolution.workspace, at: resolution.destination)
+                }
+                return ControlResponse(ok: true, result: ControlResult(count: ids.count))
+            }
+        }
+    }
+
+    private func resolveBatchSessions(_ targets: [String], window: String?,
+                                      _ body: (AppStore, [UUID]) -> ControlResponse) -> ControlResponse {
+        guard let first = targets.first else {
+            return ControlResponse(ok: false, error: "session command requires at least one --target")
+        }
+        switch resolver.resolveSessionTarget(first, window: window) {
+        case .failure(let response):
+            return response
+        case .success(let (store, firstID)):
+            var ids: [UUID] = []
+            var seen = Set<UUID>()
+            ids.append(firstID)
+            seen.insert(firstID)
+            let candidates = store.workspaces.flatMap { $0.sessions.map(\.id) }
+            for target in targets.dropFirst() {
+                let response = resolver.resolve(target, candidates: candidates,
+                                                active: store.selectedSessionID, noun: "session") { id in
+                    guard seen.insert(id).inserted else { return ControlResponse(ok: true) }
+                    ids.append(id)
+                    return ControlResponse(ok: true)
+                }
+                guard response.ok else { return response }
+            }
+            return body(store, ids)
         }
     }
 

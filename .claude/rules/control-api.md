@@ -190,6 +190,10 @@ paths:
   exact `uuidString` (case-insensitive), or a git-style unique prefix.
   Zero prefix hits → `notFound` error, ≥2 → `ambiguous` error listing the candidates.
   `--target` defaults to `active`, so scripts rarely type an id and never for "the current one".
+  Batch-capable session commands (`session.close`, and `session.move` with workspace/after/before placement)
+  accept repeated `--target` flags in the CLI; on the wire these are `args.targets: [String]`. The batch is
+  scoped to one window/store: the first target resolves by the normal `--window`/frontmost/cross-window
+  rules, then remaining targets resolve inside that same store so one command never mutates multiple windows.
 - **Command catalog (57 commands):**
   - `tree`
   - `workspace.new`/`workspace.rename`/`workspace.delete`/`workspace.select`/`workspace.move`/`workspace.focus`
@@ -220,6 +224,14 @@ paths:
 
   `workspace.delete` honors keep-at-least-one and returns an error instead of the GUI confirm alert (nothing
   blocks on a modal).
+  `session.close` has a legacy single-target control path and a batch path. Single-target control close
+  continues to call `AppStore.closeSession` (hard close; backward-compatible with the original control
+  behavior). Repeated `--target` / `args.targets` is the GUI-equivalent batch close: it resolves all targets
+  in one store and calls `AppStore.softCloseSessions`, producing one grace timer, one grouped undo/reopen
+  record, and `result.count`. During the grace window, reopening any member of that grouped record restores
+  the whole group, matching workspace close semantics. Keep-in-sync: `ControlArgs.targets`, the
+  `.sessionClose` dispatcher batch arm, `ControlActions.closeSessions`, `agtermctl session close --target`
+  repeat support, round-trip/dispatcher/CLI tests, and `ControlAPIUITests.testSessionCloseMultipleTargets`.
   `session.move` is MODE-BEARING with THREE exclusive placement intents:
   `args.to` (`up`|`down`|`top`|`bottom`) REORDERS the session within its own workspace (parses `ReorderDirection`,
   drives `AppStore.reorderSession` → the existing `moveSession(at:)` primitive, returns the session id);
@@ -237,11 +249,22 @@ paths:
   after/before + a workspace is an error (`"session.move takes --after/--before or a workspace, not both"`
   — the anchor already names the workspace), both `--to`+workspace and neither are errors,
   and an invalid direction is an error.
+  Repeated `--target` / `args.targets` makes `session.move` a batch move for workspace relocation and
+  after/before placement. It uses the same host-free block semantics as sidebar multi-drag:
+  all moved sessions are resolved in visual tree order, removed first, then inserted as one block via
+  `SidebarDrop.resolveSessions`/`AppStore.moveSessions`. Batch `--to up|down|top|bottom` is deliberately
+  rejected (`"session.move --target can be repeated only with a workspace or --after/--before"`) because
+  relative one-step reorder is inherently per-session and order-dependent.
   Keep-in-sync: `ControlArgs.after`/`before` + `ControlSessionMove.place` in `ControlProtocol.swift`/`ControlModes.swift`,
   the `.sessionMove` place-mode routing + guards in `ControlDispatcher`, the app-side `moveSession` place
   case (`ControlServer+SessionActions.swift`, resolving both target + anchor locations and calling
   `resolveRelative`), the `session move --after/--before` CLI, and round-trip / dispatcher / e2e
   (`testSessionMovePlaceWithinWorkspace`, `testSessionMovePlaceCrossWorkspace`, the reject-* guards) tests.
+  Batch keep-in-sync additionally includes `ControlArgs.targets`, `ControlActions.moveSessions`,
+  `agtermctl session move --target` repeat support, and `ControlAPIUITests.testSessionMoveMultipleTargetsWithinWorkspaceBeforeAnchor`.
+  Keep-in-sync exemptions for sidebar batch actions: Flag/Unflag is loop-equivalent to repeated
+  `session.flag on|off|toggle --target <id>` (plural store API only saves once); Clear Status is
+  loop-equivalent to repeated `session.status idle --target <id>` and intentionally adds no batch command.
   `workspace.move` is the workspace REORDER (control-native, no separate verb):
   `args.to` (`up`|`down`|`top`|`bottom`) resolves the workspace target via the shared `resolveWorkspace`
   (honoring the global `--window` selector like other workspace commands),
@@ -1066,4 +1089,3 @@ paths:
   **Agent-skill mirror (HARD keep-in-sync, 4th surface):** all commands are documented in the bundled
   `agterm/Resources/agent-skill/` (SKILL.md summary, reference.md detail,
   examples.md recipes) and the command count there is bumped to 57 to match.
-

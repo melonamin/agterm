@@ -171,8 +171,7 @@ extension WorkspaceSidebar.Coordinator {
 
     @objc private func menuToggleFlag(_ sender: NSMenuItem) {
         guard let request = sender.representedObject as? SessionBatchRequest else { return }
-        let allFlagged = !request.sessionIDs.isEmpty && request.sessionIDs.allSatisfy { store.session(withID: $0)?.flagged == true }
-        store.setFlag(!allFlagged, forSessions: request.sessionIDs)
+        actions.toggleFlags(request.sessionIDs, in: store)
     }
 
     @objc private func menuNewSession(_ sender: NSMenuItem) {

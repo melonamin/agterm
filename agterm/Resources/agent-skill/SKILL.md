@@ -151,11 +151,15 @@ focused from the tree workspace node's `focused` flag).
   after/before an anchor session (id/prefix/`active`) instead of appending — the anchor carries its own
   workspace, so it's mutually exclusive with `--workspace`/`--workspace-name`. `new --after active` =
   create right after the current session.
-- `close` · `select` · `rename <name>`.
+- `close [--target T ...]` — close one session, or repeat `--target` to close a batch with one
+  grace-period undo.
+- `select` · `rename <name>`.
 - `go --to next|prev|first|last|next-attention|prev-attention` — move the selection between sessions.
 - `move <workspace>` (relocate) or `move --to up|down|top|bottom` (reorder within the workspace) or
   `move --after SID | --before SID` (place after/before an anchor session; the anchor carries its own
-  workspace, so this relocates + positions in one shot, even cross-workspace).
+  workspace, so this relocates + positions in one shot, even cross-workspace). For workspace and
+  after/before placement, repeat `--target` to move several sessions as one ordered block. Do not repeat
+  `--target` with `--to up|down|top|bottom`.
 - `type <text> [--stdin] [--select] [--pane left|right|scratch]` — inject keystrokes (real typing, Enter
   included) into the main pane, the split pane with `--pane right`, or the scratch terminal (even hidden)
   with `--pane scratch`. Pass `--target "$AGTERM_SESSION_ID"` to type into YOUR session, not the user's

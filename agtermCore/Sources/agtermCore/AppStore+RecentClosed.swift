@@ -95,6 +95,8 @@ extension AppStore {
             switch record {
             case .session(let close) where close.session.id == sessionID:
                 return id
+            // A grace-period reopen restores the grouped batch close as one undo record, matching
+            // workspace close behavior while the record is still pending.
             case .sessions(let close) where close.sessions.contains(where: { $0.session.id == sessionID }):
                 return id
             case .workspace(let close) where close.workspace.sessions.contains(where: { $0.id == sessionID }):

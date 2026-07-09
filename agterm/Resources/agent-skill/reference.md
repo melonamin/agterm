@@ -121,7 +121,9 @@ All five are read-only projections of GUI state.
   therefore mutually exclusive with each other and with `--workspace`/`--workspace-name` (the anchor
   already picks the workspace). `agtermctl session new --after active` is the headline case: create
   right after the current session in one round-trip.
-- `session close [--target] [--window W]`.
+- `session close [--target T ...] [--window W]` — close one session, or repeat `--target` to close
+  several sessions in the same window/store. A repeated-target close uses the same grace-period path as
+  GUI batch close: one undo/reopen record and `result.count`.
 - `session select [--target] [--window W]`.
 - `session rename <name> [--target] [--window W]`.
 - `session go --to next|prev|first|last|next-attention|prev-attention [--window W]` — move the
@@ -138,6 +140,9 @@ All five are read-only projections of GUI state.
   placement falls out for free. Exactly one placement intent is required among {positional workspace,
   `--to`, `--after`/`--before`}; `--after`/`--before` are mutually exclusive with each other, with `--to`,
   and with a destination workspace (the anchor already names the workspace).
+  Repeat `--target` for a batch move with the workspace and after/before placement forms; the sessions
+  move as one ordered block after all sources are removed. Repeated `--target` is rejected with
+  `--to up|down|top|bottom` because relative reorder is per-session.
 - `session type <text> [--stdin] [--select] [--pane left|right|scratch] [--target] [--window W]` — inject text
   as real keystrokes (printable runs plus Return for each newline; no bracketed-paste markers).
   `--stdin` reads the text from stdin instead of the argument. `--select` selects (and realizes) a

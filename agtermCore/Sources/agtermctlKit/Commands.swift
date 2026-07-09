@@ -71,6 +71,15 @@ struct TargetOptions: ParsableArguments {
     var target: String = "active"
 }
 
+/// Options for batch-capable session commands. Repeating `--target` preserves CLI order on the wire.
+struct BatchTargetOptions: ParsableArguments {
+    @Option(name: .customLong("target"), help: "Target session id, prefix, or 'active'. Repeat for a batch.")
+    var targets: [String] = []
+
+    var singleTarget: String? { targets.count == 1 ? targets[0] : nil }
+    var batchTargets: [String]? { targets.count > 1 ? targets : nil }
+}
+
 /// The root `agtermctl` command. Subcommands mirror the control catalog 1:1.
 public struct Agtermctl: ParsableCommand {
     public static let configuration = CommandConfiguration(

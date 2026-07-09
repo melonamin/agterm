@@ -277,11 +277,15 @@ public final class AppStore {
     /// BOTH the session moved to (you've seen it) and the one moved from (it must not
     /// persist once you leave it); a non-`autoReset` indicator (active/blocked) is left
     /// untouched (keep-state).
-    public func selectSession(_ sessionID: UUID?) {
+    public func selectSession(_ sessionID: UUID?, sidebarSelection selectionIDs: [UUID]? = nil) {
         if let sessionID, session(withID: sessionID) == nil { return }
         let previous = selectedSessionID
         selectedSessionID = sessionID
-        replaceSidebarSelection(with: sessionID)
+        if let selectionIDs {
+            setSidebarSelection(selectionIDs)
+        } else {
+            replaceSidebarSelection(with: sessionID)
+        }
         autoUnfocusIfOutsideFocus(sessionID)
         if let sessionID { clearUnseen(sessionID) }
         clearAutoResetIndicator(sessionID) // visit: you've seen it
@@ -720,7 +724,10 @@ public final class AppStore {
                 changed = true
             }
         }
-        if changed { save() }
+        if changed {
+            pruneSidebarSelection()
+            save()
+        }
     }
 
     /// The flagged sessions across all workspaces in tree order (`workspaces.flatMap(\.sessions)` filtered

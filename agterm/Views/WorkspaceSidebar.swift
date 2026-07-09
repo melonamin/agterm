@@ -53,7 +53,7 @@ struct WorkspaceSidebar: NSViewRepresentable {
         // draws the themed selection pill itself in drawBackground for every state.
         outline.selectionHighlightStyle = .none
         outline.allowsMultipleSelection = true
-        outline.allowsEmptySelection = false
+        outline.allowsEmptySelection = true
 
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("main"))
         column.resizingMask = .autoresizingMask
@@ -687,8 +687,7 @@ struct WorkspaceSidebar: NSViewRepresentable {
             // auto-follow's own jump never reaches here) counts as activity: it buys the full idle grace
             // before auto-follow can pull the selection back.
             store.noteUserActivity()
-            store.selectSession(activeID)
-            store.setSidebarSelection(selectedIDs)
+            store.selectSession(activeID, sidebarSelection: selectedIDs)
             // land on the selected session's blocked pane when it carries a pane-tagged block (a no-op
             // otherwise), async so it runs after the selection + the sidebar's own focus-restore settle.
             DispatchQueue.main.async { [weak self] in self?.actions.revealActiveBlockedPane() }

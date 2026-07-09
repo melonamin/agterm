@@ -5,16 +5,18 @@ import Testing
 @MainActor
 struct SidebarSelectionTests {
     @Test func contextTargetsUseFullSelectionOnlyWhenClickedRowIsSelected() {
-        let a = UUID()
-        let b = UUID()
-        let c = UUID()
-        var selection = SidebarSelectionController()
-        selection.setSelection([b, a], visibleSessionIDs: [a, b, c])
+        let store = makeStore()
+        let ws = store.addWorkspace(name: "work")
+        let a = try! #require(store.addSession(toWorkspace: ws.id, cwd: "/a"))
+        let b = try! #require(store.addSession(toWorkspace: ws.id, cwd: "/b"))
+        let c = try! #require(store.addSession(toWorkspace: ws.id, cwd: "/c"))
+        store.selectSession(a.id)
+        store.setSidebarSelection([b.id, a.id])
 
-        #expect(selection.selectedSessionIDs == [a, b])
-        #expect(selection.targets(forContextSession: a, fallbackSessionID: c) == [a, b])
-        #expect(selection.targets(forContextSession: c, fallbackSessionID: a) == [c])
-        #expect(selection.targets(forContextSession: nil, fallbackSessionID: c) == [a, b])
+        #expect(store.sidebarSelectionIDs == [a.id, b.id])
+        #expect(store.sidebarSelectionTargets(forContextSession: a.id) == [a.id, b.id])
+        #expect(store.sidebarSelectionTargets(forContextSession: c.id) == [c.id])
+        #expect(store.sidebarSelectionTargets(forContextSession: nil) == [a.id, b.id])
     }
 
     @Test func selectingSessionResetsTransientSidebarSelection() {
@@ -29,6 +31,21 @@ struct SidebarSelectionTests {
         store.selectSession(b.id)
         #expect(store.selectedSessionID == b.id)
         #expect(store.sidebarSelectionIDs == [b.id])
+    }
+
+    @Test func selectingSessionCanPreserveTransientSidebarSelection() {
+        let store = makeStore()
+        let ws = store.addWorkspace(name: "work")
+        let a = try! #require(store.addSession(toWorkspace: ws.id, cwd: "/a"))
+        let b = try! #require(store.addSession(toWorkspace: ws.id, cwd: "/b"))
+        let c = try! #require(store.addSession(toWorkspace: ws.id, cwd: "/c"))
+
+        store.selectSession(c.id, sidebarSelection: [a.id, c.id])
+
+        #expect(store.selectedSessionID == c.id)
+        #expect(store.sidebarSelectionIDs == [a.id, c.id])
+        #expect(store.sidebarSelectionTargets(forContextSession: a.id) == [a.id, c.id])
+        #expect(store.sidebarSelectionTargets(forContextSession: b.id) == [b.id])
     }
 
     @Test func sidebarSelectionFallsBackToActiveWhenStoredSelectionIsStale() {
@@ -84,6 +101,20 @@ struct SidebarSelectionTests {
 
         #expect(store.sidebarSelectionIDs == [])
         store.setFlag(true, forSessions: [a.id, b.id])
+        #expect(store.sidebarSelectionIDs == [])
+    }
+
+    @Test func clearFlagsPrunesRowsHiddenInFlaggedMode() {
+        let store = makeStore()
+        let ws = store.addWorkspace(name: "work")
+        let a = try! #require(store.addSession(toWorkspace: ws.id, cwd: "/a"))
+        let b = try! #require(store.addSession(toWorkspace: ws.id, cwd: "/b"))
+        store.setFlag(true, forSessions: [a.id, b.id])
+        store.setSidebarMode(.flagged)
+        store.setSidebarSelection([a.id, b.id])
+
+        store.clearFlags()
+
         #expect(store.sidebarSelectionIDs == [])
     }
 
