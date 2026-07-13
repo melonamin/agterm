@@ -38,6 +38,9 @@ jobs:
     name: Build Linux x86_64 release
     runs-on: ubuntu-24.04
     container: swift:6.3.2-noble
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v7
         with:
