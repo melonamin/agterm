@@ -162,6 +162,7 @@ extension AppController: ControlActions {
             let affected: Int
             if linuxSettingsStore().load().closeGraceUndoEnabled ?? true {
                 affected = store.softCloseSessions(ids) ? ids.count : 0
+                if affected > 0 { reconcileSoftClose(preserving: ids) }
             } else {
                 affected = ids.reduce(into: 0) { count, id in
                     guard store.session(withID: id) != nil else { return }
@@ -169,7 +170,7 @@ extension AppController: ControlActions {
                     count += 1
                 }
             }
-            reconcile()
+            if affected == 0 || !(linuxSettingsStore().load().closeGraceUndoEnabled ?? true) { reconcile() }
             return ControlResponse(ok: true, result: ControlResult(affected: affected))
         }
     }

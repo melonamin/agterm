@@ -141,6 +141,25 @@ extension AppController {
         if store.undoPendingClose() { reconcile() }
     }
 
+    /// Keep GTK/libghostty surface ownership intact while agtermCore holds a soft-close record.
+    /// The core finalizer tears down the terminal after the grace interval; this later reconcile
+    /// removes the now-dead deck page and adapter dictionaries unless the close was undone.
+    func reconcileSoftClose(preserving ids: [UUID]) {
+        reconcile(preservingSurfaceIDs: Set(ids))
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 3_100_000_000)
+            self?.reconcile()
+        }
+    }
+
+    func closeSessionFromGUI(_ id: UUID) {
+        if linuxSettingsStore().load().closeGraceUndoEnabled ?? true {
+            if store.softCloseSession(id) { reconcileSoftClose(preserving: [id]) }
+        } else {
+            closeSession(id)
+        }
+    }
+
     func toggleWindowFullscreen() {
         _ = windowFullscreen(windowID.uuidString)
     }

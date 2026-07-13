@@ -6,7 +6,7 @@ import agtermCore
 extension AppController {
     // MARK: - Reconcile
 
-    func reconcile() {
+    func reconcile(preservingSurfaceIDs: Set<UUID> = []) {
         for ws in store.workspaces {
             for s in ws.sessions {
                 ensurePrimary(s)
@@ -16,7 +16,8 @@ extension AppController {
             }
         }
         // Drop closed sessions.
-        let live = Set(store.workspaces.flatMap { $0.sessions.map(\.id) })
+        var live = Set(store.workspaces.flatMap { $0.sessions.map(\.id) })
+        live.formUnion(preservingSurfaceIDs)
         for id in Array(surfaces.keys) where !live.contains(id) { removeSession(id) }
         rebuildSidebar()
         showActive()

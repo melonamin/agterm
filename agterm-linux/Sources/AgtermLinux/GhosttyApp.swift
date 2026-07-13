@@ -182,7 +182,7 @@ final class GhosttyApp: @unchecked Sendable {
                 if let display = gdk_display_get_default() { gdk_display_beep(display) }
                 return true
             case GHOSTTY_ACTION_OPEN_URL:
-                if let ptr = action.action.open_url.url { _ = g_app_info_launch_default_for_uri(ptr, nil, nil) }
+                if let ptr = action.action.open_url.url { Self.openTerminalURL(String(cString: ptr)) }
                 return true
             case GHOSTTY_ACTION_MOUSE_OVER_LINK:
                 // a non-null url means the pointer is over a hyperlink → show the hand cursor.
@@ -242,6 +242,21 @@ final class GhosttyApp: @unchecked Sendable {
                 return false
             }
         }
+    }
+
+    /// Apply the shared safe-link policy. Linux has no portable select-in-file-manager API, so a
+    /// local file reveal opens its containing directory with the desktop's default file manager.
+    private static func openTerminalURL(_ raw: String) {
+        let uri: String
+        switch LinkPolicy.disposition(for: raw) {
+        case .open(let url):
+            uri = url.absoluteString
+        case .reveal(let url):
+            uri = url.deletingLastPathComponent().absoluteString
+        case .ignore:
+            return
+        }
+        uri.withCString { _ = g_app_info_launch_default_for_uri($0, nil, nil) }
     }
 
     // MARK: - Clipboard (GTK4 reads are async)

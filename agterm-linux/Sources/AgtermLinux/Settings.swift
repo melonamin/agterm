@@ -100,6 +100,15 @@ extension AppController {
         connect(closeConfirmRow, "notify::active", unsafeBitCast(onConfirmCloseToggled as @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void, to: GCallback.self))
         adw_preferences_group_add(cast(group), W(closeConfirmRow))
 
+        let closeUndoRow = OpaquePointer(adw_switch_row_new())
+        "Allow undo after closing".withCString { adw_preferences_row_set_title(cast(closeUndoRow), $0) }
+        "Keep closed sessions alive briefly for Undo".withCString {
+            adw_action_row_set_subtitle(cast(closeUndoRow), $0)
+        }
+        adw_switch_row_set_active(closeUndoRow, (s.closeGraceUndoEnabled ?? true) ? 1 : 0)
+        connect(closeUndoRow, "notify::active", unsafeBitCast(onCloseUndoToggled, to: GCallback.self))
+        adw_preferences_group_add(cast(group), W(closeUndoRow))
+
         let sessionDirectoryModel = gtk_string_list_new(nil)
         for title in ["Home", "Current Session", "Custom"] {
             title.withCString { gtk_string_list_append(sessionDirectoryModel, $0) }
@@ -294,6 +303,10 @@ extension AppController {
         persist(\.confirmCloseSession, on ? true : nil)
     }
 
+    func setCloseGraceUndo(_ enabled: Bool) {
+        persist(\.closeGraceUndoEnabled, enabled ? nil : false)
+    }
+
     func setNewSessionDirectoryAtIndex(_ idx: Int) {
         let mode: AppSettings.NewSessionDirectory
         switch idx {
@@ -451,6 +464,9 @@ private let onRestoreToggled: @convention(c) (OpaquePointer?, OpaquePointer?, gp
 }
 private let onConfirmCloseToggled: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
     MainActor.assumeIsolated { gController?.setConfirmCloseSession(adw_switch_row_get_active(row) != 0) }
+}
+private let onCloseUndoToggled: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
+    MainActor.assumeIsolated { gController?.setCloseGraceUndo(adw_switch_row_get_active(row) != 0) }
 }
 private let onNewSessionDirectoryChanged: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
     MainActor.assumeIsolated { gController?.setNewSessionDirectoryAtIndex(Int(adw_combo_row_get_selected(cast(row)))) }

@@ -404,7 +404,7 @@ final class AppController {
             }
         }
         guard linuxSettingsStore().load().confirmCloseSession ?? false else {
-            closeSession(id)
+            closeSessionFromGUI(id)
             return
         }
         pendingCloseSession = id
@@ -424,7 +424,7 @@ final class AppController {
     func confirmSessionClose(_ response: String) {
         defer { pendingCloseSession = nil }
         guard response == "close", let id = pendingCloseSession else { return }
-        closeSession(id)
+        closeSessionFromGUI(id)
     }
 
     /// The primary pane's shell exited. Mirrors macOS: if a split pane is alive the session SURVIVES,
