@@ -254,8 +254,10 @@ composes with the font flags. Read the state back from the tree's top-level `das
 (pane refs `<id>:left`/`<id>:right`, in grid order) / `dashboardHighlighted` (a pane ref) /
 `dashboardFontSize`/`dashboardFontMode`. Zoom and the dashboard are mutually exclusive: opening one CLOSES
 the other. Opening/closing resizes each pane's pty to its cell, so programs may redraw — view-only
-means no input, not no process effect. The most-recently-used grid also has a GUI opener: **⌘⇧D** (the
-`dashboard` built-in action), **Navigate ▸ Dashboard**, and the command palette's **Dashboard** entry
+means no input, not no process effect.
+The most-recently-used grid also has a GUI opener: **⌘⇧D** on macOS or **Ctrl⇧M** on Linux (the
+`dashboard` built-in action), **Navigate ▸ Dashboard** on macOS, and the command palette's **Dashboard**
+entry
 TOGGLE the frontmost window's MRU dashboard auto-sized (identical to `dashboard --mru --auto-size`); no new
 control command, the socket `dashboard` command is unchanged.
 

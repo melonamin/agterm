@@ -6,6 +6,14 @@ import agtermCore
 extension AppController {
     static var sidebarFontProvider: OpaquePointer?
 
+    func installSidebarDirectoryDropTarget() {
+        let drop = gtk_drop_target_new(gdk_file_list_get_type(), GDK_ACTION_COPY)
+        connect(drop, "drop", unsafeBitCast(onSidebarDirectoryDrop as @convention(c)
+            (OpaquePointer?, UnsafePointer<GValue>?, Double, Double, gpointer?) -> gboolean,
+            to: GCallback.self))
+        gtk_widget_add_controller(W(sidebarBox), drop)
+    }
+
     func syncSidebarSelection() {
         for listBox in workspaceListBoxes { gtk_list_box_unselect_all(listBox) }
         let selected = store.sidebarSelectionIDs.isEmpty ? store.selectedSessionID.map { [$0] } ?? []
@@ -105,6 +113,11 @@ extension AppController {
             let wdrop = gtk_drop_target_new(GType(64), GDK_ACTION_MOVE)
             connect(wdrop, "drop", unsafeBitCast(onHeaderDrop as @convention(c) (OpaquePointer?, UnsafePointer<GValue>?, Double, Double, gpointer?) -> gboolean, to: GCallback.self))
             gtk_widget_add_controller(W(row), wdrop)
+            let directoryDrop = gtk_drop_target_new(gdk_file_list_get_type(), GDK_ACTION_COPY)
+            connect(directoryDrop, "drop", unsafeBitCast(onSidebarDirectoryDrop as @convention(c)
+                (OpaquePointer?, UnsafePointer<GValue>?, Double, Double, gpointer?) -> gboolean,
+                to: GCallback.self))
+            gtk_widget_add_controller(W(row), directoryDrop)
             gtk_box_append(cast(sidebarBox), W(row))
         } else if let header = op(gtk_label_new(title)) {
             gtk_label_set_xalign(header, 0)
@@ -181,6 +194,11 @@ extension AppController {
             let drop = gtk_drop_target_new(GType(64), GDK_ACTION_MOVE)
             connect(drop, "drop", unsafeBitCast(onRowDrop as @convention(c) (OpaquePointer?, UnsafePointer<GValue>?, Double, Double, gpointer?) -> gboolean, to: GCallback.self))
             gtk_widget_add_controller(W(row), drop)
+            let directoryDrop = gtk_drop_target_new(gdk_file_list_get_type(), GDK_ACTION_COPY)
+            connect(directoryDrop, "drop", unsafeBitCast(onSidebarDirectoryDrop as @convention(c)
+                (OpaquePointer?, UnsafePointer<GValue>?, Double, Double, gpointer?) -> gboolean,
+                to: GCallback.self))
+            gtk_widget_add_controller(W(row), directoryDrop)
         }
         return row
     }
@@ -275,5 +293,31 @@ extension AppController {
         guard store.session(withID: session) != nil else { return }
         store.moveSession(session, toWorkspace: workspace)
         reconcile()
+    }
+
+    func handleDirectoryDrop(_ paths: [String], onto widget: OpaquePointer) -> Bool {
+        let rowWorkspaceID = workspaceForHeader(widget)
+            ?? session(forRow: widget).flatMap { store.workspace(forSession: $0)?.id }
+        let workspaceID = SidebarDrop.resolveDirectoryWorkspace(sidebarMode: store.sidebarMode,
+            rowWorkspaceID: rowWorkspaceID, focusedWorkspaceID: store.focusedWorkspaceID,
+            currentWorkspaceID: store.currentWorkspaceID)
+        guard let workspaceID else { return false }
+        let directories = paths.filter {
+            var isDirectory: ObjCBool = false
+            return FileManager.default.fileExists(atPath: $0, isDirectory: &isDirectory) && isDirectory.boolValue
+        }
+        guard directories.count <= SidebarDrop.maximumDirectoryImportCount else {
+            showToast("Drop at most \(SidebarDrop.maximumDirectoryImportCount) directories at once")
+            return false
+        }
+        var created: [UUID] = []
+        for path in directories {
+            guard let session = store.addSession(toWorkspace: workspaceID, cwd: path) else { continue }
+            created.append(session.id)
+        }
+        guard let selected = created.last else { return false }
+        reconcile()
+        selectSession(selected)
+        return true
     }
 }

@@ -159,6 +159,59 @@ struct Surface: ParsableCommand {
     }
 }
 
+// MARK: - dashboard
+
+struct Dashboard: RequestCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Open a view-only grid of live sessions, or --close the open one.",
+        discussion: """
+        dashboard S1 S2 S3                 open named sessions (ids or unique prefixes, max 9 cells)
+        dashboard S1 S2 --font-size 12     use an absolute cell font size
+        dashboard S1 S2 --auto-size        scale cell fonts for the grid
+        dashboard --mru --auto-size        show recent sessions with scaled fonts
+        dashboard --close                  close the open dashboard
+        """)
+    @Argument(help: "Session ids or unique prefixes. Omit only with --mru or --close.")
+    var ids: [String] = []
+    @Option(name: .customLong("font-size"), help: "Absolute cell font size in points.")
+    var fontSize: Double?
+    @Flag(name: .long, help: "Scale cell fonts relative to the configured default.")
+    var autoSize = false
+    @Flag(name: .long, help: "Populate the grid from the window's recent sessions.")
+    var mru = false
+    @Flag(name: .long, help: "Close the open dashboard.")
+    var close = false
+    @OptionGroup var options: ClientOptions
+
+    func validate() throws {
+        if close {
+            guard ids.isEmpty, !mru, fontSize == nil, !autoSize else {
+                throw ValidationError("--close takes no ids, --mru, or font options")
+            }
+            return
+        }
+        if mru, !ids.isEmpty { throw ValidationError("--mru cannot be combined with session ids") }
+        guard !ids.isEmpty || mru else {
+            throw ValidationError("dashboard requires at least one session id (or --mru, or --close)")
+        }
+        if fontSize != nil, autoSize {
+            throw ValidationError("--font-size is mutually exclusive with --auto-size")
+        }
+        if let fontSize, !fontSize.isFinite || fontSize <= 0 {
+            throw ValidationError("--font-size must be a positive number")
+        }
+    }
+
+    func makeRequest() throws -> ControlRequest {
+        let args = ControlArgs(targets: ids.isEmpty ? nil : ids,
+                               close: close ? true : nil,
+                               fontSize: fontSize,
+                               autoSize: autoSize ? true : nil,
+                               mru: mru ? true : nil)
+        return ControlRequest(cmd: .dashboard, args: options.withWindow(args))
+    }
+}
+
 // MARK: - sidebar
 
 struct Sidebar: ParsableCommand {

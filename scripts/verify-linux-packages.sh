@@ -40,6 +40,10 @@ verify_payload() {
   test -x "$payload/bin/agtermctl.bin"
   test -f "$payload/lib/libghostty.so"
   test -d "$payload/share/ghostty"
+  test -x "$payload/share/agterm/agent-status/agterm-agent-status.sh"
+  test -x "$payload/share/agterm/agent-status/agterm-codex-status.sh"
+  test -f "$payload/share/agterm/agent-skill/SKILL.md"
+  [[ "$(<"$payload/share/agterm/VERSION")" == "$VERSION" ]]
   test -f "$payload/share/applications/com.umputun.agterm.linux.desktop"
   desktop-file-validate "$payload/share/applications/com.umputun.agterm.linux.desktop"
   file "$payload/bin/agterm-linux.bin" | grep -q 'x86-64'
@@ -93,6 +97,10 @@ test -x "$APPROOT/AppRun"
 test -x "$APPROOT/usr/bin/agterm-linux.bin"
 test -x "$APPROOT/usr/bin/agtermctl"
 test -x "$APPROOT/usr/bin/agtermctl.bin"
+test -x "$APPROOT/usr/share/agterm/agent-status/agterm-agent-status.sh"
+test -x "$APPROOT/usr/share/agterm/agent-status/agterm-codex-status.sh"
+test -f "$APPROOT/usr/share/agterm/agent-skill/SKILL.md"
+[[ "$(<"$APPROOT/usr/share/agterm/VERSION")" == "$VERSION" ]]
 find "$APPROOT/usr/lib" -name 'libgtk-4.so.1' -print -quit | grep -q .
 find "$APPROOT/usr/lib" -name 'libadwaita-1.so.0' -print -quit | grep -q .
 find "$APPROOT/usr/lib" -name 'libghostty.so' -print -quit | grep -q .

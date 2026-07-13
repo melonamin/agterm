@@ -20,7 +20,7 @@ struct LinuxControlDispatcher {
         switch request.cmd {
         case .tree:
             return actions.controlTree(window: request.args?.window)
-        case .sessionNew, .sessionSelect, .sessionGo, .sessionClose, .sessionRename,
+        case .sessionNew, .sessionSelect, .sessionGo, .sessionClose, .sessionRename, .sessionReveal,
                 .sessionMove, .sessionFlag, .sessionSeen, .sessionStatus:
             return dispatchSessionCommand(request)
         case .sessionSplit, .sessionScratch, .sessionFocus, .sessionResize, .surfaceZoom,
@@ -39,6 +39,8 @@ struct LinuxControlDispatcher {
             return dispatchAppCommand(request)
         case .windowRename, .windowResize, .windowMove, .windowZoom, .windowFullscreen:
             return dispatchWindowCommand(request)
+        case .dashboard:
+            return dispatchDashboard(request)
         default:
             return nil
         }
@@ -88,6 +90,8 @@ struct LinuxControlDispatcher {
                 return ControlResponse(ok: false, error: "session.rename requires a name")
             }
             return actions.renameSession(request.target, window: request.args?.window, name: name)
+        case .sessionReveal:
+            return actions.revealSession(request.target, window: request.args?.window)
         case .sessionMove:
             let args = request.args
             if args?.after != nil, args?.before != nil {
@@ -390,5 +394,42 @@ struct LinuxControlDispatcher {
         default:
             preconditionFailure("unexpected window command: \(request.cmd.rawValue)")
         }
+    }
+
+    private func dispatchDashboard(_ request: ControlRequest) -> ControlResponse {
+        let args = request.args
+        let targets = args?.targets ?? []
+        let fontSize = args?.fontSize
+        let autoSize = args?.autoSize ?? false
+        let mru = args?.mru ?? false
+        if args?.close == true {
+            guard targets.isEmpty, !mru, fontSize == nil, !autoSize else {
+                return ControlResponse(ok: false,
+                                       error: "dashboard --close takes no ids, --mru, or font options")
+            }
+            return actions.setDashboard(targets: [], window: args?.window, close: true,
+                                        fontMode: .untouched, mru: false)
+        }
+        if fontSize != nil, autoSize {
+            return ControlResponse(ok: false,
+                                   error: "dashboard: --font-size is mutually exclusive with --auto-size")
+        }
+        if let fontSize, !fontSize.isFinite || fontSize <= 0 {
+            return ControlResponse(ok: false, error: "dashboard --font-size must be a positive number")
+        }
+        let mode: DashboardFontMode = autoSize ? .auto : (fontSize.map(DashboardFontMode.fixed) ?? .untouched)
+        if mru {
+            guard targets.isEmpty else {
+                return ControlResponse(ok: false,
+                                       error: "dashboard --mru cannot be combined with explicit session ids")
+            }
+            return actions.setDashboard(targets: [], window: args?.window, close: false,
+                                        fontMode: mode, mru: true)
+        }
+        guard !targets.isEmpty else {
+            return ControlResponse(ok: false, error: "dashboard requires at least one session id")
+        }
+        return actions.setDashboard(targets: targets, window: args?.window, close: false,
+                                    fontMode: mode, mru: false)
     }
 }

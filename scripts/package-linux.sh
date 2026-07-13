@@ -34,7 +34,7 @@ APPDIR="$WORK/agterm.AppDir"
 
 rm -rf "$OUT"
 mkdir -p "$OUT" "$APPDIR/usr"
-"$ROOT/scripts/stage-linux.sh" "$PAYLOAD"
+AGTERM_PACKAGE_VERSION="$VERSION" "$ROOT/scripts/stage-linux.sh" "$PAYLOAD"
 
 TAR="$OUT/agterm-linux-v${VERSION}-x86_64.tar.gz"
 DEB="$OUT/agterm-linux-v${VERSION}-x86_64.deb"

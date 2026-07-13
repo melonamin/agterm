@@ -32,6 +32,9 @@ extension AppController {
         if targets.count == 1 {
             addContextButton(box, "Rename",
                              unsafeBitCast(onCtxRename as @convention(c) (OpaquePointer?, gpointer?) -> Void, to: GCallback.self))
+            addContextButton(box, "Reveal in Files",
+                             unsafeBitCast(onCtxRevealDirectory as @convention(c) (OpaquePointer?, gpointer?) -> Void,
+                                           to: GCallback.self))
         }
         if sessions.contains(where: { $0.agentIndicator.status != .idle }) {
             addContextButton(box, "Clear Status\(suffix)",
@@ -101,6 +104,12 @@ extension AppController {
         dismissContextMenu()
         selectSession(id)
         startRenameActive()
+    }
+
+    func contextRevealDirectory() {
+        guard let id = contextMenuSession else { return }
+        dismissContextMenu()
+        if !revealSessionDirectory(id) { showToast("Session directory is no longer available") }
     }
 
     func showWorkspaceContextMenu(_ rowData: gpointer?, x: Double, y: Double) {

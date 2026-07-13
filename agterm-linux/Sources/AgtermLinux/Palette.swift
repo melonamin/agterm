@@ -33,6 +33,12 @@ extension AppController {
         items.append(("Open Directory…", { gController?.openDirectory() }))
         // Preferences… (the Linux Settings surface; macOS uses the Settings scene / Cmd+,).
         items.append(("Preferences…", { gController?.showSettings() }))
+        items.append(("Install Agent Status Hooks…", {
+            if let controller = gController { LinuxAgentIntegrations.installHooks(in: controller) }
+        }))
+        items.append(("Install Agent Skill…", {
+            if let controller = gController { LinuxAgentIntegrations.installSkill(in: controller) }
+        }))
         // Linux has no global macOS-style Edit menu; expose the same terminal actions in the command palette.
         items.append(("Copy Selection", { gController?.activeSurface()?.performBindingAction("copy_to_clipboard") }))
         items.append(("Paste", { gController?.activeSurface()?.performBindingAction("paste_from_clipboard") }))
@@ -97,6 +103,7 @@ extension AppController {
         case .toggleSplit: return (.toggleSplit, { gController?.toggleSplit() })
         case .toggleScratch: return (.toggleScratch, { gController?.toggleScratch() })
         case .toggleTerminalZoom: return (.toggleTerminalZoom, { gController?.toggleTerminalZoom() })
+        case .dashboard: return (.dashboard, { gController?.toggleDashboard() })
         case .toggleSidebar: return (.toggleSidebar, { gController?.toggleSidebar() })
         case .toggleFlag: return (.toggleFlag, { gController?.toggleFlagActive() })
         case .focusWorkspace: return (.focusWorkspace, { gController?.focusActiveWorkspace() })

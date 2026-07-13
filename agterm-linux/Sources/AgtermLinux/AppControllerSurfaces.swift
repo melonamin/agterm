@@ -7,6 +7,7 @@ extension AppController {
     // MARK: - Reconcile
 
     func reconcile(preservingSurfaceIDs: Set<UUID> = []) {
+        let dashboardRestore = prepareDashboardForReconcile()
         clearInvalidTerminalZoom()
         for ws in store.workspaces {
             for s in ws.sessions {
@@ -24,14 +25,16 @@ extension AppController {
         showActive()
         updateTitle()
         updateAttentionButton()
+        restoreDashboardAfterReconcile(dashboardRestore)
     }
 
     /// The `AGTERM_*` env injected into a session's spawned shells (main/split/scratch) so the
     /// agent-status hooks + `{AGT_X}` tokens can call back over the control socket.
-    private func sessionEnv(for s: Session) -> [String: String] {
+    private func sessionEnv(for s: Session, pane: StatusPane? = nil) -> [String: String] {
         SurfaceEnvironment.session(sessionID: s.id, windowID: windowID,
                                    workspaceID: store.workspace(forSession: s.id)?.id,
-                                   socketPath: gControlServer.boundSocketPath ?? ControlServer.defaultSocketPath())
+                                   socketPath: gControlServer.boundSocketPath ?? ControlServer.defaultSocketPath(),
+                                   programVersion: LinuxAppMetadata.version, pane: pane)
     }
 
     /// Each session's deck page is an outer GtkStack ("main" = a GtkPaned holding the
@@ -52,7 +55,7 @@ extension AppController {
                                               foregroundInput: restoreInput,
                                               initialCommand: s.initialCommand)
         let surf = GhosttySurface(sessionID: s.id, cwd: s.effectiveCwd, command: plan.command,
-                                  env: sessionEnv(for: s), controller: self, fontSize: s.fontSize,
+                                  env: sessionEnv(for: s, pane: .left), controller: self, fontSize: s.fontSize,
                                   initialInput: plan.initialInput)
         let sid = s.id
         surf.onExit = { [weak self] in self?.closePrimaryPane(sid) }
@@ -72,7 +75,7 @@ extension AppController {
                 let command = s.scratchCommand
                 s.scratchCommand = nil
                 let sc = GhosttySurface(sessionID: s.id, cwd: s.effectiveCwd, command: command,
-                                        env: sessionEnv(for: s), controller: self,
+                                        env: sessionEnv(for: s, pane: .scratch), controller: self,
                                         reportsPaneState: false)
                 let sid = s.id
                 sc.onExit = { [weak self] in self?.closeScratch(sid) }
@@ -245,10 +248,15 @@ extension AppController {
     }
 
     func syncSplit(_ s: Session) {
+        if dashboard.isOpen,
+           dashboardRuntime.targets.values.contains(where: {
+               if case .session(let id, _) = $0 { return id == s.id }
+               return false
+           }) { return }
         guard let paned = sessionPanes[s.id] else { return }
         if s.isSplit, splitSurfaces[s.id] == nil {
             let split = GhosttySurface(sessionID: s.id, cwd: s.initialSplitCwd ?? s.effectiveCwd,
-                                       env: sessionEnv(for: s), controller: self,
+                                       env: sessionEnv(for: s, pane: .right), controller: self,
                                        isSplitPane: true, fontSize: s.fontSize,
                                        initialInput: consumeRestoreInput(&s.splitForegroundCommand))
             let sid = s.id

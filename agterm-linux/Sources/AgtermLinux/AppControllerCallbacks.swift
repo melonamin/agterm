@@ -186,6 +186,27 @@ let onHeaderDrop: @convention(c) (OpaquePointer?, UnsafePointer<GValue>?, Double
     }
 }
 
+let onSidebarDirectoryDrop: @convention(c)
+    (OpaquePointer?, UnsafePointer<GValue>?, Double, Double, gpointer?) -> gboolean = { target, value, _, _, _ in
+    MainActor.assumeIsolated {
+        guard let target, let value, let boxed = g_value_get_boxed(value),
+              let widget = gtk_event_controller_get_widget(target) else { return 0 }
+        let files = gdk_file_list_get_files(OpaquePointer(boxed))
+        defer { if let files { g_slist_free(files) } }
+        var paths: [String] = []
+        var node = files
+        while let current = node {
+            if let data = current.pointee.data,
+               let cpath = g_file_get_path(OpaquePointer(data)) {
+                paths.append(String(cString: cpath))
+                g_free(cpath)
+            }
+            node = current.pointee.next
+        }
+        return gController?.handleDirectoryDrop(paths, onto: OpaquePointer(widget)) == true ? 1 : 0
+    }
+}
+
 let onDeleteWorkspaceResponse: @convention(c) (OpaquePointer?, UnsafePointer<CChar>?, gpointer?) -> Void = { _, response, _ in
     let id = response.map { String(cString: $0) } ?? "cancel"
     MainActor.assumeIsolated { gController?.confirmWorkspaceDelete(id) }
@@ -227,6 +248,10 @@ let onCtxMove: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, data in
 
 let onCtxRename: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _ in
     MainActor.assumeIsolated { gController?.contextRename() }
+}
+
+let onCtxRevealDirectory: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _ in
+    MainActor.assumeIsolated { gController?.contextRevealDirectory() }
 }
 
 let onCtxClearStatus: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _ in

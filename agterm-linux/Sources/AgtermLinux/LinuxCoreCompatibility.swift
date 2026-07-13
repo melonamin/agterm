@@ -53,6 +53,7 @@ extension BuiltinAction {
         case .openDirectory: return Chord(mods: [.control, .shift], key: "o")
         case .closeSession: return Chord(mods: [.control, .shift], key: "q")
         case .toggleSplit: return Chord(mods: [.control, .shift], key: "d")
+        case .dashboard: return Chord(mods: [.control, .shift], key: "m")
         case .toggleScratch: return Chord(mods: [.control, .shift], key: "j")
         case .toggleSearch: return Chord(mods: [.control, .shift], key: "f")
         case .toggleSidebar: return Chord(mods: [.control, .shift], key: "s")

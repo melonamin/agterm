@@ -46,6 +46,21 @@ final class GhosttySurface: TerminalSurface {
     /// Per-surface overlay configs (session background/font override), retained until a newer overlay
     /// replaces them or the surface is torn down.
     private var ownedConfigs: [ghostty_config_t] = []
+    private var pendingFontRestore: Double?
+    var dashboardFontOverride: Double? {
+        didSet {
+            guard dashboardFontOverride != oldValue else { return }
+            applyWatermarkFromSession()
+            guard dashboardFontOverride == nil, let cleared = oldValue else {
+                pendingFontRestore = nil
+                return
+            }
+            let sessionFont = controller?.store.session(withID: sessionID)?.fontSize
+            let target = sessionFont ?? linuxSettingsStore().load().fontSize
+                ?? DashboardLayout.ghosttyDefaultFontSize
+            pendingFontRestore = abs(cleared - target) > 0.5 ? target : nil
+        }
+    }
 
     /// Set by the host: the shell process exited.
     var onExit: (() -> Void)?
@@ -270,7 +285,7 @@ final class GhosttySurface: TerminalSurface {
         let windowOpacity = linuxSettingsStore().load().backgroundOpacity ?? 1
         let overlay = WatermarkConfig.overlayText(watermark: session.backgroundWatermark,
                                                   resolvedImagePath: resolvedImagePath,
-                                                  fontSize: session.fontSize,
+                                                  fontSize: dashboardFontOverride ?? session.fontSize,
                                                   windowOpacity: windowOpacity)
         guard let config = GhosttyApp.shared.configWithOverlay(overlay) else { return }
         ghostty_surface_update_config(surface, config)
@@ -552,8 +567,13 @@ final class GhosttySurface: TerminalSurface {
     /// persist it on the session so a relaunch restores the zoom. setFontSize no-ops when unchanged,
     /// so a pure DPI change doesn't write. Per-session (both panes share the size).
     func reportFontSize() {
+        guard dashboardFontOverride == nil else { return }
         guard let size = currentFontSize() else { return }
         guard size > 0 else { return }
+        if let pending = pendingFontRestore {
+            pendingFontRestore = nil
+            if abs(size - pending) <= 0.5 { return }
+        }
         controller?.sessionDidReportFontSize(sessionID, size)
     }
 
@@ -576,6 +596,10 @@ final class GhosttySurface: TerminalSurface {
     func promoteToPrimary(onExit: (() -> Void)?) {
         isSplitPane = false
         self.onExit = onExit
+    }
+
+    func promoteToPrimaryPane() {
+        isSplitPane = false
     }
 
     /// The live foreground-process argv (via `/proc/<pid>/cmdline`), or nil at the shell prompt — the

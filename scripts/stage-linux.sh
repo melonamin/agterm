@@ -52,6 +52,10 @@ fi
   && cp -R "$APP/vendor/ghostty/share/terminfo" "$DEST/share/terminfo"
 
 [[ -d "$APP/Resources/icons" ]] && cp -R "$APP/Resources/icons" "$DEST/share/icons"
+mkdir -p "$DEST/share/agterm"
+cp -R "$ROOT/agterm/Resources/agent-status" "$DEST/share/agterm/agent-status"
+cp -R "$ROOT/agterm/Resources/agent-skill" "$DEST/share/agterm/agent-skill"
+printf '%s\n' "${AGTERM_PACKAGE_VERSION:-dev}" > "$DEST/share/agterm/VERSION"
 
 DESKTOP="$ROOT/packaging/linux/com.umputun.agterm.linux.desktop"
 install -m644 "$DESKTOP" "$DEST/share/applications/com.umputun.agterm.linux.desktop"
@@ -77,6 +81,7 @@ cat > "$DEST/bin/agterm-linux" <<'LAUNCH'
 HERE="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 export LD_LIBRARY_PATH="$HERE/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 [[ -d "$HERE/share/ghostty" ]] && export AGTERM_GHOSTTY_RESOURCES="$HERE/share/ghostty"
+[[ -f "$HERE/share/agterm/VERSION" ]] && export AGTERM_VERSION="$(cat "$HERE/share/agterm/VERSION")"
 exec "$HERE/bin/agterm-linux.bin" "$@"
 LAUNCH
 chmod 0755 "$DEST/bin/agterm-linux"

@@ -150,6 +150,7 @@ extension AppController {
         case .toggleSplit: toggleSplit()
         case .toggleScratch: toggleScratch()
         case .toggleTerminalZoom: toggleTerminalZoom()
+        case .dashboard: toggleDashboard()
         case .toggleSearch: toggleSearch()
         case .toggleSidebar: toggleSidebar()
         case .toggleFullscreen: toggleWindowFullscreen()

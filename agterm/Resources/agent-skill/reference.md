@@ -408,8 +408,9 @@ count is reported in the response text (`dropped N pane(s) beyond the 9-cell lim
 explicit ids and `--close`, composes with the font flags and `--window`, and errors with `no recent
 sessions` when the window has none.
 
-The most-recently-used grid also has a GUI opener — **⌘⇧D** (the `dashboard` built-in action, rebindable
-in `keymap.conf`), **Navigate ▸ Dashboard**, and the command palette's **Dashboard** entry all TOGGLE the
+The most-recently-used grid also has a GUI opener — **⌘⇧D** on macOS or **Ctrl⇧M** on Linux (the
+`dashboard` built-in action, rebindable in `keymap.conf`), **Navigate ▸ Dashboard** on macOS, and the
+command palette's **Dashboard** entry all TOGGLE the
 frontmost window's dashboard: open it over the window's most-recently-used sessions auto-sized (identical to
 `dashboard --mru --auto-size`) when closed, close it when open. It is a no-op while terminal zoom is active.
 There is no new control command for it — the socket `dashboard` command is unchanged.

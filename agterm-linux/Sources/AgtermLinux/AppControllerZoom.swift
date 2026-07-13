@@ -12,6 +12,7 @@ extension AppController {
     }
 
     func setTerminalZoom(_ mode: ControlToggleMode, target: TerminalZoomTarget?) {
+        if mode != .off, dashboard.isOpen { closeDashboard(refocus: false) }
         let old = terminalZoom.target
         terminalZoom.set(mode, target: target)
         let new = terminalZoom.target
@@ -26,7 +27,7 @@ extension AppController {
         if !zoomed { showActive() }
     }
 
-    private func surface(for target: TerminalZoomTarget) -> GhosttySurface? {
+    func surface(for target: TerminalZoomTarget) -> GhosttySurface? {
         switch target {
         case .quick: return quickSurface
         case .session(let id, .primary): return surfaces[id]
@@ -64,7 +65,7 @@ extension AppController {
         return true
     }
 
-    private func detach(_ widget: OpaquePointer, from target: TerminalZoomTarget) -> Bool {
+    func detach(_ widget: OpaquePointer, from target: TerminalZoomTarget) -> Bool {
         _ = g_object_ref(RAW(widget))
         switch target {
         case .quick:
@@ -94,29 +95,33 @@ extension AppController {
         gtk_overlay_set_child(host, nil)
         gtk_overlay_remove_overlay(deckOverlay, W(host))
         zoomHost = nil
+        reattach(surface.glArea, to: target)
+        g_object_unref(RAW(surface.glArea))
+        surface.refresh()
+    }
+
+    func reattach(_ widget: OpaquePointer, to target: TerminalZoomTarget) {
         switch target {
         case .quick:
             if let frame = quickFrame {
-                gtk_frame_set_child(cast(frame), W(surface.glArea))
+                gtk_frame_set_child(cast(frame), W(widget))
                 gtk_widget_set_visible(W(frame), quickVisible ? 1 : 0)
             }
         case .session(let id, .primary):
-            if let paned = sessionPanes[id] { gtk_paned_set_start_child(paned, W(surface.glArea)) }
+            if let paned = sessionPanes[id] { gtk_paned_set_start_child(paned, W(widget)) }
         case .session(let id, .split):
-            if let paned = sessionPanes[id] { gtk_paned_set_end_child(paned, W(surface.glArea)) }
+            if let paned = sessionPanes[id] { gtk_paned_set_end_child(paned, W(widget)) }
         case .session(let id, .scratch):
             if let stack = sessionStacks[id] {
-                "scratch".withCString { _ = gtk_stack_add_named(stack, W(surface.glArea), $0) }
+                "scratch".withCString { _ = gtk_stack_add_named(stack, W(widget), $0) }
             }
         case .session(let id, .overlay):
             if let frame = floatingOverlayFrames[id] {
-                gtk_frame_set_child(cast(frame), W(surface.glArea))
+                gtk_frame_set_child(cast(frame), W(widget))
             } else if let stack = sessionStacks[id] {
-                "overlay".withCString { _ = gtk_stack_add_named(stack, W(surface.glArea), $0) }
+                "overlay".withCString { _ = gtk_stack_add_named(stack, W(widget), $0) }
             }
         }
-        g_object_unref(RAW(surface.glArea))
-        surface.refresh()
     }
 }
 

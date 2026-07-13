@@ -122,6 +122,10 @@ private let onShutdown: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _
     .agterm-switcher label { padding: 3px 0; opacity: 0.6; }
     .agterm-switcher label.agterm-switcher-current { opacity: 1; font-weight: bold; }
     .agterm-gl-error { color: #ffffff; background-color: alpha(#1e2228, 0.96); padding: 24px; border-radius: 10px; border: 1px solid alpha(#e5a50a, 0.5); }
+    .agterm-dashboard { background-color: #171a1f; }
+    .agterm-dashboard-cell { border: 2px solid alpha(#ffffff, 0.16); border-radius: 10px; background-color: #1e2228; }
+    .agterm-dashboard-cell.selected { border-color: @accent_color; box-shadow: 0 0 0 2px alpha(@accent_color, 0.35); }
+    .agterm-dashboard-caption { background-color: alpha(#171a1f, 0.9); color: #ffffff; padding: 4px 8px; border-radius: 8px; }
     """
     css.withCString { gtk_css_provider_load_from_string(provider, $0) }
     // GTK_STYLE_PROVIDER_PRIORITY_APPLICATION = 600; the macro cast isn't available in Swift, the

@@ -53,6 +53,8 @@ extension AppController {
         cancelFullscreenTransitionTimeout()
         setTerminalZoom(.off, target: nil)
         TerminalZoomRegistry.shared.unregister(windowID)
+        closeDashboard(refocus: false)
+        DashboardControllerRegistry.shared.unregister(windowID)
         let w = gtk_widget_get_width(W(window)), h = gtk_widget_get_height(W(window))
         if w > 0, h > 0 { library.setGeometry(WindowGeometry.Size(width: Double(w), height: Double(h)), forWindow: windowID) }
         if linuxSettingsStore().load().restoreRunningCommand ?? false { captureForegroundCommands() }

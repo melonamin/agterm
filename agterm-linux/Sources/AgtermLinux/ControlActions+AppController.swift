@@ -80,7 +80,19 @@ extension AppController: ControlActions {
             splitFontSize: { [weak self] in self?.splitSurfaces[$0.id]?.currentFontSize() },
             scratchFontSize: { [weak self] in self?.scratchSurfaces[$0.id]?.currentFontSize() },
             quickVisible: { [weak self] in self?.quickVisible ?? false },
-            zoomedSurface: { [weak self] in self?.terminalZoom.target?.controlID }
+            zoomedSurface: { [weak self] in self?.terminalZoom.target?.controlID },
+            dashboardMembers: { [weak self] in self?.dashboard.isOpen == true
+                ? self?.dashboard.members.map(\.controlRef) : nil },
+            dashboardHighlighted: { [weak self] in self?.dashboard.highlighted?.controlRef },
+            dashboardFontSize: { [weak self] in self?.dashboard.appliedFontSize },
+            dashboardFontMode: { [weak self] in
+                guard let self, self.dashboard.isOpen else { return nil }
+                switch self.dashboard.fontMode {
+                case .untouched: return "untouched"
+                case .fixed: return "fixed"
+                case .auto: return "auto"
+                }
+            }
         )
         return ControlResponse(ok: true, result: ControlResult(tree: tree))
     }
@@ -181,6 +193,17 @@ extension AppController: ControlActions {
         case .success(let id):
             store.renameSession(id, to: name)
             rebuildAfterRename()
+            return ok(id)
+        }
+    }
+
+    func revealSession(_ target: String?, window: String?) -> ControlResponse {
+        switch resolveSessionResponse(target) {
+        case .failure(let response): return response
+        case .success(let id):
+            guard revealSessionDirectory(id) else {
+                return err("session cwd is not an existing directory")
+            }
             return ok(id)
         }
     }
@@ -453,6 +476,43 @@ extension AppController: ControlActions {
         }
         setTerminalZoom(mode, target: resolved)
         return ControlResponse(ok: true, result: ControlResult(id: resolved.controlID))
+    }
+
+    func setDashboard(targets: [String], window: String?, close: Bool,
+                      fontMode: DashboardFontMode, mru: Bool) -> ControlResponse {
+        if close {
+            closeDashboard(refocus: false)
+            return ok()
+        }
+        let members: [DashboardMember]
+        var notes: [String] = []
+        if mru {
+            members = store.dashboardMRUMembers(limit: DashboardLayout.maxCells)
+            guard !members.isEmpty else { return err("no recent sessions") }
+        } else {
+            let candidates = store.workspaces.flatMap { $0.sessions.map(\.id) }
+            var ids: [UUID] = []
+            var seen = Set<UUID>()
+            var unresolved: [String] = []
+            for target in targets {
+                if case .resolved(let id) = ControlResolve.resolve(target, candidates: candidates,
+                                                                   active: store.selectedSessionID) {
+                    if seen.insert(id).inserted { ids.append(id) }
+                } else {
+                    unresolved.append(target)
+                }
+            }
+            guard !ids.isEmpty else { return err("no dashboard sessions resolved") }
+            let expanded = store.dashboardMembers(for: ids, limit: DashboardLayout.maxCells)
+            members = expanded.members
+            if !unresolved.isEmpty { notes.append("unresolved: \(unresolved.joined(separator: ", "))") }
+            if expanded.dropped > 0 {
+                notes.append("dropped \(expanded.dropped) pane(s) beyond the \(DashboardLayout.maxCells)-cell limit")
+            }
+        }
+        openDashboard(members: members, fontMode: fontMode)
+        return notes.isEmpty ? ok() : ControlResponse(ok: true,
+            result: ControlResult(text: notes.joined(separator: "; ")))
     }
 
     func font(_ target: String?, window: String?, pane: String?, action: String) -> ControlResponse {

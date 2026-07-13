@@ -36,8 +36,7 @@ final class AppController {
     var fullscreenDesired: Bool?
     var fullscreenTransitionInFlight = false
     var fullscreenTransitionTimeout: UInt32 = 0
-    let terminalZoom = TerminalZoomController()
-    var zoomHost: OpaquePointer?
+    let terminalZoom = TerminalZoomController(); let dashboard = DashboardController(); let dashboardRuntime = DashboardRuntime(); var zoomHost: OpaquePointer?
     var splitToggleBtn: OpaquePointer?    // title-bar split toggle (swaps to .fill when active)
     var scratchToggleBtn: OpaquePointer?  // title-bar scratch toggle (swaps to .fill when active)
     var attentionButton: OpaquePointer?   // optional title-bar attention indicator button
@@ -154,7 +153,7 @@ final class AppController {
         gtk_widget_set_vexpand(W(deck), 1)
 
         sidebarBox = OpaquePointer(gtk_box_new(GTK_ORIENTATION_VERTICAL, 2))
-        gtk_widget_set_vexpand(W(sidebarBox), 1)
+        gtk_widget_set_vexpand(W(sidebarBox), 1); installSidebarDirectoryDropTarget()
 
         // Sidebar page: an EMPTY header (no top buttons, matching macOS) over a scrolled list. The
         // new-workspace / new-session / flagged actions live in the bottom bar below. The window
@@ -257,6 +256,7 @@ final class AppController {
             return TerminalZoomController.resolveTarget(store: self.store, quickTerminalVisible: self.quickVisible)
         }
         TerminalZoomRegistry.shared.register(windowID, controller: terminalZoom)
+        DashboardControllerRegistry.shared.register(windowID, controller: dashboard)
 
         // Become frontmost on activation (routes global shortcuts + control to this window);
         // tear down + deregister when the window closes.
@@ -434,7 +434,7 @@ final class AppController {
     /// split the session closes. `AppStore.closePrimaryPane` decides promote-vs-close.
     func closePrimaryPane(_ id: UUID) {
         // Capture the survivor (the split pane) before the store clears the session's split flags.
-        let survivor = splitSurfaces[id]
+        if dashboard.isOpen { closeDashboard(refocus: false) }; let survivor = splitSurfaces[id]
         store.closePrimaryPane(id)
         guard store.session(withID: id) != nil, let survivor, let paned = sessionPanes[id] else {
             reconcile()   // no split → the store closed the session; reconcile drops its widgets
@@ -480,8 +480,8 @@ final class AppController {
         if quickFrame == nil, visible, let overlay = deckOverlay {
             let q = GhosttySurface(sessionID: UUID(), cwd: Self.homeCwd,
                                    env: SurfaceEnvironment.quickTerminal(windowID: windowID,
-                                                                         socketPath: gControlServer.boundSocketPath
-                                                                            ?? ControlServer.defaultSocketPath()),
+                                                                         socketPath: gControlServer.boundSocketPath ?? ControlServer.defaultSocketPath(),
+                                                                         programVersion: LinuxAppMetadata.version),
                                    controller: self, reportsPaneState: false)
             q.onExit = { [weak self] in self?.closeQuick() }
             // A floating card panel over the FULL window content: rounded + shadowed (Adwaita "card"),

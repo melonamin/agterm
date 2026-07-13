@@ -41,14 +41,20 @@ Code layout:
 
 ### Linux feature parity and platform differences
 
-The `linux-port` branch carries the upstream v0.11 terminal model and control protocol, including
+The `linux-port` branch carries the upstream v0.12.1 terminal model and control protocol, including
 split/scratch/overlay terminals, Quick terminal input and read-back, terminal zoom, fullscreen,
 recently closed sessions with grouped undo, light/dark themes, configurable toolbar and sidebar text,
-and Ctrl/Shift multi-session selection with batch move, close, flag, status, and drag/drop actions.
+the view-only multi-session dashboard, and Ctrl/Shift multi-session selection with batch move, close,
+flag, status, and drag/drop actions.
 The GTK command palette provides actions that upstream exposes through macOS application menus.
 
 Linux uses desktop conventions: key labels are Ctrl/Shift rather than Command/Option, native chrome is
 provided by libadwaita, and local `file://` links open their containing folder in the default file manager.
+Ctrl+Shift+M toggles the most-recently-used dashboard because Ctrl+Shift+D remains the split shortcut.
+Dropping directories from the file manager onto a workspace or session row opens one session per directory,
+and **Reveal in Files** opens a session's focused working directory in the default file manager.
+The command palette includes the agent-status hook and agent-skill installers; packaged builds already include
+`agtermctl`, so Linux does not need the separate macOS command-line-tool installer.
 GTK4 restores and clamps window sizes to a connected display.
 It does not expose reliable programmatic window positioning: Wayland compositors own placement, and the
 GTK4 frontend intentionally leaves x/y geometry absent on both Wayland and X11 rather than reporting
