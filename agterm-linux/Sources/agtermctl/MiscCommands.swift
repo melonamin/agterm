@@ -1,4 +1,5 @@
 import ArgumentParser
+import Foundation
 import agtermCore
 
 // MARK: - keymap
@@ -81,14 +82,59 @@ struct Theme: ParsableCommand {
 
 // MARK: - quick
 
-struct Quick: RequestCommand {
-    static let configuration = CommandConfiguration(abstract: "Quick terminal (show|hide|toggle).")
-    @Argument(help: "Mode: show, hide, or toggle (default).") var mode: String = "toggle"
-    // the quick terminal is always the frontmost window's, so this carries no `--window` selector.
-    @OptionGroup var options: BasicOptions
+struct Quick: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Quick terminal visibility, input, and text read-back.",
+        subcommands: [Visibility.self, TypeText.self, Text.self],
+        defaultSubcommand: Visibility.self
+    )
 
-    func makeRequest() throws -> ControlRequest {
-        ControlRequest(cmd: .quick, args: ControlArgs(mode: mode))
+    struct Visibility: RequestCommand {
+        static let configuration = CommandConfiguration(commandName: "visibility",
+                                                        abstract: "Quick terminal visibility (show|hide|toggle).")
+        @Argument(help: "Mode: show, hide, or toggle (default).") var mode: String = "toggle"
+        @OptionGroup var options: BasicOptions
+
+        func makeRequest() throws -> ControlRequest {
+            ControlRequest(cmd: .quick, args: ControlArgs(mode: mode))
+        }
+    }
+
+    struct TypeText: RequestCommand {
+        static let configuration = CommandConfiguration(commandName: "type",
+                                                        abstract: "Inject text into the quick terminal.")
+        @Argument(help: "Text to inject (omit with --stdin).") var text: String?
+        @Flag(name: .long, help: "Read text from stdin instead of an argument.") var stdin = false
+        @OptionGroup var options: BasicOptions
+
+        func makeRequest() throws -> ControlRequest {
+            let payload: String
+            if stdin {
+                payload = String(data: FileHandle.standardInput.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            } else if let text {
+                payload = text
+            } else {
+                throw ValidationError("provide TEXT or --stdin")
+            }
+            return ControlRequest(cmd: .quickType, args: ControlArgs(text: payload))
+        }
+    }
+
+    struct Text: RequestCommand {
+        static let configuration = CommandConfiguration(commandName: "text",
+                                                        abstract: "Print the quick terminal buffer as plain text.")
+        @Flag(name: .long, help: "Read the full screen and scrollback.") var all = false
+        @Option(name: .long, help: "Keep only the last N lines.") var lines: Int?
+        @OptionGroup var options: BasicOptions
+
+        func validate() throws {
+            if all, lines != nil { throw ValidationError("use either --all or --lines, not both") }
+            if let lines, lines <= 0 { throw ValidationError("--lines must be greater than 0") }
+        }
+
+        func makeRequest() throws -> ControlRequest {
+            ControlRequest(cmd: .quickText, args: ControlArgs(all: all ? true : nil, lines: lines))
+        }
     }
 }
 

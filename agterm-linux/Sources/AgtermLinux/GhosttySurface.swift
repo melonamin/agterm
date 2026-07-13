@@ -552,10 +552,15 @@ final class GhosttySurface: TerminalSurface {
     /// persist it on the session so a relaunch restores the zoom. setFontSize no-ops when unchanged,
     /// so a pure DPI change doesn't write. Per-session (both panes share the size).
     func reportFontSize() {
-        guard let surface else { return }
-        let size = Double(ghostty_surface_inherited_config(surface, GHOSTTY_SURFACE_CONTEXT_WINDOW).font_size)
+        guard let size = currentFontSize() else { return }
         guard size > 0 else { return }
         controller?.sessionDidReportFontSize(sessionID, size)
+    }
+
+    func currentFontSize() -> Double? {
+        guard let surface else { return nil }
+        let size = Double(ghostty_surface_inherited_config(surface, GHOSTTY_SURFACE_CONTEXT_WINDOW).font_size)
+        return size > 0 ? size : nil
     }
 
     func handleProcessExit() {

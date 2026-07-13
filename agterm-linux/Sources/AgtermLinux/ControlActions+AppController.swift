@@ -75,7 +75,12 @@ extension AppController: ControlActions {
     func controlTree(window: String?) -> ControlResponse {
         let tree = store.controlTree(
             foreground: { [weak self] session in self?.surfaces[session.id]?.foregroundCommand() },
-            splitForeground: { [weak self] session in self?.splitSurfaces[session.id]?.foregroundCommand() }
+            splitForeground: { [weak self] session in self?.splitSurfaces[session.id]?.foregroundCommand() },
+            fontSize: { ($0.addressableSurface as? GhosttySurface)?.currentFontSize() },
+            splitFontSize: { ($0.splitSurface as? GhosttySurface)?.currentFontSize() },
+            scratchFontSize: { ($0.scratchSurface as? GhosttySurface)?.currentFontSize() },
+            quickVisible: { [weak self] in self?.quickVisible ?? false },
+            zoomedSurface: { nil }
         )
         return ControlResponse(ok: true, result: ControlResult(tree: tree))
     }
@@ -759,7 +764,12 @@ extension AppController: ControlActions {
     }
 
     func windowList() -> ControlResponse {
-        ControlResponse(ok: true, result: ControlResult(windows: library.controlWindowNodes()))
+        let nodes = library.controlWindowNodes(flags: { id in
+            guard let ctl = gWindows[id] else { return nil }
+            return (fullscreen: gtk_window_is_fullscreen(WIN(ctl.windowPointer)) != 0,
+                    zoomed: gtk_window_is_maximized(WIN(ctl.windowPointer)) != 0)
+        })
+        return ControlResponse(ok: true, result: ControlResult(windows: nodes))
     }
 
     func windowSelect(_ target: String?) async -> ControlResponse {
