@@ -70,7 +70,7 @@ private let onOpen: @convention(c) (OpaquePointer?, UnsafeMutablePointer<OpaqueP
     let revealAction = g_simple_action_new("reveal", g_variant_type_new("s"))
     connect(revealAction, "activate", unsafeBitCast(onRevealAction as @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void, to: GCallback.self))
     g_action_map_add_action(app, revealAction)
-    gLibrary = WindowLibrary()
+    gLibrary = WindowLibrary(directory: linuxStateDirectory())
     ensureStarterFiles()
     installAppCSS()
     installStatusColorCSS()
@@ -87,6 +87,17 @@ private let onOpen: @convention(c) (OpaquePointer?, UnsafeMutablePointer<OpaqueP
     let ids = gLibrary.openIDs()
     let toOpen = ids.isEmpty ? [gLibrary.windows.first?.id].compactMap { $0 } : ids
     for id in toOpen { openWindow(id) }
+}
+
+func linuxStateDirectory() -> URL {
+    if let path = ProcessInfo.processInfo.environment["AGTERM_STATE_DIR"], !path.isEmpty {
+        return URL(fileURLWithPath: path, isDirectory: true)
+    }
+    return PersistenceStore.defaultDirectory
+}
+
+func linuxSettingsStore() -> SettingsStore {
+    SettingsStore(directory: linuxStateDirectory())
 }
 
 /// On clean quit: capture each pane's foreground command (when restore is enabled), then flush every
@@ -124,7 +135,7 @@ private let onShutdown: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _
 /// reloadable provider above the app CSS — re-callable when the Settings color pickers change them.
 @MainActor func installStatusColorCSS() {
     guard let display = gdk_display_get_default() else { return }
-    let s = SettingsStore().load()
+    let s = linuxSettingsStore().load()
     let css = """
     .agterm-status-blocked { color: \(s.blockedStatusColorHex ?? "#e5a50a"); }
     .agterm-status-completed { color: \(s.completedStatusColorHex ?? "#2ec27e"); }

@@ -140,7 +140,7 @@ extension AppController {
         case .newSession: newSession()
         case .openDirectory: openDirectory()
         case .renameSession: startRenameActive()
-        case .closeSession: closeSession(sessionID)
+        case .closeSession: requestCloseSession(sessionID)
         case .clearStatus: clearActiveStatus()
         case .increaseFontSize: focusedSurface()?.performBindingAction(FontBindingAction.increase)
         case .decreaseFontSize: focusedSurface()?.performBindingAction(FontBindingAction.decrease)

@@ -5,6 +5,7 @@ import CGtk
 import agtermCore
 
 @inline(__always) func W(_ p: OpaquePointer?) -> UnsafeMutablePointer<GtkWidget>? { p.map { UnsafeMutablePointer($0) } }
+@inline(__always) func GLBR(_ p: OpaquePointer?) -> UnsafeMutablePointer<GtkListBoxRow>? { p.map { UnsafeMutablePointer($0) } }
 @inline(__always) func GLA(_ p: OpaquePointer?) -> UnsafeMutablePointer<GtkGLArea>? { p.map { UnsafeMutablePointer($0) } }
 @inline(__always) func WIN(_ p: OpaquePointer?) -> UnsafeMutablePointer<GtkWindow>? { p.map { UnsafeMutablePointer($0) } }
 @inline(__always) func APPW(_ p: OpaquePointer?) -> UnsafeMutablePointer<GtkApplication>? { p.map { UnsafeMutablePointer($0) } }

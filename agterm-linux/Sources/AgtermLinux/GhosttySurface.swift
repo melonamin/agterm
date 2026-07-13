@@ -140,6 +140,10 @@ final class GhosttySurface: TerminalSurface {
         createSurface()
     }
 
+    func realizeWidgetIfNeeded() {
+        gtk_widget_realize(W(glArea))
+    }
+
     private func createSurface() {
         guard surface == nil, let app = GhosttyApp.shared.app else { return }
         let scale = gtk_widget_get_scale_factor(W(glArea))
@@ -263,7 +267,7 @@ final class GhosttySurface: TerminalSurface {
     func applyWatermarkFromSession() {
         guard let surface, let session = controller?.store.session(withID: sessionID) else { return }
         let resolvedImagePath = WatermarkRenderer.materialize(session.backgroundWatermark, sessionID: session.id)
-        let windowOpacity = SettingsStore().load().backgroundOpacity ?? 1
+        let windowOpacity = linuxSettingsStore().load().backgroundOpacity ?? 1
         let overlay = WatermarkConfig.overlayText(watermark: session.backgroundWatermark,
                                                   resolvedImagePath: resolvedImagePath,
                                                   fontSize: session.fontSize,

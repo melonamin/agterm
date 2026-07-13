@@ -50,7 +50,7 @@ import agtermCore
 /// restore-running-command feature). Resolves the config directory once for all three.
 @MainActor func ensureStarterFiles() {
     let env = ProcessInfo.processInfo.environment
-    let dir = ConfigPaths.configDirectory(setting: SettingsStore().load().configDirectory,
+    let dir = ConfigPaths.configDirectory(setting: linuxSettingsStore().load().configDirectory,
                                            stateDir: env["AGTERM_STATE_DIR"],
                                            home: FileManager.default.homeDirectoryForCurrentUser)
     func ensure(_ path: URL, _ content: @autoclosure () -> String) {
@@ -66,7 +66,7 @@ import agtermCore
 /// Capture foreground commands (when restore is on), then flush every open window's snapshot + index.
 @MainActor func flushOnQuit() {
     guard let library = gLibrary else { return }
-    if SettingsStore().load().restoreRunningCommand ?? false {
+    if linuxSettingsStore().load().restoreRunningCommand ?? false {
         for ctl in gWindows.values { ctl.captureForegroundCommands() }
     }
     // capture each open window's on-screen size so it restores at the same size on reopen.

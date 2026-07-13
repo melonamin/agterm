@@ -1,0 +1,456 @@
+import CGtk
+import Foundation
+import agtermCore
+
+@MainActor
+extension AppController {
+    // MARK: - Reconcile
+
+    func reconcile() {
+        for ws in store.workspaces {
+            for s in ws.sessions {
+                ensurePrimary(s)
+                syncSplit(s)
+                syncScratch(s)
+                syncOverlay(s)   // after scratch so an open overlay wins the visible child
+            }
+        }
+        // Drop closed sessions.
+        let live = Set(store.workspaces.flatMap { $0.sessions.map(\.id) })
+        for id in Array(surfaces.keys) where !live.contains(id) { removeSession(id) }
+        rebuildSidebar()
+        showActive()
+        updateTitle()
+        updateAttentionButton()
+    }
+
+    /// The `AGTERM_*` env injected into a session's spawned shells (main/split/scratch) so the
+    /// agent-status hooks + `{AGT_X}` tokens can call back over the control socket.
+    private func sessionEnv(for s: Session) -> [String: String] {
+        SurfaceEnvironment.session(sessionID: s.id, windowID: windowID,
+                                   workspaceID: store.workspace(forSession: s.id)?.id,
+                                   socketPath: gControlServer.boundSocketPath ?? ControlServer.defaultSocketPath())
+    }
+
+    /// Each session's deck page is an outer GtkStack ("main" = a GtkPaned holding the
+    /// pane(s), "scratch" = the full-overlay scratch shell). The primary pane is the
+    /// paned's start child.
+    private func ensurePrimary(_ s: Session) {
+        guard surfaces[s.id] == nil,
+              let paned = OpaquePointer(gtk_paned_new(GTK_ORIENTATION_HORIZONTAL)),
+              let stack = op(gtk_stack_new()) else { return }
+        sessionPanes[s.id] = paned
+        connect(paned, "notify::position", unsafeBitCast(onPanedPosition as @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void, to: GCallback.self))
+        sessionStacks[s.id] = stack
+        let hadForeground = s.foregroundCommand != nil
+        let restoreInput = consumeRestoreInput(&s.foregroundCommand)
+        let plan = CommandRestore.restorePlan(wasRestored: s.wasRestored,
+                                              restoreEnabled: restoreEnabled,
+                                              hadForeground: hadForeground,
+                                              foregroundInput: restoreInput,
+                                              initialCommand: s.initialCommand)
+        let surf = GhosttySurface(sessionID: s.id, cwd: s.effectiveCwd, command: plan.command,
+                                  env: sessionEnv(for: s), controller: self, fontSize: s.fontSize,
+                                  initialInput: plan.initialInput)
+        let sid = s.id
+        surf.onExit = { [weak self] in self?.closePrimaryPane(sid) }
+        s.surface = surf
+        surfaces[s.id] = surf
+        gtk_paned_set_start_child(paned, W(surf.glArea))
+        "main".withCString { _ = gtk_stack_add_named(stack, W(paned), $0) }
+        s.id.uuidString.withCString { _ = gtk_stack_add_named(deck, W(stack), $0) }
+    }
+
+    /// Create/show/hide the scratch shell to match the session's scratch state. Kept
+    /// alive (hidden) when toggled off; removed only when its shell exits.
+    private func syncScratch(_ s: Session) {
+        guard let stack = sessionStacks[s.id] else { return }
+        if s.scratchActive {
+            if scratchSurfaces[s.id] == nil {
+                let command = s.scratchCommand
+                s.scratchCommand = nil
+                let sc = GhosttySurface(sessionID: s.id, cwd: s.effectiveCwd, command: command,
+                                        env: sessionEnv(for: s), controller: self,
+                                        reportsPaneState: false)
+                let sid = s.id
+                sc.onExit = { [weak self] in self?.closeScratch(sid) }
+                s.scratchSurface = sc
+                scratchSurfaces[s.id] = sc
+                "scratch".withCString { _ = gtk_stack_add_named(stack, W(sc.glArea), $0) }
+            }
+            "scratch".withCString { gtk_stack_set_visible_child_name(stack, $0) }
+        } else {
+            "main".withCString { gtk_stack_set_visible_child_name(stack, $0) }
+            if let sc = scratchSurfaces[s.id], s.scratchSurface == nil {
+                gtk_stack_remove(stack, W(sc.glArea))
+                scratchSurfaces[s.id] = nil
+            }
+        }
+    }
+
+    /// Create/show/hide the ephemeral overlay terminal (runs `overlayCommand` over the session).
+    private func syncOverlay(_ s: Session) {
+        guard let stack = sessionStacks[s.id] else { return }
+        if s.overlayActive {
+            if overlaySurfaces[s.id] == nil, let cmd = s.overlayCommand {
+                let codePath = NSTemporaryDirectory() + "agterm-ovl-\(UUID().uuidString).code"
+                var ovlEnv = sessionEnv(for: s)
+                ovlEnv[OverlayCapture.cmdEnvKey] = cmd
+                ovlEnv[OverlayCapture.codeEnvKey] = codePath
+                let ov = GhosttySurface(sessionID: s.id, cwd: s.overlayCwd ?? s.effectiveCwd,
+                                        command: "sh -c " + Self.singleQuoted(OverlayCapture.shellLine),
+                                        env: ovlEnv, controller: self, waitAfterCommand: s.overlayWait,
+                                        reportsPaneState: false)
+                let sid = s.id
+                let owner = windowID
+                ov.onExit = {
+                    runOnMain { MainActor.assumeIsolated {
+                        if let txt = try? String(contentsOfFile: codePath, encoding: .utf8),
+                           let code = OverlayCapture.parseExitCode(txt) {
+                            gWindows[owner]?.store.recordOverlayExit(sid, code: code)
+                        }
+                        try? FileManager.default.removeItem(atPath: codePath)
+                        gWindows[owner]?.closeOverlay(sid)
+                    } }
+                }
+                s.overlaySurface = ov
+                overlaySurfaces[s.id] = ov
+                if let pct = s.overlaySizePercent, let overlay = deckOverlay {
+                    let frame = OpaquePointer(gtk_frame_new(nil))
+                    gtk_widget_add_css_class(W(frame), "card")
+                    gtk_widget_add_css_class(W(frame), "agterm-quick")
+                    gtk_widget_set_halign(W(frame), GTK_ALIGN_CENTER)
+                    gtk_widget_set_valign(W(frame), GTK_ALIGN_CENTER)
+                    let dw = gtk_widget_get_width(W(overlay)), dh = gtk_widget_get_height(W(overlay))
+                    gtk_widget_set_size_request(W(frame), max(Int32(240), dw * Int32(pct) / 100),
+                                                max(Int32(160), dh * Int32(pct) / 100))
+                    gtk_frame_set_child(cast(frame), W(ov.glArea))
+                    gtk_overlay_add_overlay(overlay, W(frame))
+                    gtk_widget_set_visible(W(frame), s.id == store.selectedSessionID ? 1 : 0)
+                    floatingOverlayFrames[s.id] = frame
+                } else {
+                    "overlay".withCString { _ = gtk_stack_add_named(stack, W(ov.glArea), $0) }
+                }
+                ov.realizeWidgetIfNeeded()
+            }
+            if floatingOverlayFrames[s.id] != nil {
+                if s.id == store.selectedSessionID { overlaySurfaces[s.id]?.grabFocus() }
+            } else {
+                "overlay".withCString { gtk_stack_set_visible_child_name(stack, $0) }
+                if s.id == store.selectedSessionID { overlaySurfaces[s.id]?.grabFocus() }
+            }
+        } else if let ov = overlaySurfaces[s.id], s.overlaySurface == nil {
+            if let frame = floatingOverlayFrames[s.id], let overlay = deckOverlay {
+                gtk_overlay_remove_overlay(overlay, W(frame))
+                floatingOverlayFrames[s.id] = nil
+            } else {
+                (s.scratchActive ? "scratch" : "main").withCString { gtk_stack_set_visible_child_name(stack, $0) }
+                gtk_stack_remove(stack, W(ov.glArea))
+            }
+            overlaySurfaces[s.id] = nil
+        }
+    }
+
+    private static func singleQuoted(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+
+    /// The overlay's command exited (or a control close): tear it down + reconcile.
+    func closeOverlay(_ id: UUID) {
+        store.closeOverlay(id)
+        reconcile()
+    }
+
+    /// Capture each pane's live foreground command into the session model so a restart can re-run it.
+    func captureForegroundCommands() {
+        let denylistPath = ConfigPaths.restoreDenylistPath(configDirectory: configDirectory())
+        let denylist = (try? String(contentsOf: denylistPath, encoding: .utf8)).map(CommandRestore.parseDenylist)
+            ?? ["tmux", "screen", "zellij"]
+        for ws in store.workspaces {
+            for s in ws.sessions {
+                if let argv = surfaces[s.id]?.foregroundCommand(), CommandRestore.shouldRestore(argv: argv, denylist: denylist) {
+                    s.foregroundCommand = argv
+                } else {
+                    s.foregroundCommand = nil
+                }
+                let splitArgv = s.isSplit ? splitSurfaces[s.id]?.foregroundCommand() : nil
+                s.splitForegroundCommand = splitArgv.flatMap {
+                    CommandRestore.shouldRestore(argv: $0, denylist: denylist) ? $0 : nil
+                }
+            }
+        }
+    }
+
+    private var restoreEnabled: Bool { linuxSettingsStore().load().restoreRunningCommand ?? false }
+
+    private func consumeRestoreInput(_ argv: inout [String]?) -> String? {
+        guard let captured = argv else { return nil }
+        argv = nil
+        guard restoreEnabled else { return nil }
+        return CommandRestore.shellQuotedLine(captured) + "\n"
+    }
+
+    func loadKeymapCommands() -> (commands: [CustomCommand], diagnostics: Int) {
+        let (keymap, diags) = KeymapStore(configDirectory: configDirectory()).load()
+        return (keymap.commands, diags.count)
+    }
+
+    func runCustomCommand(_ cmd: CustomCommand) {
+        let s = store.activeSession
+        let workspace = s.flatMap { store.workspace(forSession: $0.id) }
+        let context = CommandContext(sessionID: s?.id.uuidString ?? "", sessionName: s?.displayName ?? "",
+                                     sessionPWD: s?.effectiveCwd ?? "",
+                                     workspaceID: workspace?.id.uuidString ?? "",
+                                     workspaceName: workspace?.name ?? "",
+                                     windowID: windowID.uuidString,
+                                     windowName: gLibrary.windows.first(where: { $0.id == windowID })?.name ?? "",
+                                     selection: activeSurface()?.readSelection() ?? "",
+                                     socket: gControlServer.boundSocketPath ?? "")
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/bin/sh")
+        proc.arguments = ["-c", context.expand(cmd.command)]
+        var env = ProcessInfo.processInfo.environment
+        for (key, value) in context.environment() { env[key] = value }
+        proc.environment = env
+        if !context.sessionPWD.isEmpty {
+            proc.currentDirectoryURL = URL(fileURLWithPath: context.sessionPWD, isDirectory: true)
+        }
+        let name = cmd.name
+        proc.terminationHandler = { p in
+            let code = p.terminationStatus
+            guard code != 0 else { return }
+            runOnMain { MainActor.assumeIsolated { gController?.showToast("command failed (exit \(code)): \(name)") } }
+        }
+        try? proc.run()
+    }
+
+    func configDirectory() -> URL {
+        ConfigPaths.configDirectory(setting: linuxSettingsStore().load().configDirectory,
+                                    stateDir: ProcessInfo.processInfo.environment["AGTERM_STATE_DIR"],
+                                    home: FileManager.default.homeDirectoryForCurrentUser)
+    }
+
+    func editKeymap() {
+        guard let id = store.selectedSessionID else { return }
+        let path = ConfigPaths.keymapPath(configDirectory: configDirectory()).path
+        store.openOverlay(id, command: ConfigPaths.editorCommand(forPath: path), sizePercent: 95)
+        reconcile()
+    }
+
+    func editGhosttyConfig() {
+        guard let id = store.selectedSessionID else { return }
+        let path = ConfigPaths.ghosttyConfigPath(configDirectory: configDirectory()).path
+        store.openOverlay(id, command: ConfigPaths.editorCommand(forPath: path), sizePercent: 95)
+        reconcile()
+    }
+
+    func syncSplit(_ s: Session) {
+        guard let paned = sessionPanes[s.id] else { return }
+        if s.isSplit, splitSurfaces[s.id] == nil {
+            let split = GhosttySurface(sessionID: s.id, cwd: s.initialSplitCwd ?? s.effectiveCwd,
+                                       env: sessionEnv(for: s), controller: self,
+                                       isSplitPane: true, fontSize: s.fontSize,
+                                       initialInput: consumeRestoreInput(&s.splitForegroundCommand))
+            let sid = s.id
+            split.onExit = { [weak self] in self?.closeSplitPane(sid) }
+            s.splitSurface = split
+            splitSurfaces[s.id] = split
+            gtk_paned_set_end_child(paned, W(split.glArea))
+        }
+        if let split = splitSurfaces[s.id] {
+            if s.splitSurface == nil {
+                if let primary = surfaces[s.id]?.glArea, gtk_paned_get_start_child(paned) != W(primary) {
+                    gtk_paned_set_start_child(paned, nil)
+                    gtk_paned_set_start_child(paned, W(primary))
+                }
+                gtk_paned_set_end_child(paned, nil)
+                splitSurfaces[s.id] = nil
+            } else {
+                layoutSplit(s, paned: paned, split: split)
+                if s.isSplit {
+                    split.refresh()
+                    surfaces[s.id]?.refresh()
+                    restoreSplitRatio(s)
+                }
+            }
+        }
+        updatePaneDim(s)
+    }
+
+    private func layoutSplit(_ s: Session, paned: OpaquePointer, split: GhosttySurface) {
+        guard let primary = surfaces[s.id]?.glArea else { return }
+        let primaryWidget = W(primary)
+        let splitWidget = W(split.glArea)
+        let showingBoth = s.isSplit
+        let showingSplitMaximized = !s.isSplit && s.splitFocused
+        if showingBoth {
+            if gtk_paned_get_start_child(paned) != primaryWidget {
+                gtk_paned_set_start_child(paned, nil)
+                gtk_paned_set_start_child(paned, primaryWidget)
+            }
+            if gtk_paned_get_end_child(paned) != splitWidget {
+                gtk_paned_set_end_child(paned, nil)
+                gtk_paned_set_end_child(paned, splitWidget)
+            }
+            gtk_widget_set_visible(primaryWidget, 1)
+            gtk_widget_set_visible(splitWidget, 1)
+        } else if showingSplitMaximized {
+            if gtk_paned_get_end_child(paned) == splitWidget { gtk_paned_set_end_child(paned, nil) }
+            if gtk_paned_get_start_child(paned) != splitWidget {
+                gtk_paned_set_start_child(paned, nil)
+                gtk_paned_set_start_child(paned, splitWidget)
+            }
+            gtk_widget_set_visible(splitWidget, 1)
+        } else {
+            if gtk_paned_get_end_child(paned) == splitWidget { gtk_paned_set_end_child(paned, nil) }
+            if gtk_paned_get_start_child(paned) != primaryWidget {
+                gtk_paned_set_start_child(paned, nil)
+                gtk_paned_set_start_child(paned, primaryWidget)
+            }
+            gtk_widget_set_visible(primaryWidget, 1)
+        }
+    }
+
+    func capturePanedRatio(_ paned: OpaquePointer?) {
+        guard let paned, let (sid, _) = sessionPanes.first(where: { $0.value == paned }),
+              !splitCaptureSuppressed.contains(sid) else { return }
+        let width = gtk_widget_get_width(W(paned))
+        guard width > 0 else { return }
+        let ratio = Double(gtk_paned_get_position(paned)) / Double(width)
+        guard ratio > AppStore.splitRatioMin, ratio < AppStore.splitRatioMax,
+              let s = store.session(withID: sid) else { return }
+        if let cur = s.splitRatio, abs(cur - ratio) < 0.004 { return }
+        s.splitRatio = ratio
+        splitRatioDebouncer.schedule(after: 0.4) { [weak self] in self?.store.save() }
+    }
+
+    private func restoreSplitRatio(_ s: Session) {
+        guard let paned = sessionPanes[s.id], s.splitRatio != nil else { return }
+        splitCaptureSuppressed.insert(s.id)
+        if tryRestorePanedRatio(paned) != 0 {
+            _ = g_timeout_add(50, restorePanedRatioTick, UnsafeMutableRawPointer(paned))
+        }
+    }
+
+    @discardableResult func tryRestorePanedRatio(_ paned: OpaquePointer?) -> gboolean {
+        guard let paned, let (sid, _) = sessionPanes.first(where: { $0.value == paned }) else { return 0 }
+        guard let ratio = store.session(withID: sid)?.splitRatio else { splitCaptureSuppressed.remove(sid); return 0 }
+        let width = gtk_widget_get_width(W(paned))
+        guard width > 0 else { return 1 }
+        gtk_paned_set_position(paned, Int32(ratio * Double(width)))
+        splitCaptureSuppressed.remove(sid)
+        return 0
+    }
+
+    func applySplitRatio(to session: Session) {
+        store.save()
+        guard let paned = sessionPanes[session.id], session.splitRatio != nil else { return }
+        splitCaptureSuppressed.insert(session.id)
+        if tryRestorePanedRatio(paned) != 0 {
+            _ = g_timeout_add(50, restorePanedRatioTick, UnsafeMutableRawPointer(paned))
+        }
+    }
+
+    private func removeSession(_ id: UUID) {
+        splitCaptureSuppressed.remove(id)
+        scratchSurfaces[id]?.teardown()
+        scratchSurfaces[id] = nil
+        if let frame = floatingOverlayFrames[id], let overlay = deckOverlay {
+            gtk_overlay_remove_overlay(overlay, W(frame))
+            floatingOverlayFrames[id] = nil
+        }
+        overlaySurfaces[id]?.teardown()
+        overlaySurfaces[id] = nil
+        splitSurfaces[id]?.teardown()
+        splitSurfaces[id] = nil
+        surfaces[id]?.teardown()
+        if let stack = sessionStacks[id] { gtk_stack_remove(deck, W(stack)) }
+        surfaces[id] = nil
+        sessionPanes[id] = nil
+        sessionStacks[id] = nil
+    }
+
+    func showActive() {
+        guard let active = store.activeSession else { return }
+        active.id.uuidString.withCString { gtk_stack_set_visible_child_name(deck, $0) }
+        updateFloatingOverlayVisibility(activeID: active.id)
+        if active.overlayActive {
+            overlaySurfaces[active.id]?.grabFocus()
+        } else if active.scratchActive {
+            scratchSurfaces[active.id]?.grabFocus()
+        } else if active.splitFocused, let split = splitSurfaces[active.id] {
+            split.grabFocus()
+        } else {
+            surfaces[active.id]?.grabFocus()
+        }
+        updateToggleIcons()
+    }
+
+    private func updateFloatingOverlayVisibility(activeID: UUID) {
+        for (id, frame) in floatingOverlayFrames {
+            let visible = id == activeID && (store.session(withID: id)?.overlayActive == true)
+            gtk_widget_set_visible(W(frame), visible ? 1 : 0)
+        }
+    }
+
+    func surfaceDidReportProgress(_ id: UUID, percent: Int?) {
+        if let percent { sessionProgress[id] = percent } else { sessionProgress.removeValue(forKey: id) }
+        if id == store.selectedSessionID { updateTitle() }
+    }
+
+    func updateTitle() {
+        var title = store.activeSession?.displayName ?? "agterm"
+        if let id = store.selectedSessionID, let p = sessionProgress[id] {
+            title = (p < 0 ? "⋯ " : "\(p)% ") + title
+        }
+        title.withCString { gtk_window_set_title(WIN(window), $0) }
+    }
+
+    func monospaceFonts() -> [String] {
+        guard let ctx = gtk_widget_get_pango_context(W(window)) else { return [] }
+        var families: UnsafeMutablePointer<UnsafeMutablePointer<PangoFontFamily>?>?
+        var count: Int32 = 0
+        pango_context_list_families(ctx, &families, &count)
+        defer { g_free(families) }
+        var names: Set<String> = []
+        for i in 0..<Int(count) {
+            guard let fam = families?[i], pango_font_family_is_monospace(fam) != 0,
+                  let c = pango_font_family_get_name(fam) else { continue }
+            names.insert(String(cString: c))
+        }
+        return names.sorted()
+    }
+
+    func sessionDidReportTitle(_ id: UUID, _ title: String, isSplit: Bool) {
+        store.recordTitle(title, forSession: id, isSplit: isSplit)
+        if id == store.selectedSessionID { updateTitle() }
+        rebuildSidebar()
+    }
+
+    func sessionDidReportPwd(_ id: UUID, _ pwd: String, isSplit: Bool) {
+        store.recordPwd(pwd, forSession: id, isSplit: isSplit)
+        if id == store.selectedSessionID { updateTitle() }
+        rebuildSidebar()
+    }
+
+    func sessionDidReportFontSize(_ id: UUID, _ size: Double) {
+        store.setFontSize(id, size)
+    }
+
+    func surfaceDidFocus(_ id: UUID, isSplit: Bool) {
+        guard store.session(withID: id)?.hasSplit == true else { return }
+        store.setPaneFocus(isSplit, forSession: id)
+        if let s = store.session(withID: id) { updatePaneDim(s) }
+        rebuildSidebar()
+        if id == store.selectedSessionID { updateTitle() }
+    }
+
+    private func updatePaneDim(_ s: Session) {
+        let strength = linuxSettingsStore().load().inactivePaneMuteStrength ?? AppSettings.defaultInactivePaneMuteStrength
+        let dimmed = 1.0 - AppSettings.muteOpacity(strength: strength)
+        if let main = surfaces[s.id]?.glArea {
+            gtk_widget_set_opacity(W(main), s.isSplit && s.splitFocused ? dimmed : 1.0)
+        }
+        if let split = splitSurfaces[s.id]?.glArea {
+            gtk_widget_set_opacity(W(split), s.isSplit && !s.splitFocused ? dimmed : 1.0)
+        }
+    }
+}

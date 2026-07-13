@@ -138,7 +138,8 @@ The app's **Help** menu has three one-time installers. None are needed to use ag
 Requirements:
 
 - Swift 6.3.2.
-- GTK4, libadwaita, libepoxy, pkg-config, git, curl, ca-certificates, xz.
+- GTK4, libadwaita, libepoxy, pkg-config, git, curl, ca-certificates, and xz.
+- zsh, required by the shared `agtermCore` tests.
 - Zig 0.15.2 for the vendored libghostty build.
 
 ```sh

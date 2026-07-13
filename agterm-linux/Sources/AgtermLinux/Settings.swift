@@ -10,7 +10,7 @@ import agtermCore
 @MainActor
 extension AppController {
     func showSettings() {
-        let s = SettingsStore().load()
+        let s = linuxSettingsStore().load()
         let dialog = OpaquePointer(adw_preferences_dialog_new())
         "preferences".withCString { gtk_widget_set_name(W(dialog), $0) }   // automation id
         let page = OpaquePointer(adw_preferences_page_new())
@@ -54,6 +54,37 @@ extension AppController {
         adw_switch_row_set_active(restoreRow, (s.restoreRunningCommand ?? false) ? 1 : 0)
         connect(restoreRow, "notify::active", unsafeBitCast(onRestoreToggled as @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void, to: GCallback.self))
         adw_preferences_group_add(cast(group), W(restoreRow))
+
+        let closeConfirmRow = OpaquePointer(adw_switch_row_new())
+        "Confirm before closing a session".withCString { adw_preferences_row_set_title(cast(closeConfirmRow), $0) }
+        adw_switch_row_set_active(closeConfirmRow, (s.confirmCloseSession ?? false) ? 1 : 0)
+        connect(closeConfirmRow, "notify::active", unsafeBitCast(onConfirmCloseToggled as @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void, to: GCallback.self))
+        adw_preferences_group_add(cast(group), W(closeConfirmRow))
+
+        let sessionDirectoryModel = gtk_string_list_new(nil)
+        for title in ["Home", "Current Session", "Custom"] {
+            title.withCString { gtk_string_list_append(sessionDirectoryModel, $0) }
+        }
+        let sessionDirectoryRow = OpaquePointer(adw_combo_row_new())
+        "New session directory".withCString { adw_preferences_row_set_title(cast(sessionDirectoryRow), $0) }
+        adw_combo_row_set_model(cast(sessionDirectoryRow), sessionDirectoryModel)
+        "string".withCString { prop in
+            let expr = gtk_property_expression_new(gtk_string_object_get_type(), nil, prop)
+            adw_combo_row_set_expression(cast(sessionDirectoryRow), expr)
+        }
+        switch AppSettings.NewSessionDirectory(rawValue: s.newSessionDirectory ?? "") ?? .home {
+        case .home: adw_combo_row_set_selected(cast(sessionDirectoryRow), 0)
+        case .currentSession: adw_combo_row_set_selected(cast(sessionDirectoryRow), 1)
+        case .custom: adw_combo_row_set_selected(cast(sessionDirectoryRow), 2)
+        }
+        connect(sessionDirectoryRow, "notify::selected", unsafeBitCast(onNewSessionDirectoryChanged as @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void, to: GCallback.self))
+        adw_preferences_group_add(cast(group), W(sessionDirectoryRow))
+
+        let customDirectoryRow = OpaquePointer(adw_entry_row_new())
+        "Custom session directory".withCString { adw_preferences_row_set_title(cast(customDirectoryRow), $0) }
+        (s.newSessionCustomDirectory ?? "").withCString { gtk_editable_set_text(customDirectoryRow, $0) }
+        connect(customDirectoryRow, "notify::text", unsafeBitCast(onNewSessionCustomDirectoryChanged as @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void, to: GCallback.self))
+        adw_preferences_group_add(cast(group), W(customDirectoryRow))
 
         let scrollRow = OpaquePointer(adw_spin_row_new_with_range(1, 10, 1))
         "Scroll speed".withCString { adw_preferences_row_set_title(cast(scrollRow), $0) }
@@ -162,9 +193,9 @@ extension AppController {
     /// Load → set one field → save: the shared `SettingsStore` round-trip every setter funnels through, so
     /// the persistence path lives in ONE place (the rest of each setter is just its apply side effect).
     private func persist<V>(_ keyPath: WritableKeyPath<AppSettings, V>, _ value: V) {
-        var s = SettingsStore().load()
+        var s = linuxSettingsStore().load()
         s[keyPath: keyPath] = value
-        try? SettingsStore().save(s)
+        try? linuxSettingsStore().save(s)
     }
 
     /// copy-on-select is a ghostty key → persist + rebuild the config + apply to live surfaces.
@@ -179,6 +210,24 @@ extension AppController {
     /// reload. Off (false) maps back to nil to keep settings.json minimal.
     func setRestoreRunningCommand(_ on: Bool) {
         persist(\.restoreRunningCommand, on ? true : nil)
+    }
+
+    func setConfirmCloseSession(_ on: Bool) {
+        persist(\.confirmCloseSession, on ? true : nil)
+    }
+
+    func setNewSessionDirectoryAtIndex(_ idx: Int) {
+        let mode: AppSettings.NewSessionDirectory
+        switch idx {
+        case 1: mode = .currentSession
+        case 2: mode = .custom
+        default: mode = .home
+        }
+        persist(\.newSessionDirectory, mode == .home ? nil : mode.rawValue)
+    }
+
+    func setNewSessionCustomDirectory(_ path: String) {
+        persist(\.newSessionCustomDirectory, path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : path)
     }
 
     func setCopyOnSelect(_ on: Bool) {
@@ -287,6 +336,16 @@ private let onCopyOnSelectToggled: @convention(c) (OpaquePointer?, OpaquePointer
 }
 private let onRestoreToggled: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
     MainActor.assumeIsolated { gController?.setRestoreRunningCommand(adw_switch_row_get_active(row) != 0) }
+}
+private let onConfirmCloseToggled: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
+    MainActor.assumeIsolated { gController?.setConfirmCloseSession(adw_switch_row_get_active(row) != 0) }
+}
+private let onNewSessionDirectoryChanged: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
+    MainActor.assumeIsolated { gController?.setNewSessionDirectoryAtIndex(Int(adw_combo_row_get_selected(cast(row)))) }
+}
+private let onNewSessionCustomDirectoryChanged: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
+    let text = row.flatMap { gtk_editable_get_text($0) }.map { String(cString: $0) } ?? ""
+    MainActor.assumeIsolated { gController?.setNewSessionCustomDirectory(text) }
 }
 private let onCompactToolbarToggled: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
     MainActor.assumeIsolated { gController?.setCompactToolbar(adw_switch_row_get_active(row) != 0) }

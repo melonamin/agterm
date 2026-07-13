@@ -77,7 +77,7 @@ extension AppController {
         case .openDirectory: return (.openDirectory, { gController?.openDirectory() })
         case .renameSession: return (.renameSession, { gController?.startRenameActive() })
         case .renameWorkspace: return (.renameWorkspace, { if let ws = gController?.store.currentWorkspaceID { gController?.beginRename(id: ws, isWorkspace: true) } })
-        case .closeSession: return (.closeSession, { if let id = gController?.store.selectedSessionID { gController?.closeSession(id) } })
+        case .closeSession: return (.closeSession, { if let id = gController?.store.selectedSessionID { gController?.requestCloseSession(id) } })
         case .clearStatus: return (.clearStatus, { gController?.clearActiveStatus() })
         case .previousSession: return (.previousSession, { gController?.navigate(.previous) })
         case .nextSession: return (.nextSession, { gController?.navigate(.next) })
@@ -250,8 +250,10 @@ extension AppController {
         guard let scroller = gtk_widget_get_ancestor(W(lb), gtk_scrolled_window_get_type()),
               let vadj = gtk_scrolled_window_get_vadjustment(OpaquePointer(scroller)),
               let row = gtk_list_box_get_row_at_index(lb, Int32(index)) else { return }
-        var rx: Double = 0, ry: Double = 0
-        guard gtk_widget_translate_coordinates(W(OpaquePointer(row)), W(lb), 0, 0, &rx, &ry) != 0 else { return }
+        var origin = graphene_point_t()
+        var translated = graphene_point_t()
+        guard gtk_widget_compute_point(W(OpaquePointer(row)), W(lb), &origin, &translated) != 0 else { return }
+        let ry = Double(translated.y)
         gtk_adjustment_clamp_page(vadj, ry, ry + max(1, Double(gtk_widget_get_height(W(OpaquePointer(row))))))
     }
 }

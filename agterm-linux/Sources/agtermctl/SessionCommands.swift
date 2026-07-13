@@ -476,6 +476,7 @@ struct Session: ParsableCommand {
             @Flag(name: .long, help: "Block until COMMAND exits and exit with its status (the program renders normally; capture its output via the program's own output file).") var block = false
             @Option(name: .long, help: "Render a floating, framed panel at PERCENT (1-100) of the pane instead of full-size.") var sizePercent: Int?
             @Option(name: .long, help: "Solid background color (#rrggbb) for the overlay pane, independent of the session's own.") var backgroundColor: String?
+            @Flag(name: .long, help: "Select the target session and focus the overlay. By default overlays open in the background.") var follow = false
             @OptionGroup var target: TargetOptions
             @OptionGroup var options: ClientOptions
 
@@ -491,7 +492,8 @@ struct Session: ParsableCommand {
             func makeRequest() throws -> ControlRequest {
                 ControlRequest(cmd: .sessionOverlayOpen, target: target.target,
                                args: options.withWindow(ControlArgs(cwd: cwd, command: command, wait: wait ? true : nil,
-                                                                     sizePercent: sizePercent, color: backgroundColor)))
+                                                                     sizePercent: sizePercent, follow: follow ? true : nil,
+                                                                     color: backgroundColor)))
             }
 
             func run() throws {

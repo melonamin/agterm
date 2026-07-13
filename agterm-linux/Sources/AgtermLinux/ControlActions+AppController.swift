@@ -257,7 +257,7 @@ extension AppController: ControlActions {
             store.setAgentIndicator(AgentIndicator(status: update.status, blink: update.blink ?? false,
                                                    autoReset: update.autoReset ?? false,
                                                    color: update.color, statusPane: update.pane), forSession: id)
-            let blockedDefault = wasBlocked ? nil : SettingsStore().load().blockedStatusSoundName
+            let blockedDefault = wasBlocked ? nil : linuxSettingsStore().load().blockedStatusSoundName
             if let sound = update.status.effectiveSound(perCall: update.sound, blockedDefault: blockedDefault) {
                 StatusSoundPlayer.shared.play(sound)
             }
@@ -420,6 +420,14 @@ extension AppController: ControlActions {
         return ok()
     }
 
+    func setQuickTerminal(mode: String?) -> ControlResponse {
+        guard let parsed = ControlToggleMode.parse(mode, on: "show", off: "hide") else {
+            return err("invalid quick mode: \(mode ?? "toggle")")
+        }
+        setQuick(parsed.desiredValue(current: quickVisible))
+        return ok()
+    }
+
     func typeSession(_ target: String?, window: String?, options: ControlSessionTypeOptions) async -> ControlResponse {
         typeSessionSync(target, window: window, options: options)
     }
@@ -455,6 +463,45 @@ extension AppController: ControlActions {
         }
     }
 
+    func searchSession(_ target: String?, window: String?,
+                       text: String?, to: String?) async -> ControlResponse {
+        switch resolveSessionResponse(target) {
+        case .failure(let response): return response
+        case .success(let id):
+            if to == "close" {
+                if searchSessionID == id { searchSurface?.endSearch() }
+                return ok(id)
+            }
+            selectSession(id)
+            guard let owner = searchTargetSurface(for: id) else { return err("session not realized") }
+            searchSurface = owner
+            owner.startSearch()
+            let hasQuery = text.map { !$0.isEmpty } ?? false
+            if let text, !text.isEmpty {
+                searchTotal = nil
+                searchSelected = nil
+                text.withCString { gtk_editable_set_text(searchEntry, $0) }
+                owner.sendSearchQuery(text)
+            }
+            switch to {
+            case "next": owner.navigateSearch(.next)
+            case "prev", "previous": owner.navigateSearch(.previous)
+            default: break
+            }
+            if hasQuery {
+                for _ in 0..<20 {
+                    while g_main_context_iteration(nil, 0) != 0 {}
+                    if searchTotal != nil { break }
+                    usleep(3000)
+                }
+            }
+            let display = searchDisplayText()
+            return ControlResponse(ok: true, result: ControlResult(id: id.uuidString,
+                                                                   text: display.isEmpty ? nil : display,
+                                                                   count: searchTotal))
+        }
+    }
+
     func openSessionOverlay(_ target: String?, window: String?,
                             options: ControlSessionOverlayOpenOptions) -> ControlResponse {
         switch resolveSessionResponse(target) {
@@ -465,7 +512,7 @@ extension AppController: ControlActions {
                                     backgroundColor: options.backgroundColor) else {
                 return err("overlay already open")
             }
-            if options.sizePercent != nil { selectSession(id) }
+            if options.follow { selectSession(id) }
             reconcile()
             return ok(id)
         }
@@ -526,11 +573,56 @@ extension AppController: ControlActions {
         }
     }
 
+    func windowNew(name: String?) -> ControlResponse {
+        let info = library.newWindow(name: name?.linuxTrimmedOrNil)
+        openWindow(info.id)
+        return ok(info.id)
+    }
+
+    func windowList() -> ControlResponse {
+        ControlResponse(ok: true, result: ControlResult(windows: library.controlWindowNodes()))
+    }
+
+    func windowSelect(_ target: String?) async -> ControlResponse {
+        switch resolveWindowResponse(target) {
+        case .failure(let response): return response
+        case .success(let id):
+            openWindow(id)
+            return ok(id)
+        }
+    }
+
+    func windowClose(_ target: String?) async -> ControlResponse {
+        switch resolveWindowResponse(target) {
+        case .failure(let response): return response
+        case .success(let id):
+            if let ctl = gWindows[id] {
+                gtk_window_close(WIN(ctl.windowPointer))
+            } else {
+                library.closeWindow(id)
+            }
+            return ok(id)
+        }
+    }
+
     func windowRename(_ target: String?, name: String) -> ControlResponse {
         switch resolveWindowResponse(target) {
         case .failure(let response): return response
         case .success(let id):
             library.renameWindow(id, to: name)
+            return ok(id)
+        }
+    }
+
+    func windowDelete(_ target: String?) -> ControlResponse {
+        switch resolveWindowResponse(target) {
+        case .failure(let response): return response
+        case .success(let id):
+            guard library.canRemoveWindow else { return err("cannot delete last window") }
+            if let ctl = gWindows[id] {
+                gtk_window_close(WIN(ctl.windowPointer))
+            }
+            library.removeWindow(id)
             return ok(id)
         }
     }
@@ -550,7 +642,17 @@ extension AppController: ControlActions {
     }
 
     func windowZoom(_ target: String?) -> ControlResponse {
-        err("window.zoom is not supported on this platform")
+        switch resolveWindowResponse(target) {
+        case .failure(let response): return response
+        case .success(let id):
+            guard let ctl = gWindows[id] else { return err("window not open — window.select it first") }
+            if gtk_window_is_maximized(WIN(ctl.windowPointer)) != 0 {
+                gtk_window_unmaximize(WIN(ctl.windowPointer))
+            } else {
+                gtk_window_maximize(WIN(ctl.windowPointer))
+            }
+            return ok(id)
+        }
     }
 
     func clearRestoreCommands() -> ControlResponse {

@@ -10,7 +10,7 @@ import agtermCore
 enum NotificationManager {
     /// Whether OS banners are enabled (the user's `notificationsEnabled` setting, default on). The
     /// unseen badge tracks regardless — this gates only the banner, mirroring macOS `bannersEnabled`.
-    static var bannersEnabled: Bool { SettingsStore().load().notificationsEnabled ?? true }
+    static var bannersEnabled: Bool { linuxSettingsStore().load().notificationsEnabled ?? true }
 
     /// Post a banner. When `target` or `sessionID` is set, attach a default action so clicking the banner
     /// reveals the session/pane (`target` is the pane-qualified notification identity).

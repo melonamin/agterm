@@ -200,7 +200,8 @@ struct LinuxControlDispatcher {
                                                 cwd: request.args?.cwd,
                                                 wait: request.args?.wait ?? false,
                                                 sizePercent: request.args?.sizePercent,
-                                                backgroundColor: request.args?.color
+                                                backgroundColor: request.args?.color,
+                                                follow: request.args?.follow ?? false
                                               ))
         case .sessionOverlayClose:
             return actions.closeSessionOverlay(request.target, window: request.args?.window)

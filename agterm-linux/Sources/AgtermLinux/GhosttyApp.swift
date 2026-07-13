@@ -43,7 +43,7 @@ final class GhosttyApp: @unchecked Sendable {
 
         // Persisted settings (font/size/theme/scroll) are layered on at launch so they survive
         // relaunch. Translucency is omitted: Linux has no window-level compositing yet.
-        let saved = SettingsStore().load()
+        let saved = linuxSettingsStore().load()
         let lines = AppController.ghosttyLines(for: saved)
         currentThemeOSC = AppSettings.themeOSC(from: lines)
         let cfg = buildConfig(extraLines: lines)
@@ -54,13 +54,12 @@ final class GhosttyApp: @unchecked Sendable {
         rt.wakeup_cb = { _ in GhosttyApp.shared.scheduleTick() }
         rt.action_cb = { _, target, action in GhosttyApp.shared.handleAction(target, action) }
         rt.read_clipboard_cb = { ud, loc, state in GhosttyApp.readClipboard(ud, loc, state) }
-        rt.confirm_read_clipboard_cb = { ud, content, state, _ in
-            MainActor.assumeIsolated {
-                guard let s = GhosttyApp.surface(from: ud), let content else { return }
-                ghostty_surface_complete_clipboard_request(s, content, state, true)
-            }
+        rt.confirm_read_clipboard_cb = { ud, content, state, request in
+            GhosttyApp.confirmReadClipboard(ud, content, state, request)
         }
-        rt.write_clipboard_cb = { _, loc, content, len, _ in GhosttyApp.writeClipboard(content, len, loc) }
+        rt.write_clipboard_cb = { ud, loc, content, len, confirm in
+            GhosttyApp.writeClipboard(ud, content, len, loc, confirm)
+        }
         rt.close_surface_cb = { ud, _ in
             guard let retained = RetainedGhosttySurface(ud) else { return }
             runOnMain { MainActor.assumeIsolated {
@@ -107,7 +106,7 @@ final class GhosttyApp: @unchecked Sendable {
     /// Build a config for one surface with a final per-session overlay (`background-image*`, solid
     /// `background`, and/or a font-size override). The returned config is owned by the caller.
     func configWithOverlay(_ overlayText: String) -> ghostty_config_t? {
-        let base = AppController.ghosttyLines(for: SettingsStore().load())
+        let base = AppController.ghosttyLines(for: linuxSettingsStore().load())
         let overlay = overlayText.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
         return buildConfig(extraLines: base + overlay)
     }
@@ -116,7 +115,7 @@ final class GhosttyApp: @unchecked Sendable {
     /// ConfigPaths (honors a custom config dir + AGTERM_STATE_DIR isolation).
     private static func scopedGhosttyConfigPath() -> String? {
         let env = ProcessInfo.processInfo.environment
-        let dir = ConfigPaths.configDirectory(setting: SettingsStore().load().configDirectory,
+        let dir = ConfigPaths.configDirectory(setting: linuxSettingsStore().load().configDirectory,
                                                stateDir: env["AGTERM_STATE_DIR"],
                                                home: FileManager.default.homeDirectoryForCurrentUser)
         return ConfigPaths.ghosttyConfigPath(configDirectory: dir).path
@@ -256,33 +255,111 @@ final class GhosttyApp: @unchecked Sendable {
     }
 
     private static func readClipboard(_ ud: UnsafeMutableRawPointer?, _ loc: ghostty_clipboard_e, _ state: UnsafeMutableRawPointer?) -> Bool {
-        let surf: ghostty_surface_t? = MainActor.assumeIsolated { GhosttyApp.surface(from: ud) }
-        guard let surface = surf, let clipboard = gdkClipboard(for: loc) else { return false }
-        let req = ClipboardRequest(surface: surface, state: state)
-        gdk_clipboard_read_text_async(
-            clipboard, nil,
-            { source, result, data in
-                let req = Unmanaged<ClipboardRequest>.fromOpaque(data!).takeRetainedValue()
-                guard let source else { return }
-                let text = gdk_clipboard_read_text_finish(OpaquePointer(source), result, nil)
-                let raw = text.map { String(cString: $0) } ?? ""
-                // a file-manager copy lands as a file:// uri-list → paste the POSIX paths, like macOS.
-                let value = PasteDecoder.posixPaths(fromURIList: raw) ?? raw
-                value.withCString { ghostty_surface_complete_clipboard_request(req.surface, $0, req.state, false) }
-                if let text { g_free(text) }
-            },
-            Unmanaged.passRetained(req).toOpaque()
-        )
+        guard let retained = RetainedGhosttySurface(ud) else { return false }
+        nonisolated(unsafe) let requestState = state
+        runOnMain {
+            MainActor.assumeIsolated {
+                guard let surface = retained.surface.surface else {
+                    retained.release()
+                    return
+                }
+                guard let clipboard = gdkClipboard(for: loc) else {
+                    "".withCString { ghostty_surface_complete_clipboard_request(surface, $0, requestState, false) }
+                    retained.release()
+                    return
+                }
+                let req = ClipboardRequest(surface: surface, state: requestState, retained: retained)
+                gdk_clipboard_read_text_async(
+                    clipboard, nil,
+                    { source, result, data in
+                        let req = Unmanaged<ClipboardRequest>.fromOpaque(data!).takeRetainedValue()
+                        defer { req.retained.release() }
+                        guard let source else {
+                            "".withCString {
+                                ghostty_surface_complete_clipboard_request(req.surface, $0, req.state, false)
+                            }
+                            return
+                        }
+                        let text = gdk_clipboard_read_text_finish(OpaquePointer(source), result, nil)
+                        let raw = text.map { String(cString: $0) } ?? ""
+                        // a file-manager copy lands as a file:// uri-list → paste the POSIX paths, like macOS.
+                        let value = PasteDecoder.posixPaths(fromURIList: raw) ?? raw
+                        value.withCString {
+                            ghostty_surface_complete_clipboard_request(req.surface, $0, req.state, false)
+                        }
+                        if let text { g_free(text) }
+                    },
+                    Unmanaged.passRetained(req).toOpaque()
+                )
+            }
+        }
         return true
     }
 
-    private static func writeClipboard(_ content: UnsafePointer<ghostty_clipboard_content_s>?, _ len: Int, _ loc: ghostty_clipboard_e) {
-        guard let content, len > 0, let clipboard = gdkClipboard(for: loc) else { return }
-        for item in UnsafeBufferPointer(start: content, count: len) {
-            guard let data = item.data, let mime = item.mime, String(cString: mime).hasPrefix("text/plain") else { continue }
-            gdk_clipboard_set_text(clipboard, data)
+    private static func confirmReadClipboard(_ ud: UnsafeMutableRawPointer?, _ content: UnsafePointer<CChar>?,
+                                             _ state: UnsafeMutableRawPointer?, _ request: ghostty_clipboard_request_e) {
+        guard let retained = RetainedGhosttySurface(ud) else { return }
+        guard request == GHOSTTY_CLIPBOARD_REQUEST_OSC_52_READ else {
+            let text = content.map { String(cString: $0) } ?? ""
+            nonisolated(unsafe) let requestState = state
+            runOnMain {
+                MainActor.assumeIsolated {
+                    defer { retained.release() }
+                    guard let surface = retained.surface.surface else { return }
+                    text.withCString { ghostty_surface_complete_clipboard_request(surface, $0, requestState, true) }
+                }
+            }
             return
         }
+        let text = content.map { String(cString: $0) } ?? ""
+        nonisolated(unsafe) let requestState = state
+        runOnMain {
+            MainActor.assumeIsolated {
+                let requester = retained.surface
+                guard requester.surface != nil else {
+                    retained.release()
+                    return
+                }
+                ClipboardPromptController.shared.request(.read, requester: requester) { allowed in
+                    defer { retained.release() }
+                    guard let surface = requester.surface else { return }
+                    let delivered = allowed ? text : ""
+                    delivered.withCString { ghostty_surface_complete_clipboard_request(surface, $0, requestState, true) }
+                }
+            }
+        }
+    }
+
+    private static func writeClipboard(_ ud: UnsafeMutableRawPointer?, _ content: UnsafePointer<ghostty_clipboard_content_s>?,
+                                       _ len: Int, _ loc: ghostty_clipboard_e, _ confirm: Bool) {
+        guard let content, len > 0 else { return }
+        var text: String?
+        for item in UnsafeBufferPointer(start: content, count: len) {
+            guard let data = item.data, let mime = item.mime, String(cString: mime).hasPrefix("text/plain") else { continue }
+            text = String(cString: data)
+            break
+        }
+        guard let text else { return }
+        guard confirm else { setClipboard(text, loc: loc); return }
+        guard let retained = RetainedGhosttySurface(ud) else { return }
+        runOnMain {
+            MainActor.assumeIsolated {
+                let requester = retained.surface
+                guard requester.surface != nil else {
+                    retained.release()
+                    return
+                }
+                ClipboardPromptController.shared.request(.write, requester: requester) { allowed in
+                    defer { retained.release() }
+                    if allowed { setClipboard(text, loc: loc) }
+                }
+            }
+        }
+    }
+
+    private static func setClipboard(_ text: String, loc: ghostty_clipboard_e) {
+        guard let clipboard = gdkClipboard(for: loc) else { return }
+        text.withCString { gdk_clipboard_set_text(clipboard, $0) }
     }
 
     // MARK: - userdata recovery
@@ -336,9 +413,11 @@ final class GhosttyApp: @unchecked Sendable {
 final class ClipboardRequest: @unchecked Sendable {
     let surface: ghostty_surface_t
     let state: UnsafeMutableRawPointer?
-    init(surface: ghostty_surface_t, state: UnsafeMutableRawPointer?) {
+    let retained: RetainedGhosttySurface
+    init(surface: ghostty_surface_t, state: UnsafeMutableRawPointer?, retained: RetainedGhosttySurface) {
         self.surface = surface
         self.state = state
+        self.retained = retained
     }
 }
 
