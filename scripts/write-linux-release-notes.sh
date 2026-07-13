@@ -15,7 +15,7 @@ LINUX_NOTES_FILE="${4:-}"
 REPOSITORY="${GITHUB_REPOSITORY:-melonamin/agterm-linux}"
 UPSTREAM_REPOSITORY="umputun/agterm"
 
-if [[ ! "$TAG" =~ ^linux-(v[0-9]+\.[0-9]+\.[0-9]+)(\+linux\.[1-9][0-9]*)?$ ]]; then
+if [[ ! "$TAG" =~ ^linux-(v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?)(\+linux\.[1-9][0-9]*)?$ ]]; then
   echo "invalid stable Linux release tag: $TAG" >&2
   exit 2
 fi

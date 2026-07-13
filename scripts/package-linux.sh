@@ -13,7 +13,7 @@ VERSION="${1#v}"
 OUT="${2:-dist-linux}"
 [[ "$OUT" = /* ]] || OUT="$ROOT/$OUT"
 
-if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
+if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?(\+linux\.[1-9][0-9]*)?$ ]]; then
   echo "invalid package version: $1" >&2
   exit 2
 fi
