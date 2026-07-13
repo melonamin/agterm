@@ -576,9 +576,11 @@ final class AppController {
         syncSidebarSelection()
     }
 
-    /// Typing into a session clears a stuck blocked/completed attention glyph (the Esc-decline case).
-    func clearAttentionStatus(_ id: UUID) {
-        if store.clearAttentionStatusOnInput(sessionID: id) { rebuildSidebar() }
+    /// Typing clears blocked/completed status; Escape or bare Ctrl-C also clears active status.
+    func clearAttentionStatus(_ id: UUID, pane: StatusPane, isInterrupt: Bool) {
+        if store.clearAttentionStatusOnInput(sessionID: id, pane: pane, isInterrupt: isInterrupt) {
+            rebuildSidebar()
+        }
     }
 
     /// Reset the active session's agent status to idle (the palette "Clear Status", GUI half of

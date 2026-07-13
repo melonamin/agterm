@@ -19,8 +19,8 @@ struct Session: ParsableCommand {
     static let configuration = CommandConfiguration(
         abstract: "Session commands.",
         subcommands: [New.self, Close.self, Select.self, Go.self, Rename.self, Move.self, TypeText.self,
-                      Split.self, Scratch.self, Focus.self, Resize.self, Copy.self, Text.self, Status.self, FlagCommand.self,
-                      Search.self, Background.self, Overlay.self]
+                      Split.self, Scratch.self, Focus.self, Resize.self, Copy.self, Text.self, Status.self,
+                      FlagCommand.self, Seen.self, Search.self, Background.self, Overlay.self]
     )
 
     struct New: RequestCommand {
@@ -334,6 +334,18 @@ struct Session: ParsableCommand {
         }
     }
 
+    struct Seen: RequestCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "Clear a session's unseen-notification badge without changing selection or focus."
+        )
+        @OptionGroup var target: TargetOptions
+        @OptionGroup var options: ClientOptions
+
+        func makeRequest() throws -> ControlRequest {
+            ControlRequest(cmd: .sessionSeen, target: target.target, args: options.withWindow())
+        }
+    }
+
     struct Search: RequestCommand {
         static let configuration = CommandConfiguration(abstract: "Search a session's terminal output (open the bar, set a needle, or step matches).")
         @Argument(help: "Needle to search for (omit to just open the bar).") var needle: String?
@@ -464,8 +476,8 @@ struct Session: ParsableCommand {
 
     struct Overlay: ParsableCommand {
         static let configuration = CommandConfiguration(
-            abstract: "Open or close an ephemeral overlay terminal on a session.",
-            subcommands: [Open.self, Close.self, Result.self]
+            abstract: "Open, resize, or close an ephemeral overlay terminal on a session.",
+            subcommands: [Open.self, Close.self, Resize.self, Result.self]
         )
 
         struct Open: RequestCommand {
@@ -538,6 +550,30 @@ struct Session: ParsableCommand {
 
             func makeRequest() throws -> ControlRequest {
                 ControlRequest(cmd: .sessionOverlayClose, target: target.target, args: options.withWindow())
+            }
+        }
+
+        struct Resize: RequestCommand {
+            static let configuration = CommandConfiguration(
+                abstract: "Resize an open overlay: floating at a percent, or back to full-pane."
+            )
+            @Option(name: .long, help: "Resize to a floating panel at PERCENT (1-100).") var sizePercent: Int?
+            @Flag(name: .long, help: "Resize to full-pane.") var full = false
+            @OptionGroup var target: TargetOptions
+            @OptionGroup var options: ClientOptions
+
+            func validate() throws {
+                if full && sizePercent != nil { throw ValidationError("--full cannot be combined with --size-percent") }
+                if !full && sizePercent == nil { throw ValidationError("provide --size-percent PERCENT or --full") }
+                if let sizePercent, !(1...100).contains(sizePercent) {
+                    throw ValidationError("--size-percent must be between 1 and 100")
+                }
+            }
+
+            func makeRequest() throws -> ControlRequest {
+                ControlRequest(cmd: .sessionOverlayResize, target: target.target,
+                               args: options.withWindow(ControlArgs(sizePercent: sizePercent,
+                                                                    full: full ? true : nil)))
             }
         }
 

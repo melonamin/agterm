@@ -74,10 +74,21 @@ func chord(fromKeyval keyval: UInt32, state: UInt32) -> Chord? {
     default: break
     }
 
-    // Case-fold to the unshifted lowercase character so Shift is captured only in `mods`. (Shifted
-    // symbols/digits don't fully unfold here — e.g. Shift+1 stays "!" — but no default chord uses a
-    // shifted-symbol base, and the grammar can't express most of them; documented divergence.)
-    let u = gdk_keyval_to_unicode(gdk_keyval_to_lower(keyval))
+    // GDK reports the shifted symbol as the keyval. Fold the common keyboard pairs back to their base
+    // key so `shift+/`, `shift+=`, and `shift+5` match the same keymap vocabulary as macOS.
+    let unshiftedKeyval: UInt32
+    if mods.contains(.shift) {
+        unshiftedKeyval = [
+            0x21: 0x31, 0x40: 0x32, 0x23: 0x33, 0x24: 0x34, 0x25: 0x35,
+            0x5E: 0x36, 0x26: 0x37, 0x2A: 0x38, 0x28: 0x39, 0x29: 0x30,
+            0x5F: 0x2D, 0x2B: 0x3D, 0x7B: 0x5B, 0x7D: 0x5D, 0x7C: 0x5C,
+            0x3A: 0x3B, 0x22: 0x27, 0x3C: 0x2C, 0x3E: 0x2E, 0x3F: 0x2F,
+            0x7E: 0x60,
+        ][keyval] ?? keyval
+    } else {
+        unshiftedKeyval = keyval
+    }
+    let u = gdk_keyval_to_unicode(gdk_keyval_to_lower(unshiftedKeyval))
     guard u >= 0x20, u != 0x7F, let scalar = Unicode.Scalar(u) else { return nil }
     let key = String(scalar).lowercased()
     guard key.count == 1, key != " " else { return nil }

@@ -455,6 +455,13 @@ final class GhosttySurface: TerminalSurface {
     func keyPressed(keyval: UInt32, keycode: UInt32, state: UInt32) -> Bool {
         guard let surface else { return false }
 
+        let control = (state & (1 << 2)) != 0
+        let hasOtherModifiers = (state & ((1 << 0) | (1 << 3) | (1 << 26))) != 0
+        let baseScalar = Unicode.Scalar(gdk_keyval_to_unicode(gdk_keyval_to_lower(keyval)))
+        let isInterrupt = keyval == 0xFF1B || (control && !hasOtherModifiers && baseScalar?.value == 0x63)
+        controller?.clearAttentionStatus(sessionID, pane: isSplitPane ? .right : .left,
+                                         isInterrupt: isInterrupt)
+
         // App-level shortcuts run first via the shared keymap (rebindable built-ins + custom commands +
         // the fixed arrow/page/font fallback). All the dispatch logic lives in AppController.handleKey so
         // this handler stays thin; ghostty still gets its own binds (Ctrl+Shift+C/V) when handleKey passes.
@@ -462,10 +469,6 @@ final class GhosttySurface: TerminalSurface {
                                  sessionID: sessionID, origin: self) == true {
             return true
         }
-
-        // Typing into the terminal clears a stuck blocked/completed attention glyph (the Esc-decline
-        // case a coding-agent hook can't signal).
-        controller?.clearAttentionStatus(sessionID)
 
         // Route through the IM context: a dead-key/compose/CJK sequence is CONSUMED here (its result
         // arrives via the `commit` signal → imCommit). Plain keys pass through (filter returns false) and
