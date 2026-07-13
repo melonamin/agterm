@@ -78,6 +78,7 @@ final class AppController {
     var sessionPanes: [UUID: OpaquePointer] = [:]     // GtkPaned (main content) per session
     var sessionStacks: [UUID: OpaquePointer] = [:]    // outer GtkStack (main <-> scratch), the deck page
     var rowSession: [OpaquePointer: UUID] = [:]
+    var sidebarSelectionAnchor: UUID?
     var nameLabels: [OpaquePointer: (id: UUID, isWorkspace: Bool)] = [:]  // name label -> rename target (double-click)
     var workspaceDiscButtons: [OpaquePointer: UUID] = [:]  // disclosure button -> workspace (collapse toggle)
     // The session/workspace currently being inline-renamed (nil = none). One value instead of an
@@ -353,19 +354,9 @@ final class AppController {
         }
     }
 
-    /// Highlight only the active session's row across all workspace list boxes.
-    func syncSidebarSelection() {
-        for lb in workspaceListBoxes { gtk_list_box_unselect_all(lb) }
-        guard let id = store.selectedSessionID,
-              let row = rowSession.first(where: { $0.value == id })?.key,
-              let parent = gtk_widget_get_parent(W(row)) else { return }
-        gtk_list_box_select_row(OpaquePointer(parent), GLBR(row))
-        scrollRowIntoView(row)
-    }
-
     /// Scroll the sidebar so the selected row is visible (e.g. selecting an off-screen session via the
     /// control channel or a palette jump). Deferred so the rebuilt sidebar is allocated first.
-    private func scrollRowIntoView(_ row: OpaquePointer) {
+    func scrollRowIntoView(_ row: OpaquePointer) {
         guard let scroller = sidebarScroller else { return }
         let scrollerAddress = Int(bitPattern: scroller)
         let rowAddress = Int(bitPattern: row)

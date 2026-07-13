@@ -6,6 +6,21 @@ import agtermCore
 extension AppController {
     static var sidebarFontProvider: OpaquePointer?
 
+    func syncSidebarSelection() {
+        for listBox in workspaceListBoxes { gtk_list_box_unselect_all(listBox) }
+        let selected = store.sidebarSelectionIDs.isEmpty ? store.selectedSessionID.map { [$0] } ?? []
+            : store.sidebarSelectionIDs
+        for id in selected {
+            guard let row = rowSession.first(where: { $0.value == id })?.key,
+                  let parent = gtk_widget_get_parent(W(row)) else { continue }
+            gtk_list_box_select_row(OpaquePointer(parent), GLBR(row))
+        }
+        if let active = store.selectedSessionID,
+           let row = rowSession.first(where: { $0.value == active })?.key {
+            scrollRowIntoView(row)
+        }
+    }
+
     func applySidebarFontSize() {
         guard let display = gdk_display_get_default() else { return }
         let settings = linuxSettingsStore().load()
@@ -104,8 +119,7 @@ extension AppController {
         guard let lb = op(gtk_list_box_new()) else { return }
         gtk_widget_add_css_class(W(lb), "navigation-sidebar")
         if workspace != nil { gtk_widget_set_margin_start(W(lb), 14) }
-        gtk_list_box_set_selection_mode(lb, GTK_SELECTION_SINGLE)
-        connect(lb, "row-activated", unsafeBitCast(onRowActivated as @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void, to: GCallback.self))
+        gtk_list_box_set_selection_mode(lb, GTK_SELECTION_MULTIPLE)
         let rightClick = gtk_gesture_click_new()
         gtk_gesture_single_set_button(rightClick, 3)
         connect(rightClick, "pressed", unsafeBitCast(onRowRightClick as @convention(c) (OpaquePointer?, Int32, Double, Double, gpointer?) -> Void, to: GCallback.self), RAW(lb))
@@ -116,7 +130,10 @@ extension AppController {
             guard let row = makeRow(s) else { continue }
             gtk_list_box_append(lb, W(row))
             rowSession[row] = s.id
-            if s.id == store.selectedSessionID { gtk_list_box_select_row(lb, GLBR(row)) }
+            if store.sidebarSelectionIDs.contains(s.id) ||
+                (store.sidebarSelectionIDs.isEmpty && s.id == store.selectedSessionID) {
+                gtk_list_box_select_row(lb, GLBR(row))
+            }
         }
         gtk_box_append(cast(sidebarBox), W(lb))
     }
@@ -151,6 +168,11 @@ extension AppController {
         }
         gtk_widget_set_margin_end(W(box), 6)
         gtk_list_box_row_set_child(GLBR(row), W(box))
+        let selectClick = gtk_gesture_click_new()
+        gtk_gesture_single_set_button(selectClick, 1)
+        gtk_event_controller_set_propagation_phase(selectClick, GTK_PHASE_CAPTURE)
+        connect(selectClick, "pressed", unsafeBitCast(onSessionRowClick, to: GCallback.self), RAW(row))
+        gtk_widget_add_controller(W(row), selectClick)
         if !flaggedView {
             let drag = gtk_drag_source_new()
             gtk_drag_source_set_actions(drag, GDK_ACTION_MOVE)
@@ -197,14 +219,45 @@ extension AppController {
     }
 
     func handleSessionDrop(source: UUID, onto target: UUID) {
-        guard source != target,
-              let src = store.sessionLocation(ofSession: source),
-              let tgt = store.sessionLocation(ofSession: target) else { return }
+        guard let tgt = store.sessionLocation(ofSession: target) else { return }
         let dropTarget = SidebarDrop.SessionDropTarget.sessionRow(workspace: tgt.workspace, sessionIndex: tgt.index, sessionCount: tgt.count)
-        guard let res = SidebarDrop.resolveSession(sourceWorkspace: src.workspace, sourceIndex: src.index,
-                                                   target: dropTarget, childIndex: SidebarDrop.onItemIndex) else { return }
-        store.moveSession(source, toWorkspace: res.workspace, at: res.destination)
+        let ids = store.sidebarSelectionIDs.contains(source) ? store.sidebarSelectionIDs : [source]
+        let sources = ids.compactMap { id -> SidebarDrop.SessionSource? in
+            guard let location = store.sessionLocation(ofSession: id) else { return nil }
+            return SidebarDrop.SessionSource(workspace: location.workspace, index: location.index)
+        }
+        guard let resolution = SidebarDrop.resolveSessions(sources: sources, target: dropTarget,
+                                                           childIndex: SidebarDrop.onItemIndex) else { return }
+        store.moveSessions(ids, toWorkspace: resolution.workspace, at: resolution.destination)
         reconcile()
+    }
+
+    func handleSessionRowClick(_ id: UUID, modifiers: UInt32) {
+        let visible = store.navigableSessions.map(\.id)
+        let current = store.sidebarSelectionIDs
+        let shift = modifiers & UInt32(GDK_SHIFT_MASK.rawValue) != 0
+        let control = modifiers & UInt32(GDK_CONTROL_MASK.rawValue) != 0
+        var selected: [UUID]
+        if shift, let anchor = sidebarSelectionAnchor ?? store.selectedSessionID,
+           let start = visible.firstIndex(of: anchor), let end = visible.firstIndex(of: id) {
+            let range = start <= end ? start ... end : end ... start
+            selected = Array(visible[range])
+        } else if control {
+            let set = Set(current)
+            selected = set.contains(id) ? current.filter { $0 != id } : visible.filter { set.contains($0) || $0 == id }
+            if selected.isEmpty { selected = [id] }
+            sidebarSelectionAnchor = id
+        } else {
+            selected = [id]
+            sidebarSelectionAnchor = id
+        }
+        let active = selected.contains(id) ? id : (store.selectedSessionID.flatMap { selected.contains($0) ? $0 : nil }
+            ?? selected.last ?? id)
+        store.noteUserActivity()
+        store.selectSession(active, sidebarSelection: selected)
+        showActive()
+        syncSidebarSelection()
+        updateTitle()
     }
 
     func workspaceForHeader(_ header: OpaquePointer?) -> UUID? { header.flatMap { workspaceDiscButtons[$0] } }

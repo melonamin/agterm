@@ -75,6 +75,16 @@ let onRowActivated: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -
     }
 }
 
+let onSessionRowClick: @convention(c) (OpaquePointer?, Int32, Double, Double, gpointer?) -> Void = { gesture, presses, _, _, data in
+    guard presses == 1, let gesture, let data else { return }
+    MainActor.assumeIsolated {
+        guard let id = gController?.session(forRow: OpaquePointer(data)) else { return }
+        let modifiers = gtk_event_controller_get_current_event_state(gesture).rawValue
+        gtk_gesture_set_state(gesture, GTK_EVENT_SEQUENCE_CLAIMED)
+        gController?.handleSessionRowClick(id, modifiers: modifiers)
+    }
+}
+
 let onRowRightClick: @convention(c) (OpaquePointer?, Int32, Double, Double, gpointer?) -> Void = { _, _, x, y, data in
     guard let data else { return }
     MainActor.assumeIsolated { gController?.showRowContextMenu(listBox: OpaquePointer(data), x: x, y: y) }

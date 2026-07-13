@@ -9,6 +9,12 @@ extension AppController {
     func showRowContextMenu(listBox: OpaquePointer, x: Double, y: Double) {
         guard let rowPtr = gtk_list_box_get_row_at_y(listBox, Int32(y)),
               let sid = rowSession[OpaquePointer(rowPtr)] else { return }
+        if !store.sidebarSelectionIDs.contains(sid) {
+            store.selectSession(sid, sidebarSelection: [sid])
+            sidebarSelectionAnchor = sid
+            syncSidebarSelection()
+            showActive()
+        }
         contextMenuSession = sid
         dismissContextMenu()
         guard let popover = op(gtk_popover_new()) else { return }
@@ -18,19 +24,24 @@ extension AppController {
         gtk_popover_set_pointing_to(POPOVER(popover), &rect)
         gtk_popover_set_position(POPOVER(popover), GTK_POS_RIGHT)
         let box = op(gtk_box_new(GTK_ORIENTATION_VERTICAL, 0))
-        let session = store.session(withID: sid)
-        addContextButton(box, session?.flagged == true ? "Unflag" : "Flag",
+        let targets = store.sidebarSelectionTargets(forContextSession: sid)
+        let sessions = targets.compactMap { store.session(withID: $0) }
+        let suffix = targets.count > 1 ? " \(targets.count) Sessions" : ""
+        addContextButton(box, sessions.allSatisfy(\.flagged) ? "Unflag\(suffix)" : "Flag\(suffix)",
                          unsafeBitCast(onCtxFlag as @convention(c) (OpaquePointer?, gpointer?) -> Void, to: GCallback.self))
-        addContextButton(box, "Rename",
-                         unsafeBitCast(onCtxRename as @convention(c) (OpaquePointer?, gpointer?) -> Void, to: GCallback.self))
-        if session?.agentIndicator.status != AgentStatus.idle {
-            addContextButton(box, "Clear Status",
+        if targets.count == 1 {
+            addContextButton(box, "Rename",
+                             unsafeBitCast(onCtxRename as @convention(c) (OpaquePointer?, gpointer?) -> Void, to: GCallback.self))
+        }
+        if sessions.contains(where: { $0.agentIndicator.status != .idle }) {
+            addContextButton(box, "Clear Status\(suffix)",
                              unsafeBitCast(onCtxClearStatus as @convention(c) (OpaquePointer?, gpointer?) -> Void, to: GCallback.self))
         }
-        addContextButton(box, "Focus Workspace",
-                         unsafeBitCast(onCtxFocus as @convention(c) (OpaquePointer?, gpointer?) -> Void, to: GCallback.self))
-        if let cur = store.workspace(forSession: sid) {
-            for ws in store.workspaces where ws.id != cur.id {
+        if targets.count == 1 {
+            addContextButton(box, "Focus Workspace",
+                             unsafeBitCast(onCtxFocus as @convention(c) (OpaquePointer?, gpointer?) -> Void, to: GCallback.self))
+        }
+        for ws in store.workspaces where targets.contains(where: { store.workspace(forSession: $0)?.id != ws.id }) {
                 if let btn = op(gtk_button_new_with_label("Move to \(ws.name)")) {
                     gtk_button_set_has_frame(BUTTON(btn), 0)
                     gtk_widget_set_halign(W(btn), GTK_ALIGN_FILL)
@@ -38,9 +49,8 @@ extension AppController {
                     connect(btn, "clicked", unsafeBitCast(onCtxMove as @convention(c) (OpaquePointer?, gpointer?) -> Void, to: GCallback.self), RAW(btn))
                     gtk_box_append(cast(box), W(btn))
                 }
-            }
         }
-        addContextButton(box, "Close Session",
+        addContextButton(box, targets.count > 1 ? "Close \(targets.count) Sessions" : "Close Session",
                          unsafeBitCast(onCtxClose as @convention(c) (OpaquePointer?, gpointer?) -> Void, to: GCallback.self))
         gtk_popover_set_child(POPOVER(popover), W(box))
         gtk_popover_popup(POPOVER(popover))
@@ -71,15 +81,18 @@ extension AppController {
 
     func contextMoveToWorkspace(_ data: gpointer?) {
         guard let data, let ws = contextMoveTargets[OpaquePointer(data)], let id = contextMenuSession else { return }
+        let targets = store.sidebarSelectionTargets(forContextSession: id)
         dismissContextMenu()
-        store.moveSession(id, toWorkspace: ws)
+        store.moveSessions(targets, toWorkspace: ws)
         reconcile()
     }
 
     func contextFlag() {
-        guard let id = contextMenuSession, let s = store.session(withID: id) else { return }
+        guard let id = contextMenuSession else { return }
+        let targets = store.sidebarSelectionTargets(forContextSession: id)
+        let allFlagged = targets.compactMap { store.session(withID: $0) }.allSatisfy(\.flagged)
         dismissContextMenu()
-        store.setFlag(!s.flagged, forSession: id)
+        store.setFlag(!allFlagged, forSessions: targets)
         rebuildSidebar()
     }
 
@@ -191,14 +204,25 @@ extension AppController {
 
     func contextClearStatus() {
         guard let id = contextMenuSession else { return }
+        let targets = store.sidebarSelectionTargets(forContextSession: id)
         dismissContextMenu()
-        store.setAgentIndicator(AgentIndicator(), forSession: id)
+        for target in targets { store.setAgentIndicator(AgentIndicator(), forSession: target) }
         rebuildSidebar()
     }
 
     func contextCloseSession() {
         guard let id = contextMenuSession else { return }
+        let targets = store.sidebarSelectionTargets(forContextSession: id)
         dismissContextMenu()
-        requestCloseSession(id, closingCoversFirst: false)
+        guard targets.count > 1 else {
+            requestCloseSession(id, closingCoversFirst: false)
+            return
+        }
+        if linuxSettingsStore().load().closeGraceUndoEnabled ?? true {
+            if store.softCloseSessions(targets) { reconcileSoftClose(preserving: targets) }
+        } else {
+            for target in targets { store.closeSession(target) }
+            reconcile()
+        }
     }
 }
