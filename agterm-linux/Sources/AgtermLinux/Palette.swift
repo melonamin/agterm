@@ -20,7 +20,9 @@ extension AppController {
                                             sidebarShowsFlaggedOnly: store.sidebarMode == .flagged,
                                             activeSessionFlagged: activeSession?.flagged ?? false,
                                             hasFocusedWorkspace: store.focusedWorkspaceID != nil,
-                                            activeSessionHasSplit: activeSession?.hasSplit ?? false)
+                                            activeSessionHasSplit: activeSession?.hasSplit ?? false,
+                                            hasPendingClose: store.pendingCloseSummary != nil,
+                                            hasRecentClosed: !library.recentClosedItems.isEmpty)
         var items: [(String, () -> Void)] = PaletteCommand.allCases.filter { $0.isVisible(in: paletteContext) }.map { cmd in
             let entry = Self.entry(for: cmd)
             let chord = entry.builtin.flatMap { a in resolvedBuiltinChords.first(where: { $0.value == a })?.key }
@@ -31,6 +33,10 @@ extension AppController {
         items.append(("Open Directory…", { gController?.openDirectory() }))
         // Preferences… (the Linux Settings surface; macOS uses the Settings scene / Cmd+,).
         items.append(("Preferences…", { gController?.showSettings() }))
+        // Linux has no global macOS-style Edit menu; expose the same terminal actions in the command palette.
+        items.append(("Copy Selection", { gController?.activeSurface()?.performBindingAction("copy_to_clipboard") }))
+        items.append(("Paste", { gController?.activeSurface()?.performBindingAction("paste_from_clipboard") }))
+        items.append(("Select All", { gController?.activeSurface()?.performBindingAction("select_all") }))
         // Dynamic: switch to (open/raise) any other window — the Linux window-menu equivalent. New Window
         // is a fixed command above; rename/delete live on the window itself.
         for w in gLibrary.windows where w.id != windowID {

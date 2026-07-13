@@ -220,13 +220,20 @@ struct Font: ParsableCommand {
         subcommands: [Inc.self, Dec.self, Reset.self]
     )
 
+    static let paneHelp = "Which pane's font to change: left (main), right (split), or scratch. "
+        + "Defaults to the left pane."
+
     struct Inc: RequestCommand {
         static let configuration = CommandConfiguration(abstract: "Increase font size.")
         @OptionGroup var target: TargetOptions
         @OptionGroup var options: ClientOptions
+        @Option(name: .long, help: ArgumentHelp(Font.paneHelp)) var pane: String?
+
+        func validate() throws { try validatePaneArgument(pane) }
 
         func makeRequest() throws -> ControlRequest {
-            ControlRequest(cmd: .fontInc, target: target.target, args: options.withWindow())
+            ControlRequest(cmd: .fontInc, target: target.target,
+                           args: options.withWindow(pane.map { ControlArgs(pane: $0) }))
         }
     }
 
@@ -234,9 +241,13 @@ struct Font: ParsableCommand {
         static let configuration = CommandConfiguration(abstract: "Decrease font size.")
         @OptionGroup var target: TargetOptions
         @OptionGroup var options: ClientOptions
+        @Option(name: .long, help: ArgumentHelp(Font.paneHelp)) var pane: String?
+
+        func validate() throws { try validatePaneArgument(pane) }
 
         func makeRequest() throws -> ControlRequest {
-            ControlRequest(cmd: .fontDec, target: target.target, args: options.withWindow())
+            ControlRequest(cmd: .fontDec, target: target.target,
+                           args: options.withWindow(pane.map { ControlArgs(pane: $0) }))
         }
     }
 
@@ -244,9 +255,13 @@ struct Font: ParsableCommand {
         static let configuration = CommandConfiguration(abstract: "Reset font size.")
         @OptionGroup var target: TargetOptions
         @OptionGroup var options: ClientOptions
+        @Option(name: .long, help: ArgumentHelp(Font.paneHelp)) var pane: String?
+
+        func validate() throws { try validatePaneArgument(pane) }
 
         func makeRequest() throws -> ControlRequest {
-            ControlRequest(cmd: .fontReset, target: target.target, args: options.withWindow())
+            ControlRequest(cmd: .fontReset, target: target.target,
+                           args: options.withWindow(pane.map { ControlArgs(pane: $0) }))
         }
     }
 }

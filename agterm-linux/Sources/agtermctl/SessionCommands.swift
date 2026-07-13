@@ -19,7 +19,8 @@ struct Session: ParsableCommand {
     static let configuration = CommandConfiguration(
         abstract: "Session commands.",
         subcommands: [New.self, Close.self, Select.self, Go.self, Rename.self, Move.self, TypeText.self,
-                      Split.self, Scratch.self, Focus.self, Resize.self, Copy.self, Text.self, Status.self,
+                      Split.self, Scratch.self, Focus.self, Resize.self, Copy.self, Paste.self, SelectAll.self,
+                      Text.self, Status.self,
                       FlagCommand.self, Seen.self, Search.self, Background.self, Overlay.self]
     )
 
@@ -256,6 +257,29 @@ struct Session: ParsableCommand {
 
         func makeRequest() throws -> ControlRequest {
             ControlRequest(cmd: .sessionCopy, target: target.target, args: options.withWindow())
+        }
+    }
+
+    struct Paste: RequestCommand {
+        static let configuration = CommandConfiguration(abstract: "Paste the system clipboard into a session.")
+        @OptionGroup var target: TargetOptions
+        @OptionGroup var options: ClientOptions
+
+        func makeRequest() throws -> ControlRequest {
+            ControlRequest(cmd: .sessionPaste, target: target.target, args: options.withWindow())
+        }
+    }
+
+    struct SelectAll: RequestCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "select-all",
+            abstract: "Select a session's entire terminal buffer."
+        )
+        @OptionGroup var target: TargetOptions
+        @OptionGroup var options: ClientOptions
+
+        func makeRequest() throws -> ControlRequest {
+            ControlRequest(cmd: .sessionSelectAll, target: target.target, args: options.withWindow())
         }
     }
 
