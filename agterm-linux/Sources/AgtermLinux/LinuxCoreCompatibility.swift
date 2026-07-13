@@ -91,11 +91,6 @@ extension ConfigPaths {
     }
 }
 
-extension WindowLibrary {
-    func geometry(forWindow _: UUID) -> WindowGeometry.Size? { nil }
-    func setGeometry(_: WindowGeometry.Size, forWindow _: UUID) {}
-}
-
 extension ShellEscape {
     static func dropPayload(_ payload: String) -> String? {
         if let paths = PasteDecoder.posixPaths(fromURIList: payload) {
@@ -216,6 +211,7 @@ struct ThemeColors: Equatable, Sendable {
     let background: String?
     let foreground: String?
     let selectionBackground: String?
+    let selectionForeground: String?
 }
 
 enum ThemeColorResolver {
@@ -235,7 +231,8 @@ enum ThemeColorResolver {
         return ThemeColors(
             background: value("background"),
             foreground: value("foreground"),
-            selectionBackground: value("selection-background")
+            selectionBackground: value("selection-background"),
+            selectionForeground: value("selection-foreground")
         )
     }
 

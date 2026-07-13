@@ -956,6 +956,7 @@ final class AppController {
         }
         let fg = colors.foreground ?? "inherit"
         let sel = colors.selectionBackground ?? themeBg
+        let selFg = colors.selectionForeground ?? fg
         // Sidebar tint: shift the theme background darker (>5) / lighter (<5) per the Sidebar Tint setting.
         let shift = linuxSettingsStore().load().sidebarBackgroundShift ?? AppSettings.defaultSidebarBackgroundShift
         let sidebarBg = ThemeColorResolver.shiftedHex(themeBg, amount: AppSettings.sidebarShiftAmount(strength: shift))
@@ -974,6 +975,9 @@ final class AppController {
         .agterm-sidebar list, .agterm-sidebar row { background-color: transparent; }
         .agterm-sidebar row:selected { background-color: \(sel); }
         .agterm-sidebar label { color: \(fg); }
+        .agterm-sidebar row:selected label { color: \(selFg); }
+        .agterm-sidebar button { color: \(fg); }
+        .agterm-sidebar separator { background-color: alpha(\(fg), 0.22); }
         """
         if Self.sidebarThemeProvider == nil {
             let provider = OpaquePointer(gtk_css_provider_new())

@@ -11,6 +11,52 @@ import agtermCore
 @MainActor var gApp: OpaquePointer?
 @MainActor let gControlServer = ControlServer()
 
+private struct LinuxSavedWindowSize: Codable {
+    let width: Double
+    let height: Double
+}
+
+@MainActor
+private enum LinuxWindowGeometryStore {
+    static var url: URL { linuxStateDirectory().appendingPathComponent("window-sizes.json") }
+
+    static func size(for id: UUID) -> WindowGeometry.Size? {
+        guard let data = try? Data(contentsOf: url),
+              let saved = try? JSONDecoder().decode([String: LinuxSavedWindowSize].self, from: data),
+              let value = saved[id.uuidString] else { return nil }
+        let requested = WindowGeometry.Size(width: value.width, height: value.height)
+        guard let maximum = connectedDisplayMaximumSize() else { return requested }
+        return WindowGeometry.clampSize(requested,
+                                        min: WindowGeometry.Size(width: 480, height: 320),
+                                        max: maximum)
+    }
+
+    static func save(_ size: WindowGeometry.Size, for id: UUID) {
+        var saved: [String: LinuxSavedWindowSize] = [:]
+        if let data = try? Data(contentsOf: url) {
+            saved = (try? JSONDecoder().decode([String: LinuxSavedWindowSize].self, from: data)) ?? [:]
+        }
+        saved[id.uuidString] = LinuxSavedWindowSize(width: size.width, height: size.height)
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if let data = try? JSONEncoder().encode(saved) { try? data.write(to: url, options: .atomic) }
+    }
+
+    private static func connectedDisplayMaximumSize() -> WindowGeometry.Size? {
+        guard let display = gdk_display_get_default(), let monitors = gdk_display_get_monitors(display),
+              g_list_model_get_n_items(monitors) > 0,
+              let item = g_list_model_get_item(monitors, 0) else { return nil }
+        defer { g_object_unref(item) }
+        var rect = GdkRectangle()
+        gdk_monitor_get_geometry(OpaquePointer(item), &rect)
+        return WindowGeometry.Size(width: Double(rect.width), height: Double(rect.height))
+    }
+}
+
+extension WindowLibrary {
+    func geometry(forWindow id: UUID) -> WindowGeometry.Size? { LinuxWindowGeometryStore.size(for: id) }
+    func setGeometry(_ size: WindowGeometry.Size, forWindow id: UUID) { LinuxWindowGeometryStore.save(size, for: id) }
+}
+
 /// Route a terminal-originated desktop notification (OSC 9/777) through the shared delivery policy:
 /// bump the firing session's unseen badge and post the banner UNLESS you are already looking at the
 /// pane (the firing session is selected in the frontmost, GTK-active window). Falls back to a plain

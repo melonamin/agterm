@@ -330,13 +330,15 @@ shell (no controlling terminal — `/dev/tty` errors). See examples.md for usage
   for a closed window with no live store), and `geometry` (the open window's live frame `{x, y, width,
   height, display}` in the SAME units `window move`/`window resize` take — `x`/`y` top-left relative to
   `display`, y down — omitted for a closed window; the read side of `window move`/`window resize`, so
-  record it, move/resize, then restore the exact frame), plus `fullscreen` and `zoomed` (whether the
+  record it, move/resize, then restore the exact frame on macOS), plus `fullscreen` and `zoomed` (whether the
   window is in native full screen / zoomed-to-screen — the read side of `window fullscreen` / `window
   zoom`, so a script can make those toggles idempotent; both omitted for a closed window). The
   `geometry`/`fullscreen`/`zoomed` fields stay current — the cache is refreshed when a window
   moves/resizes/zooms/enters or exits full screen, so a hand-drag or GUI toggle is reflected without needing
   another command. (`autoFollowMs` still reflects the last cache refresh, since a settings change is rare;
   and unlike `tree`, `window.list` does NOT carry `idleMs` — the live idle metric would freeze in the cache.)
+  The GTK Linux frontend omits `geometry`: it restores and clamps size, but GTK4 does not provide
+  reliable restorable x/y placement on Wayland or X11.
 - `window select <id>` — raise it if open, else open it.
 - `window close <id>` — close the on-screen window (the bundle is kept; reopen with select).
 - `window rename <id> <name>`.
@@ -352,7 +354,7 @@ shell (no controlling terminal — `/dev/tty` errors). See examples.md for usage
   The window must be open. This is the control half of the double-click-on-header gesture (a plain green-button
   click does native full screen, not zoom — Option-click the green button to zoom); `resize`/`move` are
   control-native, but `zoom` mirrors a GUI action.
-- `window fullscreen <id>` — toggle NATIVE macOS full screen (a separate Space, auto-hidden menu bar),
+- `window fullscreen <id>` — toggle native full screen (a separate Space on macOS; desktop full screen on Linux),
   via `NSWindow.toggleFullScreen`. A second call exits. The window must be open. This is the control half
   of the View ▸ Toggle Full Screen menu item (⌃⌘F, rebindable as `toggle_fullscreen`) and the green
   traffic-light button — distinct from `zoom`, which only maximizes the frame in the same Space.

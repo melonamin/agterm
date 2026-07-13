@@ -39,6 +39,23 @@ Code layout:
 - `packaging/linux/` carries Linux desktop/Flatpak packaging.
 - `scripts/*-linux.sh` are Linux build, run, install, and packaging helpers.
 
+### Linux feature parity and platform differences
+
+The `linux-port` branch carries the upstream v0.11 terminal model and control protocol, including
+split/scratch/overlay terminals, Quick terminal input and read-back, terminal zoom, fullscreen,
+recently closed sessions with grouped undo, light/dark themes, configurable toolbar and sidebar text,
+and Ctrl/Shift multi-session selection with batch move, close, flag, status, and drag/drop actions.
+The GTK command palette provides actions that upstream exposes through macOS application menus.
+
+Linux uses desktop conventions: key labels are Ctrl/Shift rather than Command/Option, native chrome is
+provided by libadwaita, and local `file://` links open their containing folder in the default file manager.
+GTK4 restores and clamps window sizes to a connected display.
+It does not expose reliable programmatic window positioning: Wayland compositors own placement, and the
+GTK4 frontend intentionally leaves x/y geometry absent on both Wayland and X11 rather than reporting
+coordinates it cannot restore.
+The macOS Finder, traffic-light, TCC, entitlement, notarization, Homebrew-cask, and AppKit-specific
+instructions later in this inherited document apply only to upstream agterm.
+
 Upstream `agterm` is a native macOS terminal for working with AI coding agents across many sessions at once; this fork carries that model to Linux. It is intentionally opinionated: rather than scattering shells across tabs, it organizes them into named workspaces, each holding the sessions for one project or context, so several agent-driven sessions can run side by side and you can move between them without losing track of which is which. The motivation is specific: running several coding agents at once means many long-lived sessions, each progressing on its own, and a tabbed terminal loses track of them quickly. agterm keeps them organized and makes it obvious which session needs you. None of this is limited to agents. It also works as a capable general-purpose terminal for everyday multi-project work.
 
 The design is deliberately minimal: it covers the use cases above and stops there. Features come in two kinds. One is just enough to get the work done. The other is the small set of things other terminals get wrong, done the way they should have been. There is no deep agent integration and no attempt to invent a new way of working with agents. You get a sensible minimum out of the box, plus a complete control API and CLI on top. Almost everything is scriptable, so anything past the defaults you build yourself instead of waiting for it to ship.

@@ -9,6 +9,16 @@ extension AppController {
         gController = self
         library.frontmostWindowID = windowID
         library.saveIndex()
+        if let id = store.selectedSessionID, let session = store.session(withID: id) {
+            let hadUnseen = session.unseenCount > 0
+            store.clearUnseen(id)
+            if hadUnseen {
+                NotificationManager.withdraw(sessionID: id)
+                rebuildSidebar()
+            }
+            showActive()
+            searchTargetSurface(for: id)?.refresh()
+        }
     }
 
     /// Whether the window may close now, or should first confirm. Mirrors the macOS app-quit alert:
