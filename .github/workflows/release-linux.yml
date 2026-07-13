@@ -4,65 +4,180 @@ on:
   push:
     tags:
       - "linux-v*"
-      - "v*-linux*"
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag, for example linux-v0.8.0"
+        description: "Existing release tag, for example linux-v0.11.0"
         required: true
+        type: string
+
+concurrency:
+  group: linux-release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
+
+env:
+  SWIFTLINT_VERSION: "0.65.0"
+  SWIFTLINT_SHA256: "79306a34e5c7cc55a220cd108cbb861dcad5f10138dcdf261e2624ae8b0a486b"
+  LINUX_SOURCEKIT_LIB_PATH: "/usr/lib/libsourcekitdInProc.so"
+  ZIG_SHA256: "02aa270f183da276e5b5920b1dac44a63f1a49e55050ebde3aecc9eb82f93239"
 
 jobs:
   release-linux:
-    name: Build Linux release
-    runs-on: ubuntu-latest
-    container: swift:6.3.2
+    name: Build Linux x86_64 release
+    runs-on: ubuntu-24.04
+    container: swift:6.3.2-noble
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - name: Install GTK4 + libadwaita + GL + zig
+
+      - name: Resolve and verify release tag
+        id: release
+        env:
+          REQUESTED_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          TAG="$REQUESTED_TAG"
+          if [[ ! "$TAG" =~ ^linux-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
+            echo "invalid Linux release tag: $TAG" >&2
+            exit 1
+          fi
+
+          git fetch --force origin \
+            "+refs/heads/linux-port:refs/remotes/origin/linux-port" \
+            "+refs/tags/$TAG:refs/tags/$TAG"
+          COMMIT="$(git rev-parse "$TAG^{commit}")"
+          if ! git merge-base --is-ancestor "$COMMIT" origin/linux-port; then
+            echo "$TAG does not point to a commit on origin/linux-port" >&2
+            exit 1
+          fi
+          git checkout --detach "$COMMIT"
+
+          VERSION="${TAG#linux-}"
+          ARTIFACT="agterm-linux-${VERSION}-x86_64.tar.gz"
+          PREVIOUS_TAG="$(git tag --merged "$COMMIT" --list "linux-v*" --sort=-version:refname \
+            | awk -v current="$TAG" '$0 != current { print; exit }')"
+          {
+            echo "tag=$TAG"
+            echo "version=$VERSION"
+            echo "commit=$COMMIT"
+            echo "artifact=$ARTIFACT"
+            echo "previous_tag=$PREVIOUS_TAG"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Install Linux build and test dependencies
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
-            libgtk-4-dev libadwaita-1-dev libepoxy-dev pkg-config git curl ca-certificates xz-utils
-          curl -fsSL https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz | tar -xJ -C /opt
+            libgtk-4-dev libadwaita-1-dev libepoxy-dev pkg-config \
+            git curl ca-certificates xz-utils unzip zsh file
+          curl -fsSLo /tmp/swiftlint.zip \
+            "https://github.com/realm/SwiftLint/releases/download/${SWIFTLINT_VERSION}/swiftlint_linux_amd64.zip"
+          echo "${SWIFTLINT_SHA256}  /tmp/swiftlint.zip" | sha256sum --check
+          unzip -q /tmp/swiftlint.zip -d /usr/local/bin
+          chmod +x /usr/local/bin/swiftlint
+          swift --version
+          swiftlint --version
+          curl -fsSLo /tmp/zig.tar.xz \
+            https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz
+          echo "${ZIG_SHA256}  /tmp/zig.tar.xz" | sha256sum --check
+          tar -xJf /tmp/zig.tar.xz -C /opt
           echo "/opt/zig-x86_64-linux-0.15.2" >> "$GITHUB_PATH"
+
+      - name: Test shared core
+        working-directory: agtermCore
+        run: swift test
+
+      - name: Lint Swift sources
+        run: swiftlint lint --strict --quiet
+
       - name: Cache vendored libghostty
         uses: actions/cache@v6
         with:
           path: agterm-linux/vendor/ghostty
-          key: libghostty-${{ hashFiles('scripts/setup-linux.sh', 'linux/patches/ghostty-embedded-opengl.patch') }}
+          key: libghostty-x86_64-${{ hashFiles('scripts/setup-linux.sh', 'linux/patches/ghostty-embedded-opengl.patch') }}
+
       - name: Build libghostty
         run: scripts/setup-linux.sh
+
       - name: Build agterm-linux
         working-directory: agterm-linux
         run: swift build -c release
-      - name: Package tarball
-        run: scripts/dist-linux.sh
-      - name: Write release notes
+
+      - name: Package release archive
+        env:
+          ARTIFACT: ${{ steps.release.outputs.artifact }}
         run: |
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
-          FORK_COMMIT="$(git rev-parse --short HEAD)"
-          UPSTREAM_BASE="$(git merge-base HEAD origin/master 2>/dev/null || true)"
-          {
-            echo "agterm-linux ${TAG}"
-            echo
-            echo "Linux-maintained agterm fork release."
-            echo
-            echo "- Fork commit: ${FORK_COMMIT}"
-            if [ -n "$UPSTREAM_BASE" ]; then
-              echo "- Upstream base: $(git rev-parse --short "$UPSTREAM_BASE")"
+          scripts/dist-linux.sh "$ARTIFACT"
+          sha256sum "$ARTIFACT" > "$ARTIFACT.sha256"
+
+      - name: Verify release archive
+        env:
+          ARTIFACT: ${{ steps.release.outputs.artifact }}
+        run: |
+          set -euo pipefail
+          STAGE="$(mktemp -d)"
+          trap 'rm -rf "$STAGE"' EXIT
+          tar -xzf "$ARTIFACT" -C "$STAGE"
+          test -x "$STAGE/agterm-linux/bin/agterm-linux"
+          test -x "$STAGE/agterm-linux/bin/agterm-linux.bin"
+          test -x "$STAGE/agterm-linux/bin/agtermctl"
+          test -f "$STAGE/agterm-linux/lib/libghostty.so"
+          file "$STAGE/agterm-linux/bin/agterm-linux.bin" | grep -q "x86-64"
+          for binary in agterm-linux.bin agtermctl; do
+            LD_LIBRARY_PATH="$STAGE/agterm-linux/lib" \
+              ldd "$STAGE/agterm-linux/bin/$binary" | tee "$STAGE/$binary.ldd"
+            if grep -q "not found" "$STAGE/$binary.ldd"; then
+              echo "$binary has unresolved runtime libraries" >&2
+              exit 1
             fi
+          done
+          sha256sum --check "$ARTIFACT.sha256"
+
+      - name: Generate artifact attestation
+        uses: actions/attest@v4
+        with:
+          subject-path: ${{ steps.release.outputs.artifact }}
+
+      - name: Write release notes
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+          COMMIT: ${{ steps.release.outputs.commit }}
+          ARTIFACT: ${{ steps.release.outputs.artifact }}
+        run: |
+          {
+            echo "Linux x86_64 build of agterm ${TAG}."
+            echo
+            echo "This archive bundles agterm, agtermctl, the Swift runtime, libghostty, and Ghostty resources."
+            echo "It expects GTK4 and libadwaita from the host and targets Ubuntu 24.04 or a compatible modern distribution."
+            echo
+            echo "Verify the download with \`${ARTIFACT}.sha256\` or GitHub's build provenance:"
+            echo
+            echo '```sh'
+            echo "gh attestation verify ${ARTIFACT} --repo ${GITHUB_REPOSITORY}"
+            echo '```'
+            echo
+            echo "Source commit: \`${COMMIT}\`"
             echo
             echo "macOS users should install upstream agterm: https://github.com/umputun/agterm"
           } > release-notes.md
+
       - name: Publish GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
-          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
-          files: agterm-linux-dist.tar.gz
-          name: agterm-linux ${{ github.event.inputs.tag || github.ref_name }}
+          tag_name: ${{ steps.release.outputs.tag }}
+          target_commitish: ${{ steps.release.outputs.commit }}
+          files: |
+            ${{ steps.release.outputs.artifact }}
+            ${{ steps.release.outputs.artifact }}.sha256
+          fail_on_unmatched_files: true
+          name: agterm-linux ${{ steps.release.outputs.version }}
           body_path: release-notes.md
+          generate_release_notes: true
+          previous_tag: ${{ steps.release.outputs.previous_tag }}
+          make_latest: true

@@ -10,6 +10,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  SWIFTLINT_VERSION: "0.65.0"
+  SWIFTLINT_SHA256: "79306a34e5c7cc55a220cd108cbb861dcad5f10138dcdf261e2624ae8b0a486b"
+  LINUX_SOURCEKIT_LIB_PATH: "/usr/lib/libsourcekitdInProc.so"
+  ZIG_SHA256: "02aa270f183da276e5b5920b1dac44a63f1a49e55050ebde3aecc9eb82f93239"
+
 jobs:
   changes:
     name: Detect changes
@@ -37,23 +43,48 @@ jobs:
     name: Unit tests (Linux)
     needs: changes
     if: needs.changes.outputs.swift == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Keep the shared, host-free controller package green on Linux because it backs the GTK frontend.
-    container: swift:6.3.2
+    container: swift:6.3.2-noble
     steps:
       - uses: actions/checkout@v7
+      - name: Install test shell
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends zsh
       - name: swift test
         working-directory: agtermCore
         run: swift test
 
+  lint-linux:
+    name: SwiftLint (Linux)
+    needs: changes
+    if: needs.changes.outputs.swift == 'true'
+    runs-on: ubuntu-24.04
+    container: swift:6.3.2-noble
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install SwiftLint
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends curl ca-certificates unzip
+          curl -fsSLo /tmp/swiftlint.zip \
+            "https://github.com/realm/SwiftLint/releases/download/${SWIFTLINT_VERSION}/swiftlint_linux_amd64.zip"
+          echo "${SWIFTLINT_SHA256}  /tmp/swiftlint.zip" | sha256sum --check
+          unzip -q /tmp/swiftlint.zip -d /usr/local/bin
+          chmod +x /usr/local/bin/swiftlint
+          swiftlint --version
+      - name: swiftlint (strict)
+        run: swiftlint lint --strict --quiet
+
   build-linux:
     name: Build app (Linux GTK)
-    needs: [changes, test-linux]
+    needs: [changes, test-linux, lint-linux]
     if: needs.changes.outputs.swift == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Compile-check the GTK port. The official Swift image carries the toolchain; apt adds GTK4,
     # libadwaita, GL deps, and zig builds libghostty.
-    container: swift:6.3.2
+    container: swift:6.3.2-noble
     steps:
       - uses: actions/checkout@v7
       - name: Install GTK4 + libadwaita + GL + zig
@@ -61,7 +92,10 @@ jobs:
           apt-get update
           apt-get install -y --no-install-recommends \
             libgtk-4-dev libadwaita-1-dev libepoxy-dev pkg-config git curl ca-certificates xz-utils
-          curl -fsSL https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz | tar -xJ -C /opt
+          curl -fsSLo /tmp/zig.tar.xz \
+            https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz
+          echo "${ZIG_SHA256}  /tmp/zig.tar.xz" | sha256sum --check
+          tar -xJf /tmp/zig.tar.xz -C /opt
           echo "/opt/zig-x86_64-linux-0.15.2" >> "$GITHUB_PATH"
       - name: Cache vendored libghostty (keyed on the pinned rev + the patch)
         uses: actions/cache@v6

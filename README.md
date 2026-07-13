@@ -128,9 +128,13 @@ The tarball bundles the Swift runtime, libghostty, Ghostty resources, and a laun
 libadwaita are expected from the host distribution.
 
 ```sh
-tar xzf agterm-linux-dist.tar.gz
+tar xzf agterm-linux-vX.Y.Z-x86_64.tar.gz
 ./agterm-linux/bin/agterm-linux
 ```
+
+The published x86_64 archive is built on Ubuntu 24.04 and requires a compatible modern Linux
+distribution with GTK4 and libadwaita installed.
+Each release also includes a SHA-256 checksum and GitHub build-provenance attestation.
 
 ### macOS
 
@@ -235,13 +239,36 @@ Shared `agtermCore` changes should stay portable, upstream-compatible, and accep
 Linux-only behavior, including Glibc/socket portability and Linux CLI glue, belongs under `agterm-linux/`,
 `linux/`, `packaging/linux/`, or Linux-specific scripts.
 
-Release tags should be created from `linux-port`, for example:
+Linux releases use tags in the `linux-vX.Y.Z` namespace and are built from `linux-port` only.
+The release workflow checks out the exact existing tag, reruns shared-core tests and strict SwiftLint,
+builds and validates the archive, then publishes a versioned x86_64 tarball, SHA-256 checksum, and
+GitHub build-provenance attestation.
+
+Create and push the tag after the release commit is already on `linux-port`:
 
 ```sh
 git switch linux-port
-git tag linux-v0.8.0
-git push origin linux-v0.8.0
+git pull --ff-only origin linux-port
+git tag -a linux-v0.11.0 -m "agterm-linux v0.11.0"
+git push origin linux-v0.11.0
 ```
+
+An existing tag can be rebuilt from the Actions UI or with:
+
+```sh
+gh workflow run release-linux.yml --ref linux-port -f tag=linux-v0.11.0
+```
+
+Verify a downloaded release with either mechanism:
+
+```sh
+sha256sum --check agterm-linux-v0.11.0-x86_64.tar.gz.sha256
+gh attestation verify agterm-linux-v0.11.0-x86_64.tar.gz \
+  --repo melonamin/agterm-linux
+```
+
+The Flatpak manifest remains a local, experimental packaging path.
+It is not a release channel until host-shell execution is deliberately designed for the sandbox.
 
 ## Concepts
 

@@ -24,4 +24,5 @@ windows/
 !.claude/
 .claude/*
 !.claude/rules/
-agterm-linux-dist.tar.gz
+agterm-linux-*.tar.gz
+agterm-linux-*.tar.gz.sha256

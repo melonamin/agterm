@@ -2,10 +2,16 @@
 # Build a self-contained, relocatable agterm-linux tarball: the binary + its non-system shared libs
 # (the Swift runtime + libghostty) + the ghostty resources + a launcher that wires LD_LIBRARY_PATH and
 # GHOSTTY resources. GTK4/libadwaita are expected from the host (any modern Linux desktop has them).
-# Usage: scripts/dist-linux.sh   →  agterm-linux-dist.tar.gz at the repo root.
+# Usage: scripts/dist-linux.sh [output.tar.gz]
+# The output defaults to agterm-linux-dist.tar.gz at the repo root.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="$ROOT/agterm-linux"
+
+if (( $# > 1 )); then
+  echo "usage: scripts/dist-linux.sh [output.tar.gz]" >&2
+  exit 2
+fi
 
 BIN="$APP/.build/release/AgtermLinux"
 CTL="$APP/.build/release/agtermctl-linux"
@@ -43,7 +49,8 @@ chmod +x "$STAGE/bin/agterm-linux"
 
 cp "$ROOT/packaging/linux/com.umputun.agterm.linux.desktop" "$STAGE/" 2>/dev/null || true
 
-OUT="$ROOT/agterm-linux-dist.tar.gz"
+OUT="${1:-agterm-linux-dist.tar.gz}"
+[[ "$OUT" = /* ]] || OUT="$ROOT/$OUT"
 tar czf "$OUT" -C "$(dirname "$STAGE")" agterm-linux
 rm -rf "$(dirname "$STAGE")"
 echo "→ $OUT ($(du -h "$OUT" | cut -f1))"
