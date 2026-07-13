@@ -50,6 +50,7 @@ extension AppController {
     /// drop it from the library + registry.
     func windowWillClose() {
         cancelPendingWorkspaceToggle()
+        cancelFullscreenTransitionTimeout()
         setTerminalZoom(.off, target: nil)
         TerminalZoomRegistry.shared.unregister(windowID)
         let w = gtk_widget_get_width(W(window)), h = gtk_widget_get_height(W(window))

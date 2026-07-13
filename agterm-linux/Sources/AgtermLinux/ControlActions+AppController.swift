@@ -907,11 +907,7 @@ extension AppController: ControlActions {
         case .failure(let response): return response
         case .success(let id):
             guard let ctl = gWindows[id] else { return err("window not open — window.select it first") }
-            if gtk_window_is_fullscreen(WIN(ctl.windowPointer)) != 0 {
-                gtk_window_unfullscreen(WIN(ctl.windowPointer))
-            } else {
-                gtk_window_fullscreen(WIN(ctl.windowPointer))
-            }
+            ctl.requestWindowFullscreenToggle()
             return ok(id)
         }
     }

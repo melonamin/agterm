@@ -32,6 +32,10 @@ final class AppController {
     var quickSurface: GhosttySurface?  // the window-level quick terminal (floating panel)
     var quickFrame: OpaquePointer?   // the card frame holding the quick surface
     var quickVisible = false
+    /// Pending compositor state, used to serialize rapid GTK fullscreen toggles.
+    var fullscreenDesired: Bool?
+    var fullscreenTransitionInFlight = false
+    var fullscreenTransitionTimeout: UInt32 = 0
     let terminalZoom = TerminalZoomController()
     var zoomHost: OpaquePointer?
     var splitToggleBtn: OpaquePointer?    // title-bar split toggle (swaps to .fill when active)
@@ -258,6 +262,7 @@ final class AppController {
         // tear down + deregister when the window closes.
         let me = Unmanaged.passUnretained(self).toOpaque()
         connect(window, "notify::is-active", unsafeBitCast(onWindowActive as @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void, to: GCallback.self), me)
+        connect(window, "notify::fullscreened", unsafeBitCast(onWindowFullscreened as @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void, to: GCallback.self), me)
         connect(window, "close-request", unsafeBitCast(onWindowCloseRequest as @convention(c) (OpaquePointer?, gpointer?) -> gboolean, to: GCallback.self), me)
 
         applyWindowTranslucency()
@@ -353,17 +358,17 @@ final class AppController {
             updateAttentionButton()
         }
     }
-
-    /// Scroll the sidebar so the selected row is visible (e.g. selecting an off-screen session via the
-    /// control channel or a palette jump). Deferred so the rebuilt sidebar is allocated first.
+    /// Defer scrolling until the selected sidebar row is allocated.
     func scrollRowIntoView(_ row: OpaquePointer) {
         guard let scroller = sidebarScroller else { return }
-        let scrollerAddress = Int(bitPattern: scroller)
-        let rowAddress = Int(bitPattern: row)
+        _ = g_object_ref(RAW(scroller)); _ = g_object_ref(RAW(row))
+        let scrollerAddress = Int(bitPattern: scroller), rowAddress = Int(bitPattern: row)
         runOnMain { MainActor.assumeIsolated {
             guard let scroller = OpaquePointer(bitPattern: scrollerAddress),
                   let row = OpaquePointer(bitPattern: rowAddress) else { return }
-            guard let adj = gtk_scrolled_window_get_vadjustment(scroller) else { return }
+            defer { g_object_unref(RAW(scroller)); g_object_unref(RAW(row)) }
+            guard gtk_widget_is_ancestor(W(row), W(self.sidebarBox)) != 0,
+                  let adj = gtk_scrolled_window_get_vadjustment(scroller) else { return }
             var origin = graphene_point_t()
             var translated = graphene_point_t()
             guard gtk_widget_compute_point(W(row), W(self.sidebarBox), &origin, &translated) != 0 else { return }

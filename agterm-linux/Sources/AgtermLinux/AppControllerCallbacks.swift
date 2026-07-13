@@ -11,6 +11,21 @@ let onWindowActive: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -
     }
 }
 
+let onWindowFullscreened: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { _, _, data in
+    guard let data else { return }
+    MainActor.assumeIsolated {
+        Unmanaged<AppController>.fromOpaque(data).takeUnretainedValue().fullscreenStateDidChange()
+    }
+}
+
+let onFullscreenTransitionTimeout: @convention(c) (gpointer?) -> gboolean = { data in
+    guard let data else { return 0 }
+    MainActor.assumeIsolated {
+        Unmanaged<AppController>.fromOpaque(data).takeUnretainedValue().fullscreenTransitionDidTimeout()
+    }
+    return 0
+}
+
 let onWindowCloseRequest: @convention(c) (OpaquePointer?, gpointer?) -> gboolean = { _, data in
     guard let data else { return 0 }
     let ctl = Unmanaged<AppController>.fromOpaque(data).takeUnretainedValue()

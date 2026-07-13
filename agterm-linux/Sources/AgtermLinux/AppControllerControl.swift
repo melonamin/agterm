@@ -161,7 +161,63 @@ extension AppController {
     }
 
     func toggleWindowFullscreen() {
-        _ = windowFullscreen(windowID.uuidString)
+        requestWindowFullscreenToggle()
+    }
+
+    /// Queue a native fullscreen toggle through the compositor's asynchronous state transition.
+    /// A second request while the first is pending flips the desired state but waits for the
+    /// `notify::fullscreened` acknowledgement before issuing the inverse GTK call.
+    func requestWindowFullscreenToggle() {
+        let current = gtk_window_is_fullscreen(WIN(windowPointer)) != 0
+        fullscreenDesired = !(fullscreenDesired ?? current)
+        driveFullscreenTransition()
+    }
+
+    func fullscreenStateDidChange() {
+        cancelFullscreenTransitionTimeout()
+        fullscreenTransitionInFlight = false
+        guard let desired = fullscreenDesired else { return }
+        let current = gtk_window_is_fullscreen(WIN(windowPointer)) != 0
+        if current == desired {
+            fullscreenDesired = nil
+        } else {
+            driveFullscreenTransition()
+        }
+    }
+
+    func fullscreenTransitionDidTimeout() {
+        fullscreenTransitionTimeout = 0
+        fullscreenTransitionInFlight = false
+        fullscreenDesired = nil
+    }
+
+    func cancelFullscreenTransitionTimeout() {
+        if fullscreenTransitionTimeout != 0 {
+            g_source_remove(fullscreenTransitionTimeout)
+            fullscreenTransitionTimeout = 0
+        }
+    }
+
+    private func driveFullscreenTransition() {
+        guard let desired = fullscreenDesired else { return }
+        let current = gtk_window_is_fullscreen(WIN(windowPointer)) != 0
+        if current == desired {
+            fullscreenDesired = nil
+            return
+        }
+        guard !fullscreenTransitionInFlight else { return }
+        fullscreenTransitionInFlight = true
+        cancelFullscreenTransitionTimeout()
+        fullscreenTransitionTimeout = g_timeout_add(
+            3_000,
+            onFullscreenTransitionTimeout,
+            Unmanaged.passUnretained(self).toOpaque()
+        )
+        if desired {
+            gtk_window_fullscreen(WIN(windowPointer))
+        } else {
+            gtk_window_unfullscreen(WIN(windowPointer))
+        }
     }
 
     func toggleTerminalZoom() {
