@@ -11,7 +11,6 @@
 import CGtk
 import agtermCore
 import Foundation
-
 @MainActor var gController: AppController?
 
 @MainActor
@@ -33,6 +32,8 @@ final class AppController {
     var quickSurface: GhosttySurface?  // the window-level quick terminal (floating panel)
     var quickFrame: OpaquePointer?   // the card frame holding the quick surface
     var quickVisible = false
+    let terminalZoom = TerminalZoomController()
+    var zoomHost: OpaquePointer?
     var splitToggleBtn: OpaquePointer?    // title-bar split toggle (swaps to .fill when active)
     var scratchToggleBtn: OpaquePointer?  // title-bar scratch toggle (swaps to .fill when active)
     var attentionButton: OpaquePointer?   // optional title-bar attention indicator button
@@ -246,6 +247,11 @@ final class AppController {
         self.toastOverlay = toast
         adw_toast_overlay_set_child(toast, W(windowOverlay))
         adw_application_window_set_content(cast(window), W(toast))
+        terminalZoom.targetResolver = { [weak self] in
+            guard let self else { return nil }
+            return TerminalZoomController.resolveTarget(store: self.store, quickTerminalVisible: self.quickVisible)
+        }
+        TerminalZoomRegistry.shared.register(windowID, controller: terminalZoom)
 
         // Become frontmost on activation (routes global shortcuts + control to this window);
         // tear down + deregister when the window closes.
@@ -474,6 +480,7 @@ final class AppController {
     /// a login shell, kept alive when hidden, recreated after its shell exits. The control `quick` arm
     /// and Ctrl+` both drive it.
     func setQuick(_ visible: Bool) {
+        if !visible, terminalZoom.target == .quick { setTerminalZoom(.off, target: .quick) }
         if quickFrame == nil, visible, let overlay = deckOverlay {
             let q = GhosttySurface(sessionID: UUID(), cwd: Self.homeCwd,
                                    env: SurfaceEnvironment.quickTerminal(windowID: windowID,

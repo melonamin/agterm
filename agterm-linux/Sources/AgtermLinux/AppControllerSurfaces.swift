@@ -7,6 +7,7 @@ extension AppController {
     // MARK: - Reconcile
 
     func reconcile(preservingSurfaceIDs: Set<UUID> = []) {
+        clearInvalidTerminalZoom()
         for ws in store.workspaces {
             for s in ws.sessions {
                 ensurePrimary(s)

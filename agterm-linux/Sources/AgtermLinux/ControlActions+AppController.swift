@@ -80,7 +80,7 @@ extension AppController: ControlActions {
             splitFontSize: { ($0.splitSurface as? GhosttySurface)?.currentFontSize() },
             scratchFontSize: { ($0.scratchSurface as? GhosttySurface)?.currentFontSize() },
             quickVisible: { [weak self] in self?.quickVisible ?? false },
-            zoomedSurface: { nil }
+            zoomedSurface: { [weak self] in self?.terminalZoom.target?.controlID }
         )
         return ControlResponse(ok: true, result: ControlResult(tree: tree))
     }
@@ -432,7 +432,27 @@ extension AppController: ControlActions {
     }
 
     func setSurfaceZoom(_ target: String?, window: String?, mode: ControlToggleMode) -> ControlResponse {
-        err("surface.zoom is not yet supported on Linux")
+        let raw = target?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "active"
+        let resolved: TerminalZoomTarget?
+        if raw == "active" {
+            if mode == .off, terminalZoom.target == nil { return ok() }
+            resolved = terminalZoom.target
+                ?? TerminalZoomController.resolveTarget(store: store, quickTerminalVisible: quickVisible)
+        } else if raw == "quick" {
+            resolved = .quick
+        } else if let surfaceID = TerminalSurfaceID(rawValue: raw) {
+            resolved = .session(surfaceID.sessionID, surfaceID.surface)
+        } else {
+            return err("invalid surface target: \(raw)")
+        }
+        if mode == .off, resolved == nil { return ok() }
+        guard let resolved else { return err("no active surface") }
+        if mode != .off,
+           !TerminalZoomController.isTargetValid(resolved, in: store, quickTerminalVisible: quickVisible) {
+            return err("surface not available: \(resolved.controlID)")
+        }
+        setTerminalZoom(mode, target: resolved)
+        return ControlResponse(ok: true, result: ControlResult(id: resolved.controlID))
     }
 
     func font(_ target: String?, window: String?, pane: String?, action: String) -> ControlResponse {
