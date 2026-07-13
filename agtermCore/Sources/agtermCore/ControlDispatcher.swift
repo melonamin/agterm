@@ -12,6 +12,7 @@ public protocol ControlActions {
     func closeSession(_ target: String?, window: String?) -> ControlResponse
     func closeSessions(_ targets: [String], window: String?) -> ControlResponse
     func renameSession(_ target: String?, window: String?, name: String) -> ControlResponse
+    func revealSession(_ target: String?, window: String?) -> ControlResponse
     func createWorkspace(window: String?, name: String?) -> ControlResponse
     func selectWorkspace(_ target: String?, window: String?) -> ControlResponse
     func renameWorkspace(_ target: String?, window: String?, name: String) -> ControlResponse
@@ -28,6 +29,8 @@ public protocol ControlActions {
     func focusSessionPane(_ target: String?, window: String?, pane: String?) -> ControlResponse
     func resizeSplit(_ target: String?, window: String?, resize: ControlSplitResize) -> ControlResponse
     func setSurfaceZoom(_ target: String?, window: String?, mode: ControlToggleMode) -> ControlResponse
+    func setDashboard(targets: [String], window: String?, close: Bool,
+                      fontMode: DashboardFontMode, mru: Bool) -> ControlResponse
     func font(_ target: String?, window: String?, pane: String?, action: String) -> ControlResponse
     func reloadKeymap() -> ControlResponse
     func reloadGhosttyConfig() -> ControlResponse
@@ -133,7 +136,7 @@ public struct ControlDispatcher {
         switch request.cmd {
         case .tree:
             return actions.controlTree(window: request.args?.window)
-        case .sessionNew, .sessionSelect, .sessionGo, .sessionClose, .sessionRename,
+        case .sessionNew, .sessionSelect, .sessionGo, .sessionClose, .sessionRename, .sessionReveal,
                 .sessionMove, .sessionFlag, .sessionSeen, .sessionStatus:
             return dispatchSessionCommand(request)
         case .sessionSplit, .sessionScratch, .sessionFocus, .sessionResize, .surfaceZoom, .sessionType,
@@ -153,6 +156,8 @@ public struct ControlDispatcher {
         case .windowNew, .windowList, .windowSelect, .windowClose, .windowRename,
                 .windowDelete, .windowResize, .windowMove, .windowZoom, .windowFullscreen:
             return await dispatchWindowCommand(request)
+        case .dashboard:
+            return dispatchDashboard(request)
         case .debugAppearance:
             // UI-test-only seam handled app-side in `ControlServer` (needs AppKit + `ContentView.isUITestLaunch`).
             return nil
@@ -208,6 +213,8 @@ public struct ControlDispatcher {
                 return ControlResponse(ok: false, error: "session.rename requires a name")
             }
             return actions.renameSession(request.target, window: request.args?.window, name: name)
+        case .sessionReveal:
+            return actions.revealSession(request.target, window: request.args?.window)
         case .sessionMove:
             let args = request.args
             if args?.after != nil, args?.before != nil {
@@ -583,5 +590,48 @@ public struct ControlDispatcher {
         default:
             preconditionFailure("unexpected window command: \(request.cmd.rawValue)")
         }
+    }
+
+    /// The dashboard overlay is host-free-validated here. The open path needs at least one id (or `--mru`)
+    /// and at most one font flag; `--close` takes no id, `--mru`, or font flag; a `--font-size` must be
+    /// finite and positive; `--mru` cannot be combined with explicit ids (but composes with the font flags).
+    /// The 9-cell cap is NOT applied here: the cell unit is a session+pane, so a split session expands to two
+    /// cells and the cap counts PANES — that expansion needs the store, so it lives app-side in
+    /// `ControlServer.setDashboard`, which also reports any dropped panes. Target resolution (incl. the
+    /// `--mru` recency lookup), the pane expansion + cap, the surface reparent, and the per-window controller
+    /// all stay app-side behind `ControlActions.setDashboard`; this only forwards the raw ids.
+    private func dispatchDashboard(_ request: ControlRequest) -> ControlResponse {
+        let args = request.args
+        let targets = args?.targets ?? []
+        let fontSize = args?.fontSize
+        let autoSize = args?.autoSize ?? false
+        let mru = args?.mru ?? false
+
+        if args?.close == true {
+            guard targets.isEmpty, !mru, fontSize == nil, !autoSize else {
+                return ControlResponse(ok: false, error: "dashboard --close takes no ids, --mru, or font options")
+            }
+            return actions.setDashboard(targets: [], window: args?.window, close: true, fontMode: .untouched, mru: false)
+        }
+
+        if fontSize != nil, autoSize {
+            return ControlResponse(ok: false, error: "dashboard: --font-size is mutually exclusive with --auto-size")
+        }
+        if let fontSize, !fontSize.isFinite || fontSize <= 0 {
+            return ControlResponse(ok: false, error: "dashboard --font-size must be a positive number")
+        }
+        let fontMode: DashboardFontMode = autoSize ? .auto : (fontSize.map(DashboardFontMode.fixed) ?? .untouched)
+        if mru {
+            // --mru supplies the members app-side from the window's recency, so it takes no explicit ids; the
+            // font flags still apply.
+            guard targets.isEmpty else {
+                return ControlResponse(ok: false, error: "dashboard --mru cannot be combined with explicit session ids")
+            }
+            return actions.setDashboard(targets: [], window: args?.window, close: false, fontMode: fontMode, mru: true)
+        }
+        guard !targets.isEmpty else {
+            return ControlResponse(ok: false, error: "dashboard requires at least one session id")
+        }
+        return actions.setDashboard(targets: targets, window: args?.window, close: false, fontMode: fontMode, mru: false)
     }
 }

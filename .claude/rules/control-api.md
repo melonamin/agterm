@@ -107,20 +107,46 @@ paths:
 - **Agent-status hooks install.**
   A second Help entry, **Help ▸ Install Agent Status Hooks…** (`AgentHooksInstaller.run()`),
   wires coding agents to `session.status`.
-  The hooks scripts bundle at `agterm/Resources/agent-status/` (`agterm-agent-status.sh` wrapper + `shell/integration.sh`
-  + `codex-notify.sh`, a `project.yml` Contents/Resources folder mirroring `Resources/ghostty`).
+  The hooks scripts bundle at `agterm/Resources/agent-status/` (`agterm-agent-status.sh` generic wrapper,
+  `agterm-codex-status.sh` Codex adapter, `shell/integration.sh`, and `shell/integration.fish`,
+  a `project.yml` Contents/Resources folder mirroring `Resources/ghostty`).
   The installer copies them to `~/.config/agterm/agent-status/`, bakes the bundled `agtermctl`'s absolute
-  path (`Bundle.main.url(forAuxiliaryExecutable:)`) into the wrapper so the hooks fire even without the
+  path (`Bundle.main.url(forAuxiliaryExecutable:)`) into both wrappers so the hooks fire even without the
   CLI on PATH, appends a marker-guarded `source` line to `~/.zshrc` + `~/.bashrc`,
   merges four Claude Code hooks into `~/.claude/settings.json` with a `.bak` (UserPromptSubmit→`active --blink`,
   PostToolUse→`active --blink`, Stop→`completed --auto-reset`, Notification[`permission_prompt`]→`blocked`;
   the unmatched PostToolUse re-asserts `active` after every tool so a `blocked` permission prompt clears
   back to active when work resumes — Claude Code has no "permission answered" event,
   and the gated tool's own PreToolUse fires BEFORE `blocked` is set, so the approved tool's PostToolUse
-  is the first hook afterwards), and PRINTS the Codex `~/.codex/config.toml` `notify` line (never auto-edits
-  TOML).
+  is the first hook afterwards), and merges SIX Codex lifecycle hooks into `~/.codex/config.toml` with a
+  `.bak`.
+  Those six events call the dedicated `agterm-codex-status.sh` adapter with lifecycle actions.
+  The adapter maps SessionStart to `idle`, UserPromptSubmit/PreToolUse/PostToolUse to `active --blink`,
+  and Stop to `completed --auto-reset` through the generic wrapper.
+  `PermissionRequest` is only a candidate signal because Codex fires it before Auto Review decides whether
+  a person is needed.
+  A per-session/pane watcher reads the visible terminal footer through `agtermctl session text` and reports
+  `blocked` only after a real approval or structured-question dialog appears.
+  Automatic approvals and denials never become `blocked`.
+  This replaces a retired `codex-notify.sh` that keyword-matched the turn's final message and misfired both
+  ways (issue #193; the merge also strips the old `notify = [...codex-notify.sh...]` line).
+  The Codex merge PARSES the config with `TOMLDecoder` (a pure-Swift, spec-compliant parser — the one
+  dependency `agtermCore` links besides swift-argument-parser) to decide the outcome
+  (`AgentHooksInstall.CodexMergeOutcome`): a marker block carrying an older agterm wrapper is refreshed
+  while preserving Codex's trailing hook trust tables; a foreign marker block is unchanged;
+  the file already defines its own `hooks` → `.hooksExist`; the file isn't valid TOML → `.unparseable`;
+  else → `.merged`, a marker-guarded
+  append (the same `rcMarkerBegin`/`End` markers as the shell rc files, so comments/layout survive) plus
+  removal of a stale top-level `notify` ONLY when its PARSED value points at `codex-notify.sh` (a comment
+  merely naming the file, or the user's own notifier, is never touched).
+  On `.hooksExist`/`.unparseable` the app leaves the file untouched and surfaces the block for a manual
+  add; the merge is gated on `~/.codex` existing (like the fish rc gate).
+  Both the Codex and Claude write paths distinguish an ABSENT config from one that EXISTS-but-unreadable
+  (the app-side `readExistingConfig`), so a permission/encoding read failure leaves the file untouched
+  instead of clobbering it with no backup.
+  Codex requires new or changed command hooks to be reviewed (`/hooks`) before they run.
   Idempotent + re-runnable (re-run refreshes the baked path).
-  Like the CLI installer, the host-free JSON-merge / shell-rc-marker / backup-path logic is `agtermCore.AgentHooksInstall`
+  Like the CLI installer, the host-free JSON/TOML-merge / shell-rc-marker / backup-path logic is `agtermCore.AgentHooksInstall`
   (unit-tested); `AgentHooksInstaller` (app-side) owns the AppKit FS glue,
   manually verified.
 - **Agent skill install (Claude Code + Codex).**
@@ -133,7 +159,7 @@ paths:
   The skill is a REFERENCE/knowledge skill (both user-invocable via `/agterm` and model-triggered,
   `allowed-tools: Bash(agtermctl *)`; the agent-neutral `description` carries the trigger nouns since
   Codex may ignore the extra `when_to_use` field — unknown frontmatter is harmless),
-  authored at `agterm/Resources/agent-skill/` (`SKILL.md` overview + model + addressing + 58-command
+  authored at `agterm/Resources/agent-skill/` (`SKILL.md` overview + model + addressing + 60-command
   summary + the image-display helper + a troubleshooting/reporting pointer;
   `reference.md` full per-command detail + keymap format; `examples.md` agtermctl recipes;
   `troubleshooting.md` diagnosing the common problems (keymap editor, custom actions,
@@ -211,11 +237,12 @@ paths:
   rules, then remaining targets resolve inside that same store so one command never mutates multiple windows.
   The top-level `target` also carries the first explicit batch target so a new CLI talking to a still-running
   pre-batch server degrades to a named session instead of accidentally acting on `active`.
-- **Command catalog (58 commands):**
+- **Command catalog (60 commands):**
   - `tree`
   - `workspace.new`/`workspace.rename`/`workspace.delete`/`workspace.select`/`workspace.move`/`workspace.focus`
-  - `session.new`/`session.close`/`session.select`/`session.rename`/`session.move`/`session.type`/`session.split`/`session.scratch`/`session.focus`/`session.resize`/`session.go`/`session.copy`/`session.paste`/`session.selectall`/`session.text`/`session.search`/`session.status`/`session.flag`/`session.seen`/`session.background`/`session.overlay.open`/`session.overlay.close`/`session.overlay.resize`/`session.overlay.result`
+  - `session.new`/`session.close`/`session.select`/`session.rename`/`session.reveal`/`session.move`/`session.type`/`session.split`/`session.scratch`/`session.focus`/`session.resize`/`session.go`/`session.copy`/`session.paste`/`session.selectall`/`session.text`/`session.search`/`session.status`/`session.flag`/`session.seen`/`session.background`/`session.overlay.open`/`session.overlay.close`/`session.overlay.resize`/`session.overlay.result`
   - `surface.zoom`
+  - `dashboard`
   - `quick`/`quick.type`/`quick.text`
   - `sidebar`/`sidebar.mode`/`sidebar.expand`/`sidebar.collapse`
   - `notify`
@@ -238,7 +265,7 @@ paths:
   Setting echoes the resulting effective side in `result.text`; the BARE form (no name) reads the side
   the last config feed applied (`SettingsModel.lastAppliedIsDark`), which the test polls to prove the
   flip actually drove the reload.
-  `AppearanceFlipUITests` is its only consumer; the public command count stays 58.
+  `AppearanceFlipUITests` is its only consumer; the public command count stays 60.
 
   `workspace.delete` honors keep-at-least-one and returns an error instead of the GUI confirm alert (nothing
   blocks on a modal).
@@ -410,7 +437,8 @@ paths:
   re-runs on restore (through the same `config.command` exec path) when the **restore-running-command** opt-in
   is on — gated via the transient `Session.wasRestored` so a fresh session always runs its command while a
   restored one honors the toggle (default off → a restored session is a plain shell); a live captured
-  foreground preempts it, and `closePrimaryPane` clears it when a command pane exits into a promoted split.
+  foreground preempts it, and `closePrimaryPane` clears it when a command pane exits and its split
+  survivor is promoted to the session's single pane.
   The arm threads `request.args?.command` into `AppStore.addSession(…, command:)`,
   which `makeSurface` passes to `GhosttySurfaceView(command:)` → `config.command` RAW (`strdup`,
   NO wrapper). libghostty tokenizes it into argv (shell-like word-splitting that RESPECTS quotes) and
@@ -532,10 +560,11 @@ paths:
   (and so does `font.*`'s omitted/`left` default — its `right`/`scratch` panes resolve `splitSurface`/`scratchSurface`
   instead, via its own pane switch rather than `surfaceBindingAction`),
   and `addressableSurface` is `surface ?? splitSurface`: identical to `surface` for every ordinary or split
-  session, but falling back to a PROMOTED SPLIT SURVIVOR whose primary shell exited (`closePrimaryPane` nils
-  `surface` and keeps the live shell in `splitSurface`, asserted by `AppStorePaneTests`).
-  Resolving through `surface` alone returned `session not realized` for a session the user was actively typing
-  in. It is deliberately NOT focus-aware (unlike `activeSurface`) — a shown split keeps addressing the main
+  session — including a PROMOTED SPLIT SURVIVOR, which `closePrimaryPane` moves into the main slot
+  (`AppStorePaneTests` asserts `splitSurface == nil` after promotion).
+  The `?? splitSurface` term is a defensive fallback only, kept so the arms answer (instead of
+  `session not realized`) should `surface` ever be nil while a split shell is still alive.
+  It is deliberately NOT focus-aware (unlike `activeSurface`) — a shown split keeps addressing the main
   pane, which is what keeps `session.selectall` and its `session.copy` read-back on the SAME surface.
   READ-BACK: neither adds a `ControlSessionNode` field — `session.selectall`'s read-back is `session.copy`
   (reads the resulting selection) and `session.paste`'s is `session.text` (reads the inserted buffer), the
@@ -765,6 +794,87 @@ paths:
   (4) round-trip in `ControlProtocolTests` (incl. `treeRoundTripsWithZoomedSurface`/`…OmitsZoomedSurfaceWhenNil`)
   + `TerminalZoomTests` + the e2e `ControlSurfaceZoomUITests` (incl. the tree read-back and the
   `--window`-scoped error paths).
+  `dashboard` opens a per-window, VIEW-ONLY grid of live PANE cells
+  (`agtermctl dashboard <ids…> [--font-size N | --auto-size] [--window W]`),
+  or populates it from the window's most-recently-used sessions instead of explicit ids
+  (`dashboard --mru [--font-size N | --auto-size] [--window W]`),
+  or CLOSES the open one (`dashboard --close [--window W]`).
+  The cell unit is a session+PANE (a `DashboardMember` = session UUID + `.primary`/`.split`): a non-split
+  session is ONE `.primary` cell, and a SPLIT session (`hasSplit`, both shells alive) expands into TWO cells —
+  its `.primary` and `.split` panes — so a split shows both panes side by side.
+  It is the N-surface generalization of `surface.zoom`'s reparent, with focus inverted (zoom focuses
+  its one surface; the dashboard focuses NONE while open).
+  It is reachable BOTH over the socket AND from the GUI:
+  the control open path is `dashboard`/`agtermctl dashboard` (unchanged),
+  and the GUI opener is `BuiltinAction.dashboard` (⌘⇧D), Navigate ▸ Dashboard, and the command palette
+  `Dashboard` entry — all TOGGLE the frontmost window's MRU grid auto-sized (the `dashboard --mru
+  --auto-size` equivalent), reusing the existing socket command with NO new control command, so the catalog
+  stays 60.
+  Once open, the keyboard drives it: arrows move the highlight, Enter jumps into the highlighted session
+  AND focuses that exact pane + closes, Esc closes.
+  Host-free geometry + navigation + auto-size math live in `DashboardLayout`
+  (`grid(count:) = ceil(sqrt(n))` cols, `move` clamped 2-D nav into a ragged last row,
+  `dashboardFontSize(cols:rows:base:)`), per-window state in the `@Observable @MainActor DashboardController`
+  (`members: [DashboardMember]`/`highlighted: DashboardMember?`/`fontMode`/`appliedFontSize`) reached through
+  `DashboardControllerRegistry` — the exact `TerminalZoomController`/`TerminalZoomRegistry` precedent.
+  Validation is host-free in `ControlDispatcher.dispatchDashboard`:
+  `--close` takes no ids, `--mru`, or font flags, `--font-size` is mutually exclusive with `--auto-size`,
+  a `--font-size` must be finite and positive, an open needs at least one id OR `--mru`,
+  and `--mru` cannot be combined with explicit ids (but composes with the font flags + `--window`).
+  **The 9-cell cap is NO LONGER in the dispatcher** — the cell unit is a PANE now, so a split session
+  expands to two cells and the cap counts PANES, which needs the store; the dispatcher forwards ALL raw ids
+  untouched and the cap lives APP-SIDE.
+  The dispatcher routes to `ControlActions.setDashboard(targets:window:close:fontMode:mru:)`;
+  the app-side `ControlServer` resolves ids via `ControlTargetResolver` inside `args.window ?? frontmost`,
+  DEDUPS by resolved UUID, drops unresolved, then EXPANDS each resolved session IN ORDER into pane cells
+  (always its `.primary`; plus `.split` when `hasSplit`), CAPS the resulting PANE list to
+  `DashboardLayout.maxCells` (9) — so the drop counts panes, reported as
+  `dropped N pane(s) beyond the 9-cell limit` in `result.text`, APPENDED to any `unresolved: …` text with
+  `; ` (neither clobbers the other) — closes any active zoom (zoom ↔ dashboard are reciprocally exclusive),
+  and drives that window's controller.
+  `WindowContentView` reparents each cell's OWN pane surface (`.primary` → `\.surface`, `.split` →
+  `\.splitSurface`) via the generalized `dashboardHostsSurface` (both panes of a split member are claimed,
+  each yielding its deck slot's `Color.clear` placeholder).
+  `--mru` skips the id-resolution entirely: it takes the sessions from `AppStore.recentSessions(limit:)`
+  (host-free, on `AppStore+Recency.swift` — the window's `sessionRecency.top(9, in:validIDs)`, most-recent
+  first, ≤ 9, fewer if fewer, stale/closed ids skipped) then expands + caps like the id path, erroring
+  `no recent sessions` on an empty window; the font flags still apply and nothing goes `unresolved`.
+  Enter (`selectDashboardMember`) selects the session, CLOSES the dashboard, then focuses the cell's EXACT
+  pane — the split pane via `focusSplitPane(_:wantSplit:true)` for a `.split` cell (mirroring
+  `revealActiveBlockedPane`'s `.right` branch), else the main pane; close-before-focus keeps the
+  `dashboardActive` focus guards from blocking it.
+  READ-BACK: FOUR `tree`-top-level fields (LIVE, `tree`-only like `zoomedSurface`) supplied to
+  `AppStore.controlTree(...)` as app-side closures reading the target window's controller through the registry —
+  `dashboardMembers` (PANE refs in grid order, `<session-id>:left`/`<session-id>:right` via
+  `DashboardMember.controlRef`, so a split session appears as both),
+  `dashboardHighlighted` (the highlighted cell's pane ref),
+  `dashboardFontSize` (the applied absolute size in points, nil = untouched),
+  and `dashboardFontMode` (`auto`/`fixed`/`untouched`).
+  `--mru` adds NO new read-back — the members it resolves ARE the existing `dashboardMembers`,
+  so a script reads back what it opened there (no tree field is owed for the mru intent itself).
+  Four-point keep-in-sync audit: (1) `case dashboard` + `ControlArgs.close`/`fontSize`/`autoSize`/`mru`
+  (ids reuse `targets`, window reuses `window`) + the four `ControlTree.dashboard*` fields in `ControlProtocol.swift`,
+  (2) the `.dashboard` dispatch arm (`dispatchDashboard`) → `ControlActions.setDashboard` (app-side
+  `ControlServer`) + the four read-back closures at the `controlTree` build site,
+  (3) the `dashboard` subcommand (`validate()`-guarded flag combos) in `agtermctlKit/MiscCommands.swift`,
+  (4) round-trip in `ControlProtocolTests` + dispatcher validation/routing in `ControlDispatcherTests`
+  (now asserting the dispatcher forwards ALL ids un-capped) + `DashboardLayoutTests`/`DashboardControllerTests`
+  (pane-cell open/move/highlight/reconcile, incl. a split member pruned when its split closes) +
+  `AppStoreTests` (the pane-ref read-back closures) + CLI mapping in `CommandsTests` + the e2e
+  `DashboardUITests` (incl. `testSplitSessionOpensTwoCellsAndEnterFocusesSplitPane`, which asserts the split
+  session's two `:left`/`:right` cells AND that Enter on the split cell flips the tree `splitFocused`).
+  The PANE expansion + the PANE cap + the dropped-pane text are app-side (`ControlServer.setDashboard`,
+  they need the store), build-verified + exercised by the e2e; the dispatcher no longer caps.
+  The `--mru` flag rides the same command with NO new command/read-back — its keep-in-sync is:
+  `ControlArgs.mru` (`ControlProtocol.swift`), the dispatcher `--mru` validation + routing
+  (`dispatchDashboard`, `--close`/id mutual-exclusion), the `mru:` param on `ControlActions.setDashboard`
+  + the app-side `AppStore.recentSessions(limit:)` lookup (`ControlServer`), the `--mru` CLI flag
+  (`MiscCommands.swift`), and its tests
+  (`AppStoreTests.recentSessions*`, `ControlProtocolTests` round-trip/omit, `ControlDispatcherTests`
+  `dashboardMru*`, `CommandsTests` `dashboardMru*`, and `DashboardUITests.testDashboardMruOpensRecentSessions`).
+  It is state-mutating-with-read-back EXEMPT: the resulting state IS `dashboardMembers`,
+  so no new tree field is owed.
+  See the `libghostty.md` dashboard note for the reparent/overlay/view-only + transient-font-override mechanics.
   Mode-bearing commands (`session.split`/`quick`) compute the delta against current state so `on`/`off`/`show`/`hide`
   are idempotent, and an unknown mode is an error.
   `quick`'s visibility reads back on `ControlTree.quickVisible` at the tree TOP level — LIVE, resolved
@@ -1167,4 +1277,12 @@ paths:
   (image/text/color set/clear + tree read-back).
   **Agent-skill mirror (HARD keep-in-sync, 4th surface):** all commands are documented in the bundled
   `agterm/Resources/agent-skill/` (SKILL.md summary, reference.md detail,
-  examples.md recipes) and the command count there is bumped to 58 to match.
+  examples.md recipes) and the command count there is bumped to 60 to match.
+  **Website mirror (HARD keep-in-sync):** the site's per-command reference `site/commands.html` documents
+  EVERY `agtermctl` control command — one inline-styled card per command carrying its invocation, its
+  arguments, and the `tree` read-back field, grouped into its command family's section.
+  A new `Command` case REQUIRES a new `site/commands.html` entry (a changed command an updated one, a
+  removed command a deleted one), in lockstep with the agent skill above and `README.md`/`site/docs.html`;
+  the page's "60 commands" copy must track the catalog count.
+  It drifted once because the site keep-in-sync convention named only `docs.html`/`index.html`, so
+  `dashboard` and `surface.zoom` shipped undocumented here.

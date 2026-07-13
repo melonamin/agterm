@@ -714,6 +714,73 @@ struct CommandsTests {
             ControlRequest(cmd: .surfaceZoom, target: "active", args: ControlArgs(mode: "hide", window: "win")))
     }
 
+    // MARK: - dashboard
+
+    @Test func dashboardOpenWithIdsAndFontSize() throws {
+        let expected = ControlRequest(cmd: .dashboard, args: ControlArgs(targets: ["s1", "s2"], fontSize: 12))
+        #expect(try request(["dashboard", "s1", "s2", "--font-size", "12"]) == expected)
+    }
+
+    @Test func dashboardOpenWithAutoSize() throws {
+        let expected = ControlRequest(cmd: .dashboard, args: ControlArgs(targets: ["s1", "s2"], autoSize: true))
+        #expect(try request(["dashboard", "s1", "s2", "--auto-size"]) == expected)
+    }
+
+    @Test func dashboardOpenTargetsWindow() throws {
+        let expected = ControlRequest(cmd: .dashboard, args: ControlArgs(targets: ["s1"], window: "win"))
+        #expect(try request(["dashboard", "s1", "--window", "win"]) == expected)
+    }
+
+    @Test func dashboardClose() throws {
+        #expect(try request(["dashboard", "--close"]) == ControlRequest(cmd: .dashboard, args: ControlArgs(close: true)))
+    }
+
+    @Test func dashboardRejectsFontSizeWithAutoSize() {
+        #expect(validationMessage(["dashboard", "s1", "--font-size", "12", "--auto-size"])
+            == "--font-size is mutually exclusive with --auto-size")
+    }
+
+    @Test func dashboardRejectsNonPositiveFontSize() {
+        #expect(validationMessage(["dashboard", "s1", "--font-size", "0"]) == "--font-size must be a positive number")
+    }
+
+    @Test func dashboardRejectsCloseWithIds() {
+        #expect(validationMessage(["dashboard", "s1", "--close"]) == "--close takes no ids, --mru, or font options")
+    }
+
+    @Test func dashboardRejectsCloseWithAutoSize() {
+        #expect(validationMessage(["dashboard", "--close", "--auto-size"]) == "--close takes no ids, --mru, or font options")
+    }
+
+    @Test func dashboardRejectsEmptyIdsWithoutClose() {
+        #expect(validationMessage(["dashboard"]) == "dashboard requires at least one session id (or --mru, or --close)")
+    }
+
+    @Test func dashboardMruAlone() throws {
+        #expect(try request(["dashboard", "--mru"]) == ControlRequest(cmd: .dashboard, args: ControlArgs(mru: true)))
+    }
+
+    @Test func dashboardMruWithAutoSizeAndWindow() throws {
+        let expected = ControlRequest(cmd: .dashboard, args: ControlArgs(window: "win", autoSize: true, mru: true))
+        #expect(try request(["dashboard", "--mru", "--auto-size", "--window", "win"]) == expected)
+    }
+
+    @Test func dashboardRejectsMruWithIds() {
+        #expect(validationMessage(["dashboard", "s1", "--mru"]) == "--mru cannot be combined with session ids")
+    }
+
+    @Test func dashboardRejectsMruWithClose() {
+        #expect(validationMessage(["dashboard", "--mru", "--close"]) == "--close takes no ids, --mru, or font options")
+    }
+
+    @Test func dashboardRejectsNegativeFontSize() {
+        #expect(validationMessage(["dashboard", "s1", "--font-size=-3"]) == "--font-size must be a positive number")
+    }
+
+    @Test func dashboardRejectsInfiniteFontSize() {
+        #expect(validationMessage(["dashboard", "s1", "--font-size=inf"]) == "--font-size must be a positive number")
+    }
+
     @Test func sidebarDefaultsToggle() throws {
         #expect(try request(["sidebar"]) == ControlRequest(cmd: .sidebar, args: ControlArgs(mode: "toggle")))
     }
@@ -994,6 +1061,11 @@ struct CommandsTests {
     @Test func sessionRenameWithWindow() throws {
         let expected = ControlRequest(cmd: .sessionRename, target: "active", args: ControlArgs(name: "build", window: "w1"))
         #expect(try request(["session", "rename", "build", "--window", "w1"]) == expected)
+    }
+
+    @Test func sessionRevealWithWindow() throws {
+        let expected = ControlRequest(cmd: .sessionReveal, target: "s1", args: ControlArgs(window: "w1"))
+        #expect(try request(["session", "reveal", "--target", "s1", "--window", "w1"]) == expected)
     }
 
     @Test func sessionCloseWithWindow() throws {

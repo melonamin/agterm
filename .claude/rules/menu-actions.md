@@ -37,6 +37,14 @@ paths:
   AppKit renders it after View) holds moving the selection/focus: the two palettes (Go to Session / Command
   Palette), session stepping (Previous/Next, Previous/Next Attention, First/Last),
   and Focus Left/Right Pane.
+  It also carries the **Dashboard** grid opener (⌘⇧D → `AppActions.toggleDashboard`,
+  the `dashboard` built-in action) — a toggle that opens the frontmost window's most-recently-used
+  dashboard grid (auto-sized, the `dashboard --mru --auto-size` control equivalent) or closes it,
+  inert while terminal zoom is active; it is ALSO a command-palette entry.
+  Unlike the pure placement split, this one IS a keep-in-sync-ish addition:
+  the `dashboard` built-in reuses the existing socket `dashboard` command (no NEW control command),
+  and the session→pane-cell expansion is hoisted into the shared host-free `AppStore.dashboardMembers(for:limit:)`
+  helper that both `ControlServer.setDashboard` and `toggleDashboard` call.
   This is a pure menu-PLACEMENT split — every item still drives the SAME `AppActions`,
   and the control/palette/keymap surfaces are untouched (so it is NOT a keep-in-sync change).
   When adding a menu item, file it by intent: display state → View, moving between things → Navigate.
@@ -112,9 +120,10 @@ paths:
   else `\.surface` — so reopening restores the two panes in place; nothing is destroyed (`closeSplit`
   only runs when the split shell exits).
   **Exiting a pane's shell keeps the session, collapsed to the survivor:** the primary's `onExit` is
-  `AppStore.closePrimaryPane` (promotes the split pane to a single non-split session,
-  its cwd promoted to the session's) and the split's is `closeSplitPane` (collapses to the primary,
-  or closes the session if the primary already exited).
+  `AppStore.closePrimaryPane` (promotes the surviving split pane INTO the main slot as a single non-split
+  session — its cwd/title/foreground command migrate up) and the split's is `closeSplitPane` (collapses
+  to the primary only for a genuine two-pane split, else closes the session — the primary already exited,
+  or the promoted survivor's own exit, `splitSurface == nil`).
   Only a single (non-split) session's exit closes it.
   The collapse re-hosts the survivor (HSplitView → standalone), which drops focus,
   so `GhosttySurfaceView.focusAfterReparent` re-grabs first responder until it sticks past the re-host.
@@ -212,8 +221,10 @@ paths:
   EVERY user-initiated GUI selection now REVEALS the blocked PANE, not just the session: the shared
   `AppActions.revealActiveBlockedPane()` (formerly private, now called on all selection paths) reads the
   landed session's `agentIndicator.statusPane` and focuses that pane — for `right`, the split surface via
-  `focusSplitPane(_:wantSplit: true)` (a FIXED target, UNGATED on `hasSplit`, so a promoted split survivor
-  is still focused, and its `onFocusChange` re-asserts `splitFocused` to win the shown-split re-render race);
+  `focusSplitPane(_:wantSplit: true)` (a FIXED target gated on `splitSurface != nil`, and its `onFocusChange`
+  re-asserts `splitFocused` to win the shown-split re-render race). A promoted split survivor is NOT covered
+  by this branch — promotion moves it into `surface` with `splitSurface == nil` (and re-tags a `.right` block
+  to `.left`), so it falls through to `focusActiveSession` as the session's sole main pane, which is correct;
   for `scratch`, shows a hidden scratch via `AppStore.toggleScratch` then focuses it;
   for `left`/nil, the main pane; and it is a no-op (plain `focusActiveSession`) for an IDLE session
   (no status set), so ordinary selections are unaffected (the idle gate is what keeps a plain nav to a

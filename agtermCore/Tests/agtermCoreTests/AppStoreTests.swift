@@ -1270,6 +1270,33 @@ struct AppStoreTests {
         #expect(store.sessionRecency.items == [a.id])
     }
 
+    @Test func recentSessionsReturnsMostRecentFirstRespectingLimit() {
+        let store = makeStore()
+        let ws = store.addWorkspace(name: "work")
+        let a = store.addSession(toWorkspace: ws.id, cwd: "/a")!
+        let b = store.addSession(toWorkspace: ws.id, cwd: "/b")!
+        let c = store.addSession(toWorkspace: ws.id, cwd: "/c")!
+        // drive the recency order explicitly (selectSession pushes MRU front): most-recent is the last select.
+        store.selectSession(a.id)
+        store.selectSession(c.id)
+        store.selectSession(b.id)
+        #expect(store.recentSessions(limit: 9) == [b.id, c.id, a.id]) // fewer than the limit → all, mru first
+        #expect(store.recentSessions(limit: 2) == [b.id, c.id]) // limit clamps the count
+    }
+
+    @Test func recentSessionsSpansWorkspacesAndSkipsClosed() {
+        let store = makeStore()
+        let work = store.addWorkspace(name: "work")
+        let personal = store.addWorkspace(name: "personal")
+        let a = store.addSession(toWorkspace: work.id, cwd: "/a")!
+        let b = store.addSession(toWorkspace: personal.id, cwd: "/b")!
+        store.selectSession(a.id)
+        store.selectSession(b.id)
+        #expect(store.recentSessions(limit: 9) == [b.id, a.id]) // recency spans every workspace
+        store.closeSession(b.id) // closed sessions are pruned from recency, so they drop out
+        #expect(store.recentSessions(limit: 9) == [a.id])
+    }
+
     @Test func setFontSizeRecordsValue() {
         let store = makeStore()
         let ws = store.addWorkspace(name: "work")
@@ -1459,6 +1486,7 @@ struct AppStoreTests {
         b.oscTitle = "remote:~/b"
         b.isSplit = true
         b.hasSplit = true
+        b.splitSurface = SpySurface() // a live split pane, so the `.right` status below stays valid
         b.overlayActive = true
         b.scratchActive = true
         b.flagged = true
@@ -1552,6 +1580,34 @@ struct AppStoreTests {
         #expect(store.controlTree(zoomedSurface: { "quick" }).zoomedSurface == "quick")
     }
 
+    @Test func controlTreeReportsDashboardFieldsFromClosures() {
+        let store = makeStore()
+        // no closures (host-free / default) or nothing open: all four omitted (nil).
+        let bare = store.controlTree()
+        #expect(bare.dashboardMembers == nil)
+        #expect(bare.dashboardHighlighted == nil)
+        #expect(bare.dashboardFontSize == nil)
+        #expect(bare.dashboardFontMode == nil)
+        // the app supplies the live DashboardController state via the closures. Members are pane refs now
+        // (`<uuid>:left`/`:right`): a split session shows as both its `:left` and `:right` cells.
+        let members = ["9f3c:left", "9f3c:right", "abcd:left"]
+        let tree = store.controlTree(dashboardMembers: { members }, dashboardHighlighted: { "9f3c:right" },
+                                     dashboardFontSize: { 12 }, dashboardFontMode: { "auto" })
+        #expect(tree.dashboardMembers == members)
+        #expect(tree.dashboardHighlighted == "9f3c:right")
+        #expect(tree.dashboardFontSize == 12)
+        #expect(tree.dashboardFontMode == "auto")
+    }
+
+    @Test func controlTreeDashboardMembersClosurePassesThroughVerbatim() {
+        // the closure value is threaded verbatim: an EMPTY array is distinct from nil (omitted). The app
+        // side never emits [] (its closure returns nil while the dashboard is closed, and a non-empty member
+        // set otherwise), so this pins the boundary — [] passes through as [], nil omits.
+        let store = makeStore()
+        #expect(store.controlTree(dashboardMembers: { [] }).dashboardMembers == [])
+        #expect(store.controlTree(dashboardMembers: { nil }).dashboardMembers == nil)
+    }
+
     @Test func setSidebarVisiblePostsChangeNotificationOnlyOnChange() {
         // the app-target ControlServer observes this to refresh window.list's cached sidebarVisible; the
         // post must fire only on an actual change (queue nil so the synchronous post delivers inline).
@@ -1597,6 +1653,8 @@ struct AppStoreTests {
         let store = makeStore()
         let ws = store.addWorkspace(name: "work")
         let session = try #require(store.addSession(toWorkspace: ws.id, cwd: "/repo"))
+        session.hasSplit = true
+        session.splitSurface = SpySurface() // a live split, so a `.right` status is valid (not coerced to `.left`)
         store.setAgentIndicator(AgentIndicator(status: .blocked, statusPane: .right), forSession: session.id)
 
         let node = try #require(store.controlTree().workspaces[0].sessions.first)

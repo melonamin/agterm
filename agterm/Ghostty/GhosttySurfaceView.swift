@@ -39,8 +39,9 @@ final class GhosttySurfaceView: NSView, TerminalSurface {
 
     /// The initial font size in points to create the surface with, or nil to use the
     /// ghostty config default. A creation input (like `workingDirectory`): read in
-    /// `createSurface`, which may run after construction, so it's fixed at init.
-    private let initialFontSize: Float?
+    /// `createSurface`, which may run after construction, so it's fixed at init. Not `private` so the
+    /// `+Config` extension (which owns `applyOverlayBackgroundColor`) can read it.
+    let initialFontSize: Float?
 
     /// Extra environment variables (the `AGTERM_*` vars) the spawned shell sees, set into the surface
     /// config at creation. A creation input (like `workingDirectory`): read in `createSurface`.
@@ -165,8 +166,9 @@ final class GhosttySurfaceView: NSView, TerminalSurface {
     /// `update_config` the surface no longer references the old config — so a scriptable `config.reload`
     /// loop can't grow it. The remaining one is freed in `destroySurface`/`deinit`, when the surface (its
     /// only consumer) is gone, so that free is safe too (unlike the app-wide config `GhosttyApp` never frees).
-    /// `nonisolated(unsafe)`: mutated only on the main actor, like `configCStrings`.
-    nonisolated(unsafe) private var ownedConfigs: [ghostty_config_t] = []
+    /// `nonisolated(unsafe)`: mutated only on the main actor, like `configCStrings`. Not `private` so the
+    /// `+Config` extension (which owns `applyWatermarkFromSession`/`applyOverlayBackgroundColor`) can read/write it.
+    nonisolated(unsafe) var ownedConfigs: [ghostty_config_t] = []
 
     /// Key-window observers (didBecomeKey/didResignKey). A surface in a background window must report an
     /// unfocused (hollow) cursor, but AppKit first responder is per-window and does NOT resign when a
@@ -210,6 +212,25 @@ final class GhosttySurfaceView: NSView, TerminalSurface {
         didSet { updateDropRegistration() }
     }
 
+    /// View-only mode: the surface is rendered but takes NO mouse or keyboard input (the dashboard grid
+    /// cell). SwiftUI's `.allowsHitTesting(false)` does NOT stop AppKit routing a click to this real NSView
+    /// (the same reason `deckVisible` gates drag registration — AppKit's hit resolution bypasses SwiftUI),
+    /// so a click would reach `mouseDown` and grab first responder, defeating the view-only dashboard and
+    /// stealing the keyboard from its key-catcher. When set, `hitTest` returns nil (clicks fall through to
+    /// the SwiftUI cell overlay) and the surface refuses first responder, so keystrokes never reach it.
+    /// `TerminalView` sets it; the dashboard cell turns it on and the deck slot turns it back off on the
+    /// same reparent.
+    var viewOnly = false {
+        didSet {
+            guard viewOnly, !oldValue else { return }
+            // acceptsFirstResponder=false only blocks NEW grabs — a surface that carried first responder in
+            // from the deck (the focused split pane when the dashboard opened) keeps it across the
+            // reparent-within-window, so keystrokes reach the cell and defeat the dashboard's key-catcher.
+            // Resign it here; once view-only, nothing can re-grab it, so the key-catcher owns the keyboard.
+            if let window, window.firstResponder === self { window.makeFirstResponder(nil) }
+        }
+    }
+
     /// Register the file/text drag types only while this surface is the on-screen deck pane; unregister
     /// otherwise, so an eagerly-realized background surface is not a drag target and a drop can only reach
     /// the visible pane. Called from `deckVisible`'s didSet and once from `createSurface` (didSet does not
@@ -221,6 +242,36 @@ final class GhosttySurfaceView: NSView, TerminalSurface {
             unregisterDraggedTypes()
         }
     }
+
+    /// Transient dashboard font size in points that overrides `session.fontSize` for this surface while it
+    /// is hosted in a dashboard grid cell; nil = not overriding. The composer prefers it,
+    /// `reapplySessionConfigIfNeeded` re-emits it across a config reload, and `reportFontSize` won't persist
+    /// it (so a CELL_SIZE round-trip can't write the transient size into `session.fontSize`). Writing it
+    /// re-composes the surface config — a value shrinks the cell's font, nil rebuilds from the session model.
+    var dashboardFontOverride: Double? {
+        didSet {
+            applyWatermarkFromSession()
+            // a SET override (-> value) can't strand a revert report — reportFontSize's
+            // `dashboardFontOverride == nil` guard drops its CELL_SIZE report while the override is active
+            // — so just drop any pending restore.
+            guard dashboardFontOverride == nil, let cleared = oldValue else { pendingFontRestore = nil; return }
+            // CLEARING the override reverts the surface to session.fontSize (the app default when nil). that
+            // fires a CELL_SIZE report ~0.4s LATER (async), long after any same-runloop latch would clear.
+            // when session.fontSize is nil, persisting that report would PIN the session to the default and
+            // stop it following a later Settings change. remember the size the surface reverts to so
+            // reportFontSize consumes THAT report without persisting. only arm when the font actually changes
+            // — an override equal to the target emits no report and would leak the flag onto a later zoom.
+            let target = session?.fontSize ?? GhosttyApp.shared.baseFontSize
+            pendingFontRestore = abs(cleared - target) > 0.5 ? target : nil
+        }
+    }
+
+    /// The font size (points) the surface reverts to when `dashboardFontOverride` is CLEARED — the value
+    /// the async CELL_SIZE report for that revert will carry. Set in the override's `didSet`, consumed by
+    /// `reportFontSize`, which drops the matching report WITHOUT persisting so restoring the dashboard grid
+    /// font never pins a default-following session's `session.fontSize`. State (not a one-runloop latch), so
+    /// it survives the ~0.4s gap before the report arrives.
+    private var pendingFontRestore: Double?
 
     // IME composition state shared with GhosttySurfaceView+Input.swift (stored properties can't live in an extension).
     var _markedRange = NSRange(location: NSNotFound, length: 0)
@@ -553,81 +604,6 @@ final class GhosttySurfaceView: NSView, TerminalSurface {
     /// END_SEARCH action.
     func endSearch() { performBindingAction("end_search") }
 
-    /// Applies a rebuilt ghostty config to this live surface (font/theme change from Settings).
-    /// `update_config` re-applies the whole config including font-size, so any runtime cmd-+/-
-    /// zoom resets to the config default — the caller clears the per-session overrides to match.
-    func applyConfig(_ config: ghostty_config_t) {
-        guard let surface else { return }
-        ghostty_surface_update_config(surface, config)
-    }
-
-    /// Builds this session's background-watermark config overlay (base files + `background-image*` lines +
-    /// the session's current font zoom, via `WatermarkConfig`/`WatermarkRenderer`) and pushes it to the
-    /// surface, retaining the config for teardown. A no-op when the surface has no owning session (the
-    /// overlay/scratch/quick-terminal surfaces never carry one). A nil watermark with no font override
-    /// yields the plain base config, which CLEARS a previously-applied image. The `.text` PNG is (re)rendered
-    /// here so it always matches the current string/color. Main-actor; reads the session imperatively.
-    func applyWatermarkFromSession() {
-        guard let surface, let session else { return }
-        let resolvedImagePath = WatermarkRenderer.materialize(session.backgroundWatermark, sessionID: session.id)
-        let overlay = WatermarkConfig.overlayText(watermark: session.backgroundWatermark,
-                                                  resolvedImagePath: resolvedImagePath, fontSize: session.fontSize,
-                                                  windowOpacity: GhosttyApp.shared.windowOpacity)
-        guard let config = GhosttyApp.shared.configWithOverlay(overlay) else {
-            NSLog("watermark: per-surface config build failed for session %@", session.id.uuidString)
-            return
-        }
-        ghostty_surface_update_config(surface, config)
-        // free the PRIOR per-surface config(s) and keep only this one: after `update_config` installs the
-        // new config the surface no longer references the old, so freeing it here is safe AND caps the
-        // retain at one per surface. Without this, `config.reload` (scriptable) re-applies each watermarked
-        // surface every reload and would grow `ownedConfigs` unbounded on a reload loop.
-        ownedConfigs.forEach { ghostty_config_free($0) }
-        ownedConfigs = [config]
-    }
-
-    /// Re-assert the session's per-surface config (watermark and/or font zoom) after a global config
-    /// reload broadcast the shared config to this surface via `applyConfig`, wiping both. No-op when the
-    /// session carries neither (so a plain surface isn't needlessly rebuilt). Called from
-    /// `GhosttyApp.reloadConfig`; on the zoom-CLEARING reload paths `session.fontSize` was already nil'd
-    /// before the broadcast, so only a watermark re-applies there — the appearance-flip reload skips the
-    /// reset, and this is what carries each session's zoom across the flip.
-    func reapplySessionConfigIfNeeded() {
-        guard session?.backgroundWatermark != nil || session?.fontSize != nil else { return }
-        applyWatermarkFromSession()
-    }
-
-    /// Re-assert a SOLID-color session background after a window-opacity change. A `.color` background
-    /// bakes the current window opacity into its per-surface `background-opacity` at apply time (see
-    /// `WatermarkConfig.overlayText`), so a live opacity change must re-emit it to keep the color tracking
-    /// the slider. No-op unless the session carries a `.color` background — an image/text watermark has a
-    /// fixed opacity and must NOT re-render (a `.text` PNG rebuild) on every opacity tick.
-    func reapplyColorBackgroundIfNeeded() {
-        guard session?.backgroundWatermark?.kind == .color else { return }
-        applyWatermarkFromSession()
-    }
-
-    /// Applies a solid background color to a sessionless OVERLAY surface (`session.overlay.open
-    /// --background-color`). Mirrors `applyWatermarkFromSession`'s `.color` path but reads the overlay's
-    /// own `overlayBackgroundColorHex` + `initialFontSize` instead of a session — the overlay carries no
-    /// `session`, so that path skips it. Bakes the window translucency into `background-opacity` at open
-    /// time (the ephemeral overlay gets no live updates, so it does not re-track a later opacity change —
-    /// unlike a session `.color`). A no-op — or a malformed hex, rejected by the leading `isValidColorHex`
-    /// guard — leaves the plain base config. Retains the per-surface config in `ownedConfigs`, freed on teardown.
-    func applyOverlayBackgroundColor() {
-        guard let surface, let hex = overlayBackgroundColorHex, WatermarkConfig.isValidColorHex(hex) else { return }
-        let overlay = WatermarkConfig.overlayText(watermark: BackgroundWatermark(kind: .color, colorHex: hex),
-                                                  resolvedImagePath: nil, fontSize: initialFontSize.map(Double.init),
-                                                  windowOpacity: GhosttyApp.shared.windowOpacity)
-        guard let config = GhosttyApp.shared.configWithOverlay(overlay) else {
-            NSLog("overlay background: per-surface config build failed")
-            return
-        }
-        ghostty_surface_update_config(surface, config)
-        ownedConfigs.forEach { ghostty_config_free($0) }
-        ownedConfigs = [config]
-    }
-
     /// The surface's live font size in points (post cmd +/-), read from `inherited_config`; nil when the
     /// libghostty surface isn't realized yet or hasn't resolved a size. The read side of `font.*` — the
     /// control `tree` reads it per pane so a script can query what a font change set (the split/scratch
@@ -639,11 +615,20 @@ final class GhosttySurfaceView: NSView, TerminalSurface {
     }
 
     func reportFontSize() {
-        // Already on the main actor (the CELL_SIZE callback hops via DispatchQueue.main.async).
-        // currentFontSize reads the surface's live font size; nil means libghostty hasn't resolved one
-        // yet, so skip it. The store no-ops a same-value write.
+        // already on the main actor (the CELL_SIZE callback hops via DispatchQueue.main.async).
+        // while a dashboard font override is active, don't persist: it would write the transient dashboard
+        // size into session.fontSize.
+        guard dashboardFontOverride == nil else { return }
+        // currentFontSize reads the surface's live font size; nil means libghostty hasn't resolved one yet.
         guard let size = currentFontSize() else { return }
-        onFontSizeChange?(size)
+        // clearing the override reverts the surface font and fires its own CELL_SIZE report ~0.4s later
+        // (see dashboardFontOverride.didSet): drop the one whose size matches the reverted-to value so a
+        // default-following session isn't pinned, then clear the flag so a later genuine zoom persists.
+        if let pending = pendingFontRestore {
+            pendingFontRestore = nil
+            if abs(size - pending) <= 0.5 { return }
+        }
+        onFontSizeChange?(size) // the store no-ops a same-value write.
     }
 
     /// Draws the surface now, servicing libghostty's `GHOSTTY_ACTION_RENDER` demand. Main-actor.
@@ -752,8 +737,11 @@ final class GhosttySurfaceView: NSView, TerminalSurface {
 
         // a session carrying a background watermark (set earlier on a never-shown session, or restored from
         // a snapshot) applies it now that the surface exists — covering deferred-size creation, the eager
-        // deck, and relaunch. No-op for the sessionless overlay/scratch/quick surfaces.
-        if session?.backgroundWatermark != nil { applyWatermarkFromSession() }
+        // deck, and relaunch. No-op for the sessionless overlay/scratch/quick surfaces. ALSO re-applies a
+        // standalone `dashboardFontOverride` (a dashboard member whose surface realizes AFTER the dashboard
+        // set the transient font): `applyWatermarkFromSession` honors `dashboardFontOverride ?? session.fontSize`,
+        // so without this the late-realized cell renders at the default font. Mirrors `reapplySessionConfigIfNeeded`.
+        if session?.backgroundWatermark != nil || dashboardFontOverride != nil { applyWatermarkFromSession() }
         // an overlay surface with its own background color (session.overlay.open --background-color) applies
         // it here too — the overlay is sessionless, so the watermark path above skips it.
         if overlayBackgroundColorHex != nil { applyOverlayBackgroundColor() }
@@ -944,7 +932,15 @@ final class GhosttySurfaceView: NSView, TerminalSurface {
 
     // MARK: - First responder
 
-    override var acceptsFirstResponder: Bool { true }
+    override var acceptsFirstResponder: Bool { !viewOnly }
+
+    /// In view-only mode (a dashboard grid cell) refuse hit-testing so a click passes THROUGH to the SwiftUI
+    /// cell overlay (highlight/enter) instead of reaching `mouseDown` and grabbing first responder. AppKit
+    /// routes clicks to this real NSView regardless of SwiftUI `.allowsHitTesting(false)`, so the block must
+    /// live here.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        viewOnly ? nil : super.hitTest(point)
+    }
 
     /// Deliver the LEFT click that reactivates a background/inactive window straight to the surface (a
     /// "first mouse") instead of AppKit swallowing it just to raise the window. Without this, clicking a

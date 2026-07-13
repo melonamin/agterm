@@ -315,6 +315,8 @@ agterm arranges terminals into a small hierarchy. These are the only terms you n
 
 **Terminal zoom.** Zoom fills the whole window with one terminal surface — a pane, the scratch, an overlay, or the quick terminal — hiding the sidebar and collapsing the title bar to a slim strip that keeps the traffic lights and an exit button. Cmd+Shift+Return toggles it on the active surface (rebindable as `toggle_terminal_zoom`; the exit button, ⌘W, and View ▸ Toggle Terminal Zoom all leave it). It is a view mode, not a layout change: entering closes transient chrome (an open palette or search), and exiting restores split ratios, focus, and visibility exactly as they were. Everything else keeps running behind the zoomed surface, and a script can zoom any surface by id with `agtermctl surface zoom`. Distinct from macOS window zoom and full screen, which size the window itself.
 
+**Dashboard.** For watching several agents or builds at once, the dashboard shows sessions' live output side by side in a grid (laid out `ceil(sqrt(n))`), overlaid on the window. The cell unit is a session+pane: a non-split session is one cell, and a split session shows as two cells — its left/primary and right/split panes. It is view-only — no cell takes input; the keyboard navigates a highlight between cells with the arrow keys, Enter jumps into the highlighted session and focuses that exact pane (and closes the grid), and Esc closes it. It is opened over the control channel with `agtermctl dashboard <ids…>` — or with `agtermctl dashboard --mru` to fill the grid from the window's most-recently-used sessions instead of naming ids — and closed with `--close` (or Enter/Esc). The most-recently-used grid also has a built-in opener: **⌘⇧D** (or **Navigate ▸ Dashboard**, or the command palette's **Dashboard**) toggles it, auto-sized, so the recent-sessions view is one keystroke away without a script. Cell fonts can be sized absolutely with `--font-size` or scaled to the grid with `--auto-size`; the nine-cell cap counts panes, so a set whose panes exceed nine is capped with the drop reported, and `--window` picks a window (default frontmost). The dashboard and terminal zoom are mutually exclusive.
+
 **Workspace.** A workspace is a named group of sessions for one project or context, for example "work" or "personal". Sessions belong to a workspace and can move between workspaces while still running, keeping their shell and scrollback. There is always at least one workspace.
 
 **Window.** A window is a whole set of workspaces and sessions in its own on-screen macOS window, with its own sidebar. Each window has its own sessions, so "work" and "personal" can run as two separate windows at once, each with its own tree. You keep a library of windows and open one per on-screen window; the windows open at quit reopen on the next launch with their frames.
@@ -322,6 +324,8 @@ agterm arranges terminals into a small hierarchy. These are the only terms you n
 **Flagging and focus.** Two ways to cut down a busy sidebar. Flag a few sessions from different workspaces to get a flat working-set view of just those; a flag is durable and survives a move. Focus a single workspace to hide the others, with a one-click way back. The two are independent.
 
 Sidebar session rows support Shift-click range selection and Cmd-click toggling for batch work. Right-clicking inside a multi-selection keeps the batch for Flag/Unflag, Close, and Move to; right-clicking outside narrows to the clicked row. Dragging from a selected row moves the selected sessions as one ordered block.
+
+**Finder integration.** In the tree view, drag folders from Finder onto a workspace or session row to open one session per folder there; drop on empty sidebar space to use the focused/current workspace. Collapsed workspaces spring open while you hover and close again if you cancel. Dropping more than 20 folders at once is rejected. **Reveal in Finder** in the session context menu or main menu selects the focused pane's current directory (and is disabled if that directory no longer exists). Folder-picking panels also start in the focused pane's directory when it is available.
 
 **Notifications.** A program in any session can raise a desktop notification (via OSC 9 / 777, or the control API). It shows as a banner and a count badge on the session's row; clicking the banner jumps to the exact pane that raised it. The badge clears when you visit the session, or headlessly with `agtermctl session seen` — so an orchestrator driving a session over the socket can acknowledge its notifications without pulling focus to it (`agtermctl tree --json` reports each session's `unseen` count). For a coding agent that just needs to say it is waiting on you, [Agent status](#agent-status) is usually the better fit.
 
@@ -347,7 +351,7 @@ The theme picker (View ▸ Select Theme…, or the action palette) previews each
 
 `agterm` can be driven from a script over a local unix-domain socket through a companion CLI, `agtermctl`. This is for personal scripting — fire-and-forget commands that manage workspaces and sessions, inject text, and invoke control actions. There is no terminal-output streaming and no event subscription.
 
-The sections below cover the common cases. All 58 commands, with every argument, return value, and error, are documented in the **[Command reference](https://agterm.com/commands)**.
+The sections below cover the common cases. All 60 commands, with every argument, return value, and error, are documented in the **[Command reference](https://agterm.com/commands)**.
 
 The app bundles `agtermctl` inside `agterm.app`. The easiest way to put it on your PATH is **Help ▸ Install Command Line Tool…**, which symlinks the bundled binary into `/usr/local/bin` (the first entry in macOS's default PATH). When that directory is user-writable it installs silently; otherwise it asks once for an administrator password.
 
@@ -387,6 +391,7 @@ agtermctl session split toggle                   # split the active session
 agtermctl session resize --split-ratio 0.7       # set the split divider (left-pane fraction); or --grow-left/--grow-right D
 agtermctl session scratch toggle                 # show/hide the active session's scratch terminal (on|off|toggle)
 agtermctl session flag on                        # flag the active session for the flagged working-set view (on|off|toggle|clear)
+agtermctl session reveal --target 9f3c           # reveal the focused pane's cwd in Finder
 agtermctl session seen --target 9f3c             # clear a session's unseen-notification badge without visiting it (focus-free)
 agtermctl sidebar mode flagged                   # show only the flagged sessions as a flat list (tree|flagged|toggle)
 agtermctl workspace focus on                     # collapse the sidebar tree to the active workspace (on|off|toggle)
@@ -396,6 +401,8 @@ agtermctl quick toggle                           # toggle the quick terminal (sh
 agtermctl quick type 'ls -la'$'\n'               # type into the frontmost window's quick terminal (or --stdin); quick text reads it back
 agtermctl surface zoom                           # fill the window with the active terminal surface (show|hide|toggle)
 agtermctl surface zoom show --target "surface:$AGTERM_SESSION_ID:right"  # zoom a specific surface by id (ids in tree --json)
+agtermctl dashboard "$a" "$b" "$c" --auto-size   # view-only grid; a split session is two cells, capped at 9 panes (--font-size N | --auto-size; --close)
+agtermctl dashboard --mru --auto-size            # ...or fill it from the window's most-recently-used sessions (no ids)
 agtermctl font inc                               # increase the session's (main pane's) font size
 agtermctl font dec --pane right                   # shrink just the split pane's font (--pane left|right|scratch)
 agtermctl theme set --light "Builtin Light" --dark Dracula  # set the light/dark theme slots (--dark none turns following off)
@@ -485,7 +492,7 @@ The format is line-based with two verbs. Blank lines and lines starting with `#`
 
 ```
 # rebind a built-in to a single chord (mods joined by +; no leader sequences for built-ins)
-map cmd+shift+d   toggle_split
+map cmd+shift+l   toggle_split
 map ctrl+shift+k  command_palette
 
 # define custom commands ("name" shows in the palette; chord is optional)
@@ -512,6 +519,7 @@ previous_attention_session            next_attention_session
 quick_terminal     session_palette    command_palette
 custom_command_palette                show_attention
 select_theme       toggle_fullscreen  toggle_terminal_zoom
+dashboard
 ```
 
 The shell line of a `command` may use these `{AGT_X}` tokens, expanded at fire time (the same values are also exported as `$AGT_X` environment variables on the spawned process):
@@ -594,13 +602,9 @@ agtermctl session status idle --target "$AGTERM_SESSION_ID"        # clear it
 
 To wire this up automatically, **Help ▸ Install Agent Status Hooks…** installs a hooks package. It copies the scripts to `~/.config/agterm/agent-status/` (baking in the bundled `agtermctl`'s path so the hooks work even without the CLI on your PATH), adds a `source` line to `~/.zshrc`, `~/.bashrc`, and `~/.config/fish/config.fish` for the generic shell integration, and merges four Claude Code hooks into `~/.claude/settings.json` (backing up the prior file as `.bak`, or leaving it untouched and skipping the merge if it isn't valid JSON): a prompt sets `active`, each tool that runs re-asserts `active` (so the status returns to active when work resumes after you answer a permission prompt), the Stop event sets `completed --auto-reset`, and a permission prompt sets `blocked`. It is idempotent — re-running refreshes the baked path and is a clean no-op for entries already present.
 
-For Codex, the installer prints (it does not auto-edit TOML) a line to add to `~/.codex/config.toml` yourself:
+For Codex, the installer merges a matching set of lifecycle hooks into `~/.codex/config.toml` (writing a `.bak` first, and only when you already have a `~/.codex` directory). Codex's `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PermissionRequest`, and `Stop` events run a dedicated installed adapter. `PermissionRequest` is only a candidate signal because it fires before Auto Review decides whether a person is needed; the adapter keeps the session active during automatic review and changes it to `blocked` only after a real approval or structured question dialog appears in that pane. `Stop` sets `completed`. The Codex-specific lifecycle and prompt recognition stays entirely in the installed hook package; agterm's status runtime only receives the same generic `active`, `blocked`, and `completed` updates as it does from any caller. Re-running the installer upgrades an older agterm-managed Codex hook block and preserves Codex's hook trust records. This also replaces an earlier `notify` script that guessed "waiting on you" from final-message text; the installer removes that old `notify` line for you. The merge parses your config first, so it preserves your comments and layout; if the file already defines its own hooks or isn't valid TOML, agterm leaves it untouched and shows you the block to add by hand instead. Codex requires changed command hooks to be reviewed before they run, so open Codex and run `/hooks` once after installing or upgrading them.
 
-```toml
-notify = ["/Users/you/.config/agterm/agent-status/codex-notify.sh"]
-```
-
-A generic bash/zsh/fish `shell/integration.sh` (or `.fish`) covers any agent launched as a shell command: it flags `active` while a command matching `AGTERM_AGENT_RE` runs and `idle` at the next prompt. The default regex matches `codex`, `gemini`, `cursor-agent`, `aider`, `opencode`, `crush`, and `goose`; Claude Code is excluded by default because its own hooks drive finer per-turn state, and Codex additionally has the richer `codex-notify.sh` chain above. Override `AGTERM_AGENT_RE` before sourcing to change the set. All hooks are no-ops outside an agterm session.
+A generic bash/zsh/fish `shell/integration.sh` (or `.fish`) covers any agent launched as a shell command: it flags `active` while a command matching `AGTERM_AGENT_RE` runs and `idle` at the next prompt. The default regex matches `gemini`, `cursor-agent`, `aider`, `opencode`, `crush`, and `goose`; Claude Code and Codex are excluded by default because their own hooks drive finer per-turn state that the coarse process-level `active`/`idle` would only fight. Override `AGTERM_AGENT_RE` before sourcing to change the set. All hooks are no-ops outside an agterm session.
 
 ## Troubleshooting
 

@@ -247,6 +247,74 @@ paths:
   but is harder: it is NOT fixed by `refresh` or a forced `set_size` jitter,
   and a font change doesn't resize the view so this `updateMetalLayerSize` path never fires for it —
   still parked.
+- **Dashboard grid = the N-PANE generalization of terminal-zoom's reparent, focus inverted.**
+  Where `surface.zoom` reparents ONE session surface into the window and focuses it, the dashboard
+  (`DashboardView` + `WindowContentView+Dashboard.swift`, driven by the host-free `DashboardController`)
+  reparents up to `DashboardLayout.maxCells` (9) PANE surfaces into a `ceil(sqrt(n))`-wide grid and
+  focuses NONE while open — every cell is view-only.
+  The cell unit is a `DashboardMember` = session + `.primary`/`.split`: a non-split session is ONE
+  `.primary` cell, and a SPLIT session (`hasSplit`) shows as TWO cells — its `.primary` AND `.split`
+  panes — so the app-side expansion in `ControlServer.setDashboard` yields both, and the 9-cap counts PANES.
+  Each cell hosts its OWN pane surface — `.primary` → `\.surface` via `makeSurface`, `.split` →
+  `\.splitSurface` via `makeSplitSurface` — via `TerminalView(isActive: false, deckVisible: false,
+  reportsFocusChange: false, viewOnly: true)` with a stable slot `.id` (`-dashboard-primary`/`-dashboard-split`),
+  so the grid shows the LIVE shell, never a fresh one.
+  The generalized `dashboardHostsSurface` claims EACH member's pane slot (both panes of a split member),
+  so `deckHostsSurface` yields a `Color.clear` placeholder in each claimed deck slot — the SAME "keep the
+  deck mounted, swap only the hosted slot" contract zoom uses, generalized to N panes, so control-opened
+  split/scratch/overlay surfaces still realize behind the grid.
+  Enter on a cell selects the session, closes the dashboard, then focuses the cell's EXACT pane (the split
+  pane for a `.split` cell, else the main pane).
+- **Dashboard placement: a `windowOverlayLayer` branch, NOT a body-level `.overlay`.**
+  It renders while `controller.isOpen` at `zIndex 1`, inset by `titlebarHeight`, below the `customTitlebar`
+  — the same transparent-titlebar-scrim rule the quick terminal / palettes / switcher follow (see the
+  `windowOverlayLayer` note above); never a body-level `.overlay`, which would composite over the titlebar.
+- **Dashboard view-only is FIVE cooperating gates — hit-testing off alone is not enough.**
+  `isActive: false` only stops auto-focus; it does NOT disable `mouseDown`/first-responder eligibility
+  (see the surface-bridge note), so a click would still reach `mouseDown` and the retry loops would
+  re-grab the surface.
+  The full set:
+  - each cell's terminal is `.allowsHitTesting(false)`, with a transparent hit target ABOVE it for
+    click-highlight / double-click-enter (the terminal itself takes no hits);
+  - `GhosttySurfaceView.viewOnly` (threaded via `TerminalView`) makes the member surface refuse to be
+    first responder (`acceptsFirstResponder = !viewOnly`) and drop hits (`hitTest` returns nil when
+    `viewOnly`), so even a stray reactivation click can't focus it;
+  - `deckInteractive` (`WindowContentView.swift`) is gated on `terminalZoom.target == nil &&
+    !dashboard.isOpen`, killing pane focus, scratch/overlay auto-focus, drag registration, and
+    background-click handling while the dashboard is up;
+  - an AppKit key-catcher owns first responder and CONSUMES every key (arrows → `controller.move`,
+    Enter → select+close, Esc → close, everything else swallowed), so no cell is ever first responder
+    and every cursor draws hollow;
+  - `AppActions.focusActiveSession` early-returns when `dashboardActive` (the window's controller
+    `isOpen`), mirroring its existing zoom/palette guards — without it the ~12×0.03s
+    `makeFirstResponder` retry would re-grab the active session's now-view-only grid cell and leak the
+    keyboard to the terminal (a real bug the e2e surfaced).
+- **Dashboard cell font uses a TRANSIENT `GhosttySurfaceView.dashboardFontOverride`, never a record-restore
+  of `session.fontSize`.**
+  There is no absolute font setter and a font round-trips through the model (`reportFontSize` →
+  `onFontSizeChange` → `store.setFontSize`), and a reload re-emits `session.fontSize` — so a
+  record-then-restore of the session font would be clobbered by a reload and would persist the dashboard
+  size.
+  Instead the per-surface config composer uses `dashboardFontOverride ?? session.fontSize`,
+  `reapplySessionConfigIfNeeded` REASSERTS the override across a config reload (so a File ▸ Reload while
+  the dashboard is open doesn't strand or clear the grid font), and `reportFontSize` is SUPPRESSED
+  (`guard dashboardFontOverride == nil`) while the override is set, so the CELL_SIZE round-trip can't
+  write the dashboard size into `session.fontSize`.
+  On open the wiring sets each member cell's OWN pane surface override from `fontMode` (`.auto` via
+  `DashboardLayout.dashboardFontSize`, base `AppSettings.fontSize ?? 13.0` ghostty default; `.fixed`
+  value; `.untouched` leaves it nil) — `.primary` → `\.surface`, `.split` → `\.splitSurface`; on close it
+  CLEARS the override with a store-wide sweep of BOTH `\.surface` AND `\.splitSurface` of every session
+  (a split member's two panes can each carry one) and rebuilds from the session model — no record-restore
+  dictionary.
+- **Zoom ↔ dashboard are reciprocally exclusive.**
+  `ControlServer.setDashboard` closes any active zoom before opening the grid, and
+  `WindowContentView`'s `.onChange(of: terminalZoom.target)` closes the dashboard when a zoom becomes
+  active — so the two view modes never stack.
+- **Opening/closing the dashboard resizes each member's pty — unavoidable.**
+  A cell is smaller than the full pane, so reparenting a member into (and back out of) its cell resizes
+  its surface, which resizes the pty; the program receives a `SIGWINCH`/resize event and may redraw.
+  "View-only" means no INPUT reaches the cell, NOT that the member's process is untouched — a full-screen
+  TUI reflows to the cell on open and back on close.
 - **strdup buffer lifetime.**
   `working_directory` (and `initial_input`) `const char*` buffers must outlive `ghostty_surface_new`;
   they are held in a `nonisolated(unsafe)` array and freed only in `destroySurface()`.

@@ -138,6 +138,21 @@ final class ControlAPIUITests: ControlAPITestCase {
         XCTAssertEqual(resp["ok"] as? Bool, true, "restore.clear should succeed: \(resp)")
     }
 
+    // session.reveal resolves the active session and drives the same focused-cwd Finder action as the
+    // main/context menus. Finder itself is outside the app's AX tree; success plus the returned id proves
+    // the command reached the platform action, while a missing target proves normal resolver errors remain.
+    func testSessionRevealSucceedsAndResolvesTargets() throws {
+        let activeID = try activeSessionID()
+        let revealed = try sendCommand(#"{"cmd":"session.reveal","target":"active"}"#)
+        XCTAssertEqual(revealed["ok"] as? Bool, true, "session.reveal should succeed: \(revealed)")
+        let result = try XCTUnwrap(revealed["result"] as? [String: Any])
+        XCTAssertEqual((result["id"] as? String)?.lowercased(), activeID.lowercased())
+
+        let missing = try sendCommand(#"{"cmd":"session.reveal","target":"ffffffff"}"#)
+        XCTAssertEqual(missing["ok"] as? Bool, false, "an unknown target should fail")
+        XCTAssertTrue((missing["error"] as? String)?.contains("no such session") == true)
+    }
+
     // session.background sets a text watermark and clears it; bad input (missing image, invalid fit) is
     // rejected and the server stays alive. The actual pixels are not AX-observable (Metal surface), so this
     // covers the control round-trip + validation, like the other surface-state commands.
@@ -355,6 +370,47 @@ final class ControlAPIUITests: ControlAPITestCase {
         }
         XCTAssertTrue(got, "the new command session should be focused so typed text reaches its process")
         try? FileManager.default.removeItem(atPath: marker)
+    }
+
+    // promote → re-split keystroke-clear: after the primary exits and the split survivor is promoted into
+    // the main slot, then a fresh split opens, typing a REAL keystroke in the promoted MAIN pane must NOT
+    // clear a `.right` block owned by the fresh split — the promoted survivor is the main (`.left`) pane now.
+    // Before the role-aware wireStatusClear fix the survivor stayed statically `.right`-wired, so main-pane
+    // typing wrongly cleared the split's `.right` block. Real keystrokes (not session.type inject) drive the
+    // onUserInputClearsStatus path; the socket sets + reads the status. Guards the role-aware clear + re-tag.
+    func testPromotedMainPaneDoesNotClearSplitRightStatus() throws {
+        let sid = try activeSessionID()
+
+        // open a split, focus the primary (left), and exit its shell so the right pane PROMOTES to main.
+        XCTAssertEqual(try sendCommand(#"{"cmd":"session.split","target":"\#(sid)","args":{"mode":"on"}}"#)["ok"] as? Bool, true)
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        app.typeKey(.leftArrow, modifierFlags: [.command, .option])
+        RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+        app.typeText("exit")
+        app.typeKey(.return, modifierFlags: [])
+        RunLoop.current.run(until: Date().addingTimeInterval(2)) // shell exit + promotion + auto-focus
+
+        // re-split → a fresh right pane opens; block it (.right).
+        XCTAssertEqual(try sendCommand(#"{"cmd":"session.split","target":"\#(sid)","args":{"mode":"on"}}"#)["ok"] as? Bool, true)
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        XCTAssertEqual(try sendCommand(#"{"cmd":"session.status","target":"\#(sid)","args":{"status":"blocked","pane":"right"}}"#)["ok"] as? Bool, true)
+        // sanity: the block is set before we test that typing elsewhere doesn't clear it.
+        var set = false
+        for _ in 0..<10 {
+            if (sessionNode(try sendCommand(#"{"cmd":"tree"}"#), id: sid)?["status"] as? String) == "blocked" { set = true; break }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        }
+        XCTAssertTrue(set, "the .right block should be set before the keystroke test")
+
+        // type a REAL keystroke in the promoted MAIN (left) pane — must NOT clear the split's .right block.
+        app.typeKey(.leftArrow, modifierFlags: [.command, .option])
+        RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+        app.typeText("x")
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+
+        let tree = try sendCommand(#"{"cmd":"tree"}"#)
+        XCTAssertEqual(sessionNode(tree, id: sid)?["status"] as? String, "blocked",
+                       "typing in the promoted main pane must not clear the split pane's .right block")
     }
 
     // session.new --name seeds the new session's custom name at creation (open a session already labeled,

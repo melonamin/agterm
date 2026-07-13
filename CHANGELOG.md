@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.12.1 - 2026-07-13
+
+### Bug Fixes
+
+- stop agterm's embedded shells from identifying as Ghostty via `TERM_PROGRAM`, which could make a Ghostty-aware tool shell out to a standalone `ghostty` on the `PATH` and launch a windowless Ghostty.app while you were using agterm #203 @umputun
+- fix the Codex agent status getting stuck on `blocked` during an auto review, where the permission prompt fired before the review resolved it #204 @umputun
+- strip the dashboard's titlebar to a single exit button while the grid is open, so its sidebar, split, scratch, and quick-terminal buttons can no longer steal focus and leave Esc unable to close the grid #205 @umputun
+
+## v0.12.0 - 2026-07-12
+
+### New Features
+
+- dashboard grid overlay: a per-window grid that shows a picked set of live terminal panes at once, so you can glance across several sessions and jump into one. `⌘⇧D` toggles it over the window's most-recently-used sessions, `agtermctl dashboard <id> <id> ...` opens it over an explicit set, up to nine cells and view-only (arrows move the highlight, Enter drops in, Esc closes) #202 @umputun
+- sidebar Finder folder drops create sessions rooted at the dropped directories, plus `Reveal in Finder` for the active session and spring-open of collapsed workspaces while dragging over them #180 @melonamin
+- promote the surviving split pane into the main slot when the primary pane's shell exits, so a collapsed-to-single session behaves like a fresh single pane, reports `left`, and a later `session.split` opens a fresh pane beside it #121 @fkirill
+- drive Codex agent-status from its lifecycle hooks instead of keyword-matching the final message, so an approval prompt shows `blocked` the moment Codex asks and an ordinary turn no longer gets wrongly stuck on it #194 @umputun
+
+### Bug Fixes
+
+- stop split panes flickering on a rapid focus change, where two overlapping focus retry loops ping-ponged first responder between the panes for ~400ms #200 @umputun
+
 ## v0.11.0 - 2026-07-11
 
 ### New Features

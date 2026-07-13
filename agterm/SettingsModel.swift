@@ -75,6 +75,7 @@ final class SettingsModel {
         applyInactivePaneMute()
         applySidebarBackgroundShift()
         applySidebarFontSize()
+        applyBaseFontSize()
         applyAgentStatusColors()
         applyRestoreRunningCommand()
         applyAttentionButtonEnabled()
@@ -96,6 +97,10 @@ final class SettingsModel {
             MainActor.assumeIsolated { self?.appearanceChanged(isDark: isDark) }
         }
     }
+
+    /// The frontmost session's focused-pane cwd, used only to seed directory-picking panels near the
+    /// user's current work. Settings views still mutate through this model; they don't need library access.
+    var activeSessionCwd: String? { library.activeStore?.activeSession?.focusedCwd }
 
     /// The appearance side the last config feed applied, used to suppress redundant re-posts of
     /// `.agtermSystemAppearanceChanged` on the same side (KVO `[.initial]` seeds one at launch, and the
@@ -631,6 +636,7 @@ final class SettingsModel {
         applyInactivePaneMute()
         applySidebarBackgroundShift()
         applySidebarFontSize()
+        applyBaseFontSize()
         applyAgentStatusColors()
         applyRestoreRunningCommand()
         applyAttentionButtonEnabled()
@@ -697,6 +703,10 @@ final class SettingsModel {
 
     private func applySidebarFontSize() {
         GhosttyApp.shared.setSidebarFontSize(settings.sidebarFontSize ?? AppSettings.defaultSidebarFontSize)
+    }
+
+    private func applyBaseFontSize() {
+        GhosttyApp.shared.setBaseFontSize(settings.fontSize)
     }
 
     private func applyAgentStatusColors() {

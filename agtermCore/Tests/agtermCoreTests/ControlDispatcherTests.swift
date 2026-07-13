@@ -255,16 +255,23 @@ struct ControlDispatcherTests {
             target: "session",
             args: ControlArgs(name: "api")
         ))
+        let revealed = await dispatcher.dispatch(ControlRequest(
+            cmd: .sessionReveal,
+            target: "session",
+            args: ControlArgs(window: "win")
+        ))
 
         #expect(selected == ControlResponse(ok: true))
         #expect(navigated == ControlResponse(ok: true))
         #expect(closed == ControlResponse(ok: true))
         #expect(renamed == ControlResponse(ok: true))
+        #expect(revealed == ControlResponse(ok: true))
         #expect(actions.calls == [
             .sessionSelect(target: "session", window: "win"),
             .sessionGo(window: "win", .nextAttention),
             .sessionClose(target: "session", window: nil),
-            .sessionRename(target: "session", window: nil, "api")
+            .sessionRename(target: "session", window: nil, "api"),
+            .sessionReveal(target: "session", window: "win")
         ])
     }
 
@@ -1316,6 +1323,106 @@ struct ControlDispatcherTests {
         #expect(actions.calls.isEmpty)
     }
 
+    @Test func dashboardOpenRoutesTargetsWindowAndFixedFontMode() async {
+        let actions = MockControlActions()
+        let dispatcher = ControlDispatcher(actions: actions)
+        actions.nextDashboardResponse = ControlResponse(ok: true, result: ControlResult(id: "win"))
+
+        let response = await dispatcher.dispatch(ControlRequest(
+            cmd: .dashboard,
+            args: ControlArgs(targets: ["a", "b"], window: "win", fontSize: 14)
+        ))
+
+        #expect(response == ControlResponse(ok: true, result: ControlResult(id: "win")))
+        #expect(actions.calls == [
+            .dashboard(targets: ["a", "b"], window: "win", close: false, fontMode: .fixed(14), mru: false)
+        ])
+    }
+
+    @Test func dashboardOpenBuildsAutoAndUntouchedFontModes() async {
+        let actions = MockControlActions()
+        let dispatcher = ControlDispatcher(actions: actions)
+
+        let auto = await dispatcher.dispatch(ControlRequest(
+            cmd: .dashboard, args: ControlArgs(targets: ["a"], autoSize: true)))
+        let untouched = await dispatcher.dispatch(ControlRequest(
+            cmd: .dashboard, args: ControlArgs(targets: ["a", "b"])))
+
+        #expect(auto == ControlResponse(ok: true))
+        #expect(untouched == ControlResponse(ok: true))
+        #expect(actions.calls == [
+            .dashboard(targets: ["a"], window: nil, close: false, fontMode: .auto, mru: false),
+            .dashboard(targets: ["a", "b"], window: nil, close: false, fontMode: .untouched, mru: false)
+        ])
+    }
+
+    @Test func dashboardCloseRoutesWithCloseTrueAndNoFontMode() async {
+        let actions = MockControlActions()
+        let dispatcher = ControlDispatcher(actions: actions)
+
+        let response = await dispatcher.dispatch(ControlRequest(
+            cmd: .dashboard, args: ControlArgs(window: "win", close: true)))
+
+        #expect(response == ControlResponse(ok: true))
+        #expect(actions.calls == [
+            .dashboard(targets: [], window: "win", close: true, fontMode: .untouched, mru: false)
+        ])
+    }
+
+    @Test func dashboardForwardsAllTargetsWithoutCapping() async {
+        // the 9-cell cap now counts PANES and lives app-side (a split session expands to two cells), so the
+        // dispatcher forwards ALL raw ids untouched and appends no drop text — the drop is computed and
+        // reported in `ControlServer.setDashboard`, which owns the pane expansion.
+        let actions = MockControlActions()
+        let dispatcher = ControlDispatcher(actions: actions)
+        let ids = (1...11).map { "s\($0)" }
+
+        let response = await dispatcher.dispatch(ControlRequest(cmd: .dashboard, args: ControlArgs(targets: ids)))
+        #expect(response?.ok == true)
+        #expect(response?.result?.text == nil, "the dispatcher no longer caps or reports a drop")
+        #expect(actions.calls == [
+            .dashboard(targets: ids, window: nil, close: false, fontMode: .untouched, mru: false)
+        ])
+
+        // whatever the app-side response is (unresolved / dropped-pane text), the dispatcher passes it through
+        // verbatim — it no longer post-processes the message.
+        actions.nextDashboardResponse = ControlResponse(ok: true, result: ControlResult(text: "unresolved: s3"))
+        let passed = await dispatcher.dispatch(ControlRequest(cmd: .dashboard, args: ControlArgs(targets: ids)))
+        #expect(passed?.result?.text == "unresolved: s3")
+    }
+
+    @Test func dashboardRejectsInvalidInputsBeforeCallingActions() async {
+        let actions = MockControlActions()
+        let dispatcher = ControlDispatcher(actions: actions)
+
+        let emptyOpen = await dispatcher.dispatch(ControlRequest(cmd: .dashboard))
+        let bothFonts = await dispatcher.dispatch(ControlRequest(
+            cmd: .dashboard, args: ControlArgs(targets: ["a"], fontSize: 12, autoSize: true)))
+        let zeroFont = await dispatcher.dispatch(ControlRequest(
+            cmd: .dashboard, args: ControlArgs(targets: ["a"], fontSize: 0)))
+        let negativeFont = await dispatcher.dispatch(ControlRequest(
+            cmd: .dashboard, args: ControlArgs(targets: ["a"], fontSize: -3)))
+        let nonFiniteFont = await dispatcher.dispatch(ControlRequest(
+            cmd: .dashboard, args: ControlArgs(targets: ["a"], fontSize: Double.nan)))
+        let closeWithIds = await dispatcher.dispatch(ControlRequest(
+            cmd: .dashboard, args: ControlArgs(targets: ["a"], close: true)))
+        let closeWithFont = await dispatcher.dispatch(ControlRequest(
+            cmd: .dashboard, args: ControlArgs(close: true, fontSize: 12)))
+        let closeWithAutoSize = await dispatcher.dispatch(ControlRequest(
+            cmd: .dashboard, args: ControlArgs(close: true, autoSize: true)))
+
+        #expect(emptyOpen == ControlResponse(ok: false, error: "dashboard requires at least one session id"))
+        #expect(bothFonts == ControlResponse(
+            ok: false, error: "dashboard: --font-size is mutually exclusive with --auto-size"))
+        #expect(zeroFont == ControlResponse(ok: false, error: "dashboard --font-size must be a positive number"))
+        #expect(negativeFont == ControlResponse(ok: false, error: "dashboard --font-size must be a positive number"))
+        #expect(nonFiniteFont == ControlResponse(ok: false, error: "dashboard --font-size must be a positive number"))
+        #expect(closeWithIds == ControlResponse(ok: false, error: "dashboard --close takes no ids, --mru, or font options"))
+        #expect(closeWithFont == ControlResponse(ok: false, error: "dashboard --close takes no ids, --mru, or font options"))
+        #expect(closeWithAutoSize == ControlResponse(ok: false, error: "dashboard --close takes no ids, --mru, or font options"))
+        #expect(actions.calls.isEmpty)
+    }
+
     @Test func sessionSearchRoutesRawInputsAndKeepsActionResponse() async {
         let actions = MockControlActions()
         let dispatcher = ControlDispatcher(actions: actions)
@@ -1475,7 +1582,7 @@ struct ControlDispatcherTests {
 }
 
 @MainActor
-private final class MockControlActions: ControlActions {
+final class MockControlActions: ControlActions {
     enum Call: Equatable {
         case tree(window: String?)
         case sessionNew(ControlSessionCreateOptions)
@@ -1484,6 +1591,7 @@ private final class MockControlActions: ControlActions {
         case sessionClose(target: String?, window: String?)
         case sessionCloseBatch(targets: [String], window: String?)
         case sessionRename(target: String?, window: String?, String)
+        case sessionReveal(target: String?, window: String?)
         case workspaceNew(window: String?, String?)
         case workspaceSelect(target: String?, window: String?)
         case workspaceRename(target: String?, window: String?, String)
@@ -1500,6 +1608,7 @@ private final class MockControlActions: ControlActions {
         case sessionFocus(target: String?, window: String?, String?)
         case sessionResize(target: String?, window: String?, ControlSplitResize)
         case surfaceZoom(target: String?, window: String?, ControlToggleMode)
+        case dashboard(targets: [String], window: String?, close: Bool, fontMode: DashboardFontMode, mru: Bool)
         case font(target: String?, window: String?, pane: String?, String)
         case keymapReload
         case configReload
@@ -1565,6 +1674,7 @@ private final class MockControlActions: ControlActions {
     var nextSessionBackgroundResponse = ControlResponse(ok: true)
     var nextSessionTextResponse = ControlResponse(ok: true)
     var nextSurfaceZoomResponse = ControlResponse(ok: true)
+    var nextDashboardResponse = ControlResponse(ok: true)
     var nextWindowNewResponse = ControlResponse(ok: true)
     var nextWindowListResponse = ControlResponse(ok: true)
     var nextWindowSelectResponse = ControlResponse(ok: true)
@@ -1609,6 +1719,11 @@ private final class MockControlActions: ControlActions {
 
     func renameSession(_ target: String?, window: String?, name: String) -> ControlResponse {
         calls.append(.sessionRename(target: target, window: window, name))
+        return ControlResponse(ok: true)
+    }
+
+    func revealSession(_ target: String?, window: String?) -> ControlResponse {
+        calls.append(.sessionReveal(target: target, window: window))
         return ControlResponse(ok: true)
     }
 
@@ -1692,6 +1807,12 @@ private final class MockControlActions: ControlActions {
     func setSurfaceZoom(_ target: String?, window: String?, mode: ControlToggleMode) -> ControlResponse {
         calls.append(.surfaceZoom(target: target, window: window, mode))
         return nextSurfaceZoomResponse
+    }
+
+    func setDashboard(targets: [String], window: String?, close: Bool,
+                      fontMode: DashboardFontMode, mru: Bool) -> ControlResponse {
+        calls.append(.dashboard(targets: targets, window: window, close: close, fontMode: fontMode, mru: mru))
+        return nextDashboardResponse
     }
 
     func font(_ target: String?, window: String?, pane: String?, action: String) -> ControlResponse {

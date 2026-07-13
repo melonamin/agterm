@@ -102,6 +102,13 @@ extension WorkspaceSidebar.Coordinator {
             flag.target = self
             flag.representedObject = SessionBatchRequest(sessionIDs: sessionTargets)
             menu.addItem(flag)
+            if sessionCount == 1 {
+                let reveal = NSMenuItem(title: "Reveal in Finder", action: #selector(menuRevealInFinder(_:)), keyEquivalent: "")
+                reveal.target = self
+                reveal.representedObject = node
+                reveal.isEnabled = actions.canRevealSessionInFinder(node.id, in: store)
+                menu.addItem(reveal)
+            }
             let closeTitle = sessionCount == 1 ? "Close Session" : "Close \(sessionCount) Sessions"
             let close = NSMenuItem(title: closeTitle, action: #selector(menuClose(_:)), keyEquivalent: "")
             close.target = self
@@ -174,6 +181,11 @@ extension WorkspaceSidebar.Coordinator {
         actions.toggleFlags(request.sessionIDs, in: store)
     }
 
+    @objc private func menuRevealInFinder(_ sender: NSMenuItem) {
+        guard let node = sender.representedObject as? SidebarNode else { return }
+        actions.revealSessionInFinder(node.id, in: store)
+    }
+
     @objc private func menuNewSession(_ sender: NSMenuItem) {
         guard let node = sender.representedObject as? SidebarNode else { return }
         // resolve the cwd via the same new-session-directory setting as AppActions.newSession(), so the
@@ -213,6 +225,7 @@ extension WorkspaceSidebar.Coordinator {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
+        panel.directoryURL = DirectoryPanelDefaults.url(paths: store.activeSession?.focusedCwd)
         panel.prompt = "Open"
         panel.message = "Choose a directory for the new session"
         guard panel.runModal() == .OK, let url = panel.url else { return }

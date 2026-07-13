@@ -61,9 +61,12 @@ struct WorkspaceSidebar: NSViewRepresentable {
         outline.outlineTableColumn = column
 
         // native drag-and-drop: session rows reorder within / move across workspaces; workspace
-        // rows reorder among themselves. Registering BOTH types is load-bearing — without the
-        // workspace type AppKit never delivers validate/accept for a workspace drag.
-        outline.registerForDraggedTypes([sessionPasteboardType, workspacePasteboardType])
+        // rows reorder among themselves; Finder folder drops create sessions rooted at those folders.
+        // Registering BOTH private types is load-bearing — without the workspace type AppKit never
+        // delivers validate/accept for a workspace drag.
+        outline.registerForDraggedTypes([sessionPasteboardType, workspacePasteboardType, .fileURL])
+        // Sidebar rows are app-private move sources. Finder folder import is independent: Finder owns
+        // that external source and supplies `.fileURL`, while agterm rows export no public representation.
         outline.setDraggingSourceOperationMask(.move, forLocal: true)
         outline.setDraggingSourceOperationMask([], forLocal: false)
 
@@ -164,11 +167,20 @@ struct WorkspaceSidebar: NSViewRepresentable {
         /// reveal or focus zoom-in never burns a workspace's deliberately-persisted collapse. Only a genuine
         /// user toggle (row click / disclosure triangle) — which fires the callback with this false —
         /// persists. `expandAll`/`collapseOthers` set it too and persist once explicitly at the end.
-        private var suppressExpansionPersist = false
+        var suppressExpansionPersist = false
         /// Scheduled single-click workspace expand/collapse, deferred by the double-click interval so a
         /// double-click (rename) can cancel it — otherwise the first click of a rename double-click would
         /// flip the workspace open/closed on its way into edit mode. See `handleSingleClick`.
         var pendingRowToggle: DispatchWorkItem?
+        /// Scheduled spring-loaded workspace expand while a drag hovers over a collapsed workspace row.
+        /// View-only like selection reveal: it opens the target for this drag without persisting expansion.
+        var pendingSpringLoadedExpansion: (workspaceID: UUID, workItem: DispatchWorkItem)?
+        /// A workspace actually opened by spring-loading during the current drag. Finder-style spring
+        /// navigation is transient: leaving/cancelling collapses this row back to its pre-drag state.
+        var springLoadedWorkspaceID: UUID?
+        /// Finder file URLs resolved for the current AppKit dragging sequence. Validation runs on every
+        /// mouse move, so caching keeps network-volume metadata checks out of the hot path.
+        var cachedDirectoryDrop: (sequenceNumber: Int, urls: [URL], exceedsLimit: Bool)?
 
         /// Stable pseudo-workspace id for the flat flagged group's `TreeShape`, so within flagged mode only
         /// a change to the flagged session list (not a per-call fresh id) triggers a rebuild.
@@ -221,7 +233,10 @@ struct WorkspaceSidebar: NSViewRepresentable {
                                                    name: .agtermAppearanceChanged, object: nil)
         }
 
-        deinit { NotificationCenter.default.removeObserver(self) }
+        isolated deinit {
+            pendingSpringLoadedExpansion?.workItem.cancel()
+            NotificationCenter.default.removeObserver(self)
+        }
 
         /// Re-tint the visible rows' text/icon to the current selection state and redraw the selection
         /// pills, without a reloadData — used both when the selection changes (AppKit doesn't redraw on
@@ -781,6 +796,11 @@ final class SidebarOutlineView: NSOutlineView {
     // AppKit re-set `isEmphasized` on the rows — an extra repaint that flicks the selection pill on every
     // click. Programmatic selection (palette/Ctrl-Tab) never bounces, so it's already smooth.
     override var acceptsFirstResponder: Bool { false }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        super.draggingExited(sender)
+        (delegate as? WorkspaceSidebar.Coordinator)?.finishDraggingSequence()
+    }
 
     override func menu(for event: NSEvent) -> NSMenu? {
         let point = convert(event.locationInWindow, from: nil)

@@ -14,8 +14,8 @@ description: >
   feature request / question as a GitHub Discussion.
 when_to_use: >
   Trigger on: agterm, agtermctl, agterm control socket, session.new, session.close, session.type,
-  session.split, session.scratch, session.focus, session.resize, surface.zoom, session.go, session.copy, session.paste, session.selectall, session.text, session.search, session.status,
-  session.flag, session.seen, session.background, session.overlay, workspace.new, workspace.select, workspace.move, workspace.focus, window.new, window.list,
+  session.split, session.scratch, session.focus, session.resize, surface.zoom, dashboard, session.go, session.copy, session.paste, session.selectall, session.text, session.search, session.status,
+  session.flag, session.seen, session.reveal, session.background, session.overlay, workspace.new, workspace.select, workspace.move, workspace.focus, window.new, window.list,
   window.select, window.resize, window.move, window.zoom, window.fullscreen, quick terminal, sidebar, sidebar.mode, sidebar.expand, sidebar.collapse, flagged, notify, font.inc, keymap.reload, config.reload,
   theme.set, theme.list, select theme, edit keymap, show an image, display an image inline, show-image,
   AGTERM_SESSION_ID, AGTERM_SOCKET, and asks to drive or script agterm. Also: troubleshoot agterm,
@@ -120,7 +120,7 @@ you work. For any session-scoped command meant to act on *this* session — `ove
 `type`, `text`, `background`, `status`, `copy`, … — pass `--target "$AGTERM_SESSION_ID"`. Omit it and
 you open overlays / type into whatever the user has selected, not your own session.
 
-## Command summary (58 commands)
+## Command summary (60 commands)
 
 Run `agtermctl <area> <cmd> --help` for exact flags. Full detail in **reference.md**; recipes in
 **examples.md**.
@@ -144,7 +144,12 @@ the read side of `session resize`, record it to restore the exact divider), `spl
 when there's no split; the read side of `session focus`, record it to restore focus), and `surfaces`
 (`id`, `kind`, `active`, `visible`) for `surface zoom`. The tree top level carries `zoomedSurface`
 (the control id of the currently zoomed surface, omitted when nothing is zoomed — the read side of
-`surface zoom`, so a script can check the zoom state and record-then-restore).
+`surface zoom`, so a script can check the zoom state and record-then-restore). It also carries the read
+side of the `dashboard` command (all omitted when no dashboard is open): `dashboardMembers` (the pane refs
+the open dashboard shows, in grid order — `<session-id>:left` for a primary pane, `<session-id>:right` for
+a split pane, so a split session appears as both), `dashboardHighlighted` (the highlighted cell's pane ref —
+the one Enter jumps into, focusing that exact pane), `dashboardFontSize` (the absolute font size in points
+applied to the cells, omitted when untouched), and `dashboardFontMode` (`auto`|`fixed`|`untouched`).
 
 **workspace** — `new [name]` · `rename <name>` · `delete` · `select` · `move --to up|down|top|bottom` ·
 `focus [on|off|toggle]` (collapse the sidebar tree to a single workspace; read back which workspace is
@@ -163,7 +168,7 @@ focused from the tree workspace node's `focused` flag).
   create right after the current session.
 - `close [--target T ...]` — close one session, or repeat `--target` to close a batch with one
   grace-period undo.
-- `select` · `rename <name>`.
+- `select` · `rename <name>` · `reveal` (select the focused pane's cwd in Finder).
 - `go --to next|prev|first|last|next-attention|prev-attention` — move the selection between sessions.
 - `move <workspace>` (relocate) or `move --to up|down|top|bottom` (reorder within the workspace) or
   `move --after SID | --before SID` (place after/before an anchor session; the anchor carries its own
@@ -233,6 +238,26 @@ button remains). Omit `--target` to use the active surface;
 copy an explicit surface id from `tree --json` to address a hidden split/scratch or a background
 session (`quick` is the id returned for a quick-terminal zoom). `hide` exits zoom; `toggle`
 enters/exits only this zoom mode, not macOS window zoom.
+
+**dashboard** — `dashboard <ids…> [--font-size N | --auto-size] [--window W]` opens a view-only grid
+showing the named sessions' live panes; `dashboard --mru [--font-size N | --auto-size] [--window W]`
+opens the window's most-recently-used sessions instead of naming ids; `dashboard --close [--window W]`
+closes it. The cell unit is a session+pane: a non-split session is one cell, and a SPLIT session shows as
+TWO cells (its left/primary pane and its right/split pane). View-only: no cell takes input — the keyboard
+drives it (arrows move the highlight, Enter jumps into the highlighted session AND focuses that exact pane
+then closes, Esc closes). `--font-size N` sets an absolute cell font in points; `--auto-size` sizes cells
+relative to the Settings default font, shrinking as the grid grows (the two are mutually exclusive; a
+non-positive size is rejected). The 9-cell cap counts PANES (laid out `ceil(sqrt(n))`), so a set whose
+panes exceed 9 is capped to the first 9 panes and the dropped-pane count is reported; ids are deduped and
+honor `--window` (default frontmost). `--mru` is mutually exclusive with explicit ids and `--close`, and
+composes with the font flags. Read the state back from the tree's top-level `dashboardMembers`
+(pane refs `<id>:left`/`<id>:right`, in grid order) / `dashboardHighlighted` (a pane ref) /
+`dashboardFontSize`/`dashboardFontMode`. Zoom and the dashboard are mutually exclusive: opening one CLOSES
+the other. Opening/closing resizes each pane's pty to its cell, so programs may redraw — view-only
+means no input, not no process effect. The most-recently-used grid also has a GUI opener: **⌘⇧D** (the
+`dashboard` built-in action), **Navigate ▸ Dashboard**, and the command palette's **Dashboard** entry
+TOGGLE the frontmost window's MRU dashboard auto-sized (identical to `dashboard --mru --auto-size`); no new
+control command, the socket `dashboard` command is unchanged.
 
 **quick** — `[show|hide|toggle]` (visibility; read back from the tree's `quickVisible`) ·
 `type TEXT` (or `--stdin`) inject keystrokes into the frontmost window's quick terminal ·
