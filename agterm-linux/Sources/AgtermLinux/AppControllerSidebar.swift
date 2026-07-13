@@ -4,6 +4,23 @@ import agtermCore
 
 @MainActor
 extension AppController {
+    static var sidebarFontProvider: OpaquePointer?
+
+    func applySidebarFontSize() {
+        guard let display = gdk_display_get_default() else { return }
+        let settings = linuxSettingsStore().load()
+        let size = AppSettings.clampSidebarFontSize(settings.sidebarFontSize ?? AppSettings.defaultSidebarFontSize)
+        let css = ".agterm-sidebar label { font-size: \(size)pt; }"
+        if Self.sidebarFontProvider == nil {
+            let provider = OpaquePointer(gtk_css_provider_new())
+            Self.sidebarFontProvider = provider
+            gtk_style_context_add_provider_for_display(display, provider, 651)
+        }
+        if let provider = Self.sidebarFontProvider {
+            css.withCString { gtk_css_provider_load_from_string(cast(provider), $0) }
+        }
+    }
+
     func rebuildSidebar() {
         updateAttentionButton()
         while let child = gtk_widget_get_first_child(W(sidebarBox)) {

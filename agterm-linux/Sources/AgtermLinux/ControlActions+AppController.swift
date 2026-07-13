@@ -495,18 +495,53 @@ extension AppController: ControlActions {
     }
 
     func setTheme(args: ControlArgs?) -> ControlResponse {
-        if args?.name != nil, args?.light != nil {
+        let name = ThemeCatalog.resolvedName(args?.name)
+        let light = ThemeCatalog.resolvedName(args?.light)
+        let dark = ThemeCatalog.resolvedName(args?.dark)
+        if name != nil, light != nil {
             return err("theme.set takes either a name or --light, not both")
         }
-        if args?.dark != nil {
-            return err("dual light/dark themes are not yet supported on Linux")
+        let lightSlot = name ?? light
+        let clearDark = dark?.lowercased() == "none"
+        let catalog = ThemeCatalog(names: Self.bundledThemes())
+        for theme in [lightSlot, clearDark ? nil : dark].compactMap({ $0 }) where !catalog.contains(name: theme) {
+            return err("unknown theme: \(theme)")
         }
-        applyTheme(ThemeCatalog.resolvedName(args?.name) ?? ThemeCatalog.resolvedName(args?.light))
-        return ok()
+        var settings = linuxSettingsStore().load()
+        if clearDark {
+            settings.darkTheme = nil
+            settings.followSystemAppearance = nil
+            if lightSlot != nil { settings.theme = lightSlot }
+        } else if let dark {
+            settings.theme = lightSlot ?? settings.theme ?? "Builtin Light"
+            settings.darkTheme = dark
+            settings.followSystemAppearance = true
+        } else {
+            settings.theme = lightSlot
+            if lightSlot == nil {
+                settings.darkTheme = nil
+                settings.followSystemAppearance = nil
+            }
+        }
+        try? linuxSettingsStore().save(settings)
+        reloadConfig()
+        return ControlResponse(ok: true, result: ControlResult(
+            theme: currentTheme,
+            sync: settings.followSystemAppearance == true,
+            light: settings.theme,
+            dark: settings.darkTheme
+        ))
     }
 
     func listThemes() -> ControlResponse {
-        ControlResponse(ok: true, result: ControlResult(theme: currentTheme, themes: Self.bundledThemes()))
+        let settings = linuxSettingsStore().load()
+        return ControlResponse(ok: true, result: ControlResult(
+            theme: currentTheme,
+            themes: Self.bundledThemes(),
+            sync: settings.followSystemAppearance == true,
+            light: settings.theme,
+            dark: settings.darkTheme
+        ))
     }
 
     func setSidebarVisibility(_ mode: ControlToggleMode) -> ControlResponse {

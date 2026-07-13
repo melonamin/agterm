@@ -9,6 +9,32 @@ import agtermCore
 
 @MainActor
 extension AppController {
+    /// Apply the shared three-state toolbar model to native Adwaita chrome.
+    /// Hidden removes both top bars entirely, so no empty decoration band remains.
+    func applyToolbarMode() {
+        let mode = linuxSettingsStore().load().effectiveToolbarMode
+        let visible: gboolean = mode == .hidden ? 0 : 1
+        if let sidebarHeader { gtk_widget_set_visible(W(sidebarHeader), visible) }
+        if let contentHeader { gtk_widget_set_visible(W(contentHeader), visible) }
+        if let bar = bottomBar {
+            let padding: Int32 = mode == .normal ? 14 : 4
+            gtk_widget_set_margin_top(W(bar), padding)
+            gtk_widget_set_margin_bottom(W(bar), padding)
+        }
+    }
+
+    /// Toggle the window's transparent-background class so ghostty's alpha reaches the compositor.
+    func applyWindowTranslucency() {
+        let translucent = (linuxSettingsStore().load().backgroundOpacity ?? 1) < 1
+        "agterm-translucent".withCString {
+            if translucent {
+                gtk_widget_add_css_class(W(window), $0)
+            } else {
+                gtk_widget_remove_css_class(W(window), $0)
+            }
+        }
+    }
+
     func showSettings() {
         let s = linuxSettingsStore().load()
         let dialog = OpaquePointer(adw_preferences_dialog_new())
@@ -42,11 +68,24 @@ extension AppController {
         connect(attentionRow, "notify::active", unsafeBitCast(onAttentionButtonToggled as @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void, to: GCallback.self))
         adw_preferences_group_add(cast(group), W(attentionRow))
 
-        let compactRow = OpaquePointer(adw_switch_row_new())
-        "Compact toolbar".withCString { adw_preferences_row_set_title(cast(compactRow), $0) }
-        adw_switch_row_set_active(compactRow, (s.compactToolbar ?? true) ? 1 : 0)
-        connect(compactRow, "notify::active", unsafeBitCast(onCompactToolbarToggled as @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void, to: GCallback.self))
-        adw_preferences_group_add(cast(group), W(compactRow))
+        let toolbarModel = gtk_string_list_new(nil)
+        for title in ["Normal", "Compact", "Hidden"] {
+            title.withCString { gtk_string_list_append(toolbarModel, $0) }
+        }
+        let toolbarRow = OpaquePointer(adw_combo_row_new())
+        "Toolbar".withCString { adw_preferences_row_set_title(cast(toolbarRow), $0) }
+        adw_combo_row_set_model(cast(toolbarRow), toolbarModel)
+        "string".withCString { property in
+            let expression = gtk_property_expression_new(gtk_string_object_get_type(), nil, property)
+            adw_combo_row_set_expression(cast(toolbarRow), expression)
+        }
+        switch s.effectiveToolbarMode {
+        case .normal: adw_combo_row_set_selected(cast(toolbarRow), 0)
+        case .compact: adw_combo_row_set_selected(cast(toolbarRow), 1)
+        case .hidden: adw_combo_row_set_selected(cast(toolbarRow), 2)
+        }
+        connect(toolbarRow, "notify::selected", unsafeBitCast(onToolbarModeChanged, to: GCallback.self))
+        adw_preferences_group_add(cast(group), W(toolbarRow))
 
         let restoreRow = OpaquePointer(adw_switch_row_new())
         "Restore running command".withCString { adw_preferences_row_set_title(cast(restoreRow), $0) }
@@ -138,6 +177,16 @@ extension AppController {
         connect(tintRow, "notify::value", unsafeBitCast(onSidebarTintChanged as @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void, to: GCallback.self))
         adw_preferences_group_add(cast(group2), W(tintRow))
 
+        let sidebarFontRow = OpaquePointer(adw_spin_row_new_with_range(
+            AppSettings.sidebarFontSizeRange.lowerBound,
+            AppSettings.sidebarFontSizeRange.upperBound,
+            1
+        ))
+        "Sidebar font size".withCString { adw_preferences_row_set_title(cast(sidebarFontRow), $0) }
+        adw_spin_row_set_value(sidebarFontRow, s.sidebarFontSize ?? AppSettings.defaultSidebarFontSize)
+        connect(sidebarFontRow, "notify::value", unsafeBitCast(onSidebarFontSizeChanged, to: GCallback.self))
+        adw_preferences_group_add(cast(group2), W(sidebarFontRow))
+
         // Theme: a searchable combo over the bundled ghostty themes (shared bundledThemes listing).
         let themes = Self.bundledThemes()
         if !themes.isEmpty {
@@ -156,6 +205,29 @@ extension AppController {
             if let cur = s.theme, let idx = themes.firstIndex(of: cur) { adw_combo_row_set_selected(cast(themeRow), UInt32(idx)) }
             connect(themeRow, "notify::selected", unsafeBitCast(onThemeChanged as @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void, to: GCallback.self))
             adw_preferences_group_add(cast(group2), W(themeRow))
+
+            let followRow = OpaquePointer(adw_switch_row_new())
+            "Follow system appearance".withCString { adw_preferences_row_set_title(cast(followRow), $0) }
+            adw_switch_row_set_active(followRow, s.followSystemAppearance == true ? 1 : 0)
+            connect(followRow, "notify::active", unsafeBitCast(onFollowAppearanceToggled, to: GCallback.self))
+            adw_preferences_group_add(cast(group2), W(followRow))
+
+            let darkThemeRow = OpaquePointer(adw_combo_row_new())
+            "Dark theme".withCString { adw_preferences_row_set_title(cast(darkThemeRow), $0) }
+            "Used when following the system appearance".withCString {
+                adw_action_row_set_subtitle(cast(darkThemeRow), $0)
+            }
+            adw_combo_row_set_model(cast(darkThemeRow), model)
+            "string".withCString { property in
+                let expression = gtk_property_expression_new(gtk_string_object_get_type(), nil, property)
+                adw_combo_row_set_expression(cast(darkThemeRow), expression)
+            }
+            adw_combo_row_set_enable_search(cast(darkThemeRow), 1)
+            if let dark = s.darkTheme, let index = themes.firstIndex(of: dark) {
+                adw_combo_row_set_selected(cast(darkThemeRow), UInt32(index))
+            }
+            connect(darkThemeRow, "notify::selected", unsafeBitCast(onDarkThemeChanged, to: GCallback.self))
+            adw_preferences_group_add(cast(group2), W(darkThemeRow))
         }
 
         // Agent status glyph colors: a color button per status (the current value, default = Adwaita).
@@ -198,12 +270,18 @@ extension AppController {
         try? linuxSettingsStore().save(s)
     }
 
-    /// copy-on-select is a ghostty key → persist + rebuild the config + apply to live surfaces.
-    /// compact-toolbar is app chrome (not ghostty); compact is the default → ON maps back to nil. Re-applies
-    /// the footer padding on every open window (the setting is global).
-    func setCompactToolbar(_ on: Bool) {
-        persist(\.compactToolbar, on ? nil : false)
-        for ctl in gWindows.values { ctl.applyCompactToolbar() }
+    func setToolbarModeAtIndex(_ index: Int) {
+        let mode: ToolbarMode
+        switch index {
+        case 0: mode = .normal
+        case 2: mode = .hidden
+        default: mode = .compact
+        }
+        var settings = linuxSettingsStore().load()
+        settings.toolbarMode = mode == .compact ? nil : mode.rawValue
+        settings.compactToolbar = nil
+        try? linuxSettingsStore().save(settings)
+        for ctl in gWindows.values { ctl.applyToolbarMode() }
     }
 
     /// restore-running-command is an app-level key (read at quit-capture + launch-restore); no surface
@@ -315,6 +393,15 @@ extension AppController {
         applySidebarThemeColor()
     }
 
+    func setSidebarFontSize(_ value: Double) {
+        let size = AppSettings.clampSidebarFontSize(value)
+        persist(\.sidebarFontSize, size == AppSettings.defaultSidebarFontSize ? nil : size)
+        for ctl in gWindows.values {
+            ctl.applySidebarFontSize()
+            ctl.rebuildSidebar()
+        }
+    }
+
     /// theme combo selection → apply the bundled theme at `idx` (persists + rebuilds + reloads surfaces).
     /// Font family combo → persist + rebuild + apply (a ghostty key, like font size).
     func setFontFamilyAtIndex(_ idx: Int) {
@@ -328,6 +415,31 @@ extension AppController {
         let themes = Self.bundledThemes()
         guard idx >= 0, idx < themes.count else { return }
         applyTheme(themes[idx])
+    }
+
+    func setDarkThemeAtIndex(_ index: Int) {
+        let themes = Self.bundledThemes()
+        guard themes.indices.contains(index) else { return }
+        var settings = linuxSettingsStore().load()
+        settings.theme = settings.theme ?? "Builtin Light"
+        settings.darkTheme = themes[index]
+        settings.followSystemAppearance = true
+        try? linuxSettingsStore().save(settings)
+        reloadConfig()
+    }
+
+    func setFollowSystemAppearance(_ enabled: Bool) {
+        var settings = linuxSettingsStore().load()
+        if enabled {
+            settings.theme = settings.theme ?? "Builtin Light"
+            settings.darkTheme = settings.darkTheme ?? AppSettings.defaultTheme
+            settings.followSystemAppearance = true
+        } else {
+            settings.darkTheme = nil
+            settings.followSystemAppearance = nil
+        }
+        try? linuxSettingsStore().save(settings)
+        reloadConfig()
     }
 }
 
@@ -347,8 +459,8 @@ private let onNewSessionCustomDirectoryChanged: @convention(c) (OpaquePointer?, 
     let text = row.flatMap { gtk_editable_get_text($0) }.map { String(cString: $0) } ?? ""
     MainActor.assumeIsolated { gController?.setNewSessionCustomDirectory(text) }
 }
-private let onCompactToolbarToggled: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
-    MainActor.assumeIsolated { gController?.setCompactToolbar(adw_switch_row_get_active(row) != 0) }
+private let onToolbarModeChanged: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
+    MainActor.assumeIsolated { gController?.setToolbarModeAtIndex(Int(adw_combo_row_get_selected(cast(row)))) }
 }
 private let onBannersToggled: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
     MainActor.assumeIsolated { gController?.setNotificationsEnabled(adw_switch_row_get_active(row) != 0) }
@@ -367,6 +479,15 @@ private let onFontSizeChanged: @convention(c) (OpaquePointer?, OpaquePointer?, g
 }
 private let onSidebarTintChanged: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
     MainActor.assumeIsolated { gController?.setSidebarTint(adw_spin_row_get_value(row)) }
+}
+private let onSidebarFontSizeChanged: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
+    MainActor.assumeIsolated { gController?.setSidebarFontSize(adw_spin_row_get_value(row)) }
+}
+private let onFollowAppearanceToggled: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
+    MainActor.assumeIsolated { gController?.setFollowSystemAppearance(adw_switch_row_get_active(row) != 0) }
+}
+private let onDarkThemeChanged: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
+    MainActor.assumeIsolated { gController?.setDarkThemeAtIndex(Int(adw_combo_row_get_selected(cast(row)))) }
 }
 private let onBackgroundOpacityChanged: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
     MainActor.assumeIsolated { gController?.setBackgroundOpacity(adw_spin_row_get_value(row)) }

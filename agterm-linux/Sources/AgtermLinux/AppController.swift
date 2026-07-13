@@ -27,6 +27,8 @@ final class AppController {
     var switcherBox: OpaquePointer?  // the Ctrl-Tab MRU overlay (a centered overlay child while cycling)
     var toastOverlay: OpaquePointer? // AdwToastOverlay wrapping the content, for transient banners
     var bottomBar: OpaquePointer?    // the sidebar footer toolbar (compact/tall padding setting)
+    var sidebarHeader: OpaquePointer? // sidebar AdwHeaderBar (hidden-toolbar mode)
+    var contentHeader: OpaquePointer? // content AdwHeaderBar (hidden-toolbar mode)
     var glErrorLabel: OpaquePointer? // the persistent "no GL context" overlay (added once)
     var quickSurface: GhosttySurface?  // the window-level quick terminal (floating panel)
     var quickFrame: OpaquePointer?   // the card frame holding the quick surface
@@ -152,6 +154,7 @@ final class AppController {
         // new-workspace / new-session / flagged actions live in the bottom bar below. The window
         // controls sit on the LEFT here (like the macOS traffic lights), not on the content header.
         let sidebarHeader = OpaquePointer(adw_header_bar_new())
+        self.sidebarHeader = sidebarHeader
         "close,minimize,maximize:".withCString { adw_header_bar_set_decoration_layout(sidebarHeader, $0) }
 
         let scroller = OpaquePointer(gtk_scrolled_window_new())
@@ -167,7 +170,7 @@ final class AppController {
         let bottomBar = OpaquePointer(gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6))
         self.bottomBar = bottomBar
         for m in [gtk_widget_set_margin_start, gtk_widget_set_margin_end] { m(W(bottomBar), 6) }
-        applyCompactToolbar()   // top/bottom padding per the compact-toolbar setting
+        applyToolbarMode()
         func footerButton(_ icon: String, _ tip: String, _ cb: @escaping @convention(c) (OpaquePointer?, gpointer?) -> Void) -> OpaquePointer? {
             let b = OpaquePointer(gtk_button_new_from_icon_name(icon))
             gtk_widget_set_tooltip_text(W(b), tip)
@@ -187,6 +190,7 @@ final class AppController {
         // on the right (matching macOS — the window controls live on the left, on the sidebar header);
         // the right side carries only the terminal toggles. The palette is still on Ctrl+Shift+P.
         let contentHeader = OpaquePointer(adw_header_bar_new())
+        self.contentHeader = contentHeader
         adw_header_bar_set_show_end_title_buttons(contentHeader, 0)
         // Title-bar terminal toggles (mirror the macOS top-right controls). pack_end stacks leftward,
         // so the visual left-to-right order is split, scratch, quick, then the menu.
@@ -229,6 +233,8 @@ final class AppController {
         adw_overlay_split_view_set_max_sidebar_width(split, 300)
         splitView = split
         adw_overlay_split_view_set_show_sidebar(split, store.sidebarVisible ? 1 : 0)   // honor the restored visibility at launch
+        applyToolbarMode()
+        applySidebarFontSize()
         // The whole split (sidebar + deck) sits under a GtkOverlay so the quick terminal can float over
         // the FULL window content (matching macOS), not just the deck.
         let windowOverlay = OpaquePointer(gtk_overlay_new())
@@ -800,40 +806,12 @@ final class AppController {
         message.withCString { adw_toast_overlay_add_toast(overlay, adw_toast_new($0)) }
     }
 
-    /// Apply the compact-toolbar setting to the sidebar footer's vertical padding: compact (the default)
-    /// is tight, off is a taller bar — the GTK analogue of the macOS compact vs tall window toolbar.
-    func applyCompactToolbar() {
-        guard let bar = bottomBar else { return }
-        let pad = Int32((linuxSettingsStore().load().compactToolbar ?? true) ? 4 : 14)
-        gtk_widget_set_margin_top(W(bar), pad)
-        gtk_widget_set_margin_bottom(W(bar), pad)
-    }
-
-    /// Toggle the window's transparent-background class so ghostty's `background-opacity` alpha reaches
-    /// the compositor (terminal translucency). At full opacity the class is removed and the window is
-    /// opaque again. Blur, if any, is the compositor's (no app-controllable Wayland blur protocol).
-    func applyWindowTranslucency() {
-        let translucent = (linuxSettingsStore().load().backgroundOpacity ?? 1) < 1
-        "agterm-translucent".withCString {
-            if translucent {
-                gtk_widget_add_css_class(W(window), $0)
-            } else {
-                gtk_widget_remove_css_class(W(window), $0)
-            }
-        }
-    }
-
     func closeScratch(_ id: UUID) {
         store.closeScratch(id)
         reconcile()
     }
 
-    /// Re-render every live surface with `name` (nil/empty = ghostty's built-in colors) layered over
-    /// the persisted font/size/scroll settings, WITHOUT persisting — used for live theme-picker
-    /// preview and as the config-reload path, so neither drops the non-theme settings.
-    func previewTheme(_ name: String?) {
-        var settings = linuxSettingsStore().load()
-        settings.theme = (name?.isEmpty == false) ? name : nil
+    private func applySettings(_ settings: AppSettings) {
         let lines = Self.ghosttyLines(for: settings)
         guard let cfg = GhosttyApp.shared.buildConfig(extraLines: lines) else { return }
         GhosttyApp.shared.updateConfig(cfg)
@@ -847,31 +825,47 @@ final class AppController {
         // The embedded GL renderer ignores the config's colors, so ALSO push them as OSC to every live
         // surface — and cache them for surfaces created later (new sessions, restored panes).
         let osc = AppSettings.themeOSC(from: lines)
-        let liveOSC = osc.isEmpty && settings.theme == nil ? AppSettings.themeResetOSC : osc
+        let activeTheme = settings.activeTheme(isDark: Self.systemIsDark)
+        let liveOSC = osc.isEmpty && activeTheme == nil ? AppSettings.themeResetOSC : osc
         GhosttyApp.shared.currentThemeOSC = liveOSC
         for ctl in gWindows.values {
             for s in ctl.configurableSurfaces {
                 s.feed(liveOSC)
                 s.queueRender()
             }
-            ctl.applyWindowThemeColors(for: settings.theme)   // re-theme every open window chrome
+            ctl.applyWindowThemeColors(for: activeTheme)
         }
+    }
+
+    /// Preview one theme as a single appearance-independent value without persisting it.
+    func previewTheme(_ name: String?) {
+        var settings = linuxSettingsStore().load()
+        settings.theme = (name?.isEmpty == false) ? name : nil
+        settings.darkTheme = nil
+        settings.followSystemAppearance = nil
+        applySettings(settings)
     }
 
     /// Apply a ghostty theme to every live surface and persist it so it survives relaunch.
     func applyTheme(_ name: String?) {
         var settings = linuxSettingsStore().load()
         settings.theme = (name?.isEmpty == false) ? name : nil
+        settings.darkTheme = nil
+        settings.followSystemAppearance = nil
         try? linuxSettingsStore().save(settings)
-        previewTheme(settings.theme)   // re-renders surfaces + the whole-window chrome
+        applySettings(settings)
     }
 
-    /// The persisted theme (nil = ghostty default), so the picker can revert on cancel.
-    var currentTheme: String? { linuxSettingsStore().load().theme }
+    nonisolated static var systemIsDark: Bool {
+        adw_style_manager_get_dark(adw_style_manager_get_default()) != 0
+    }
+
+    /// The theme currently rendered for the live system appearance.
+    var currentTheme: String? { linuxSettingsStore().load().activeTheme(isDark: Self.systemIsDark) }
 
     /// Reload ghostty config (re-reads ~/.config/ghostty + the persisted theme) into every
     /// live surface — the control `config.reload`, no restart needed.
-    func reloadConfig() { previewTheme(currentTheme) }
+    func reloadConfig() { applySettings(linuxSettingsStore().load()) }
 
     /// Bundled ghostty theme names (the file names in the resolved themes dir).
     nonisolated static func bundledThemes() -> [String] {
@@ -887,11 +881,17 @@ final class AppController {
     /// the system themes dir, which doesn't carry `agterm`. Without this the default look silently
     /// degrades to ghostty's built-in default. macOS stages the theme file, so this would be a no-op there.
     nonisolated static func ghosttyLines(for settings: AppSettings) -> [String] {
-        var lines = settings.ghosttyConfigLines()
-        if settings.theme == AppSettings.defaultTheme, themeFileLines(for: AppSettings.defaultTheme) == nil {
+        var rendered = settings
+        if settings.followSystemAppearance == true {
+            rendered.theme = settings.activeTheme(isDark: systemIsDark)
+            rendered.darkTheme = nil
+            rendered.followSystemAppearance = nil
+        }
+        var lines = rendered.ghosttyConfigLines()
+        if rendered.theme == AppSettings.defaultTheme, themeFileLines(for: AppSettings.defaultTheme) == nil {
             lines.removeAll { $0 == "theme = \(AppSettings.defaultTheme)" }
             lines.append(contentsOf: AppSettings.agtermThemeLines)
-        } else if let theme = settings.theme, let themeLines = themeFileLines(for: theme) {
+        } else if let theme = rendered.theme, let themeLines = themeFileLines(for: theme) {
             // libghostty's `theme = <name>` resolution is a no-op in the embedded `-Dapp-runtime=none`
             // build (it doesn't search GHOSTTY_RESOURCES_DIR), so a named theme never reached the surface
             // — only the default worked, because it inlines its colors. Inline the theme FILE's own config

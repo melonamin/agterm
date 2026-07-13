@@ -181,7 +181,10 @@ nonisolated private func iconResourceCandidates() -> [String] {
 }
 
 private let onColorSchemeChanged: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { _, _, _ in
-    MainActor.assumeIsolated { for ctl in gWindows.values { ctl.reapplyColorScheme() } }
+    MainActor.assumeIsolated {
+        for ctl in gWindows.values { ctl.reapplyColorScheme() }
+        gWindows.values.first?.reloadConfig()
+    }
 }
 
 /// SIGTERM/SIGINT → quit the GApplication on the main loop so its "shutdown" handler (flushOnQuit) runs.
