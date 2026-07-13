@@ -329,7 +329,7 @@ extension AppController {
               let s = store.session(withID: sid) else { return }
         if let cur = s.splitRatio, abs(cur - ratio) < 0.004 { return }
         s.splitRatio = ratio
-        splitRatioDebouncer.schedule(after: 0.4) { [weak self] in self?.store.save() }
+        layoutSaveDebouncer.schedule(after: 0.4) { [weak self] in self?.store.save() }
     }
 
     private func restoreSplitRatio(_ s: Session) {

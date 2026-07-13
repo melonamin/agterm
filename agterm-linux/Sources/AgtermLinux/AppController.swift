@@ -41,7 +41,7 @@ final class AppController {
     var scratchToggleBtn: OpaquePointer?  // title-bar scratch toggle (swaps to .fill when active)
     var attentionButton: OpaquePointer?   // optional title-bar attention indicator button
     let sidebarBox: OpaquePointer    // GtkBox holding per-workspace sections
-    var splitView: OpaquePointer!    // AdwOverlaySplitView (collapsible sidebar)
+    var splitView: OpaquePointer!    // root GtkPaned (collapsible, resizable sidebar)
 
     // Command palette (Ctrl+Shift+P)
     var paletteWindow: OpaquePointer?
@@ -67,8 +67,8 @@ final class AppController {
     /// (mirrors the macOS SettingsModel preview debounce). Commit/cancel/close cancel it and act now.
     let themePreviewDebouncer = Debouncer()
     static let themePreviewDebounceInterval: TimeInterval = 0.07
-    /// Coalesces split-divider drag ticks into one persist of `Session.splitRatio` (~0.4 s after settle).
-    let splitRatioDebouncer = Debouncer()
+    /// Coalesces sidebar/session divider drag ticks into one persist (~0.4 s after settle).
+    let layoutSaveDebouncer = Debouncer()
     /// Sessions whose split is mid-restore: the capture is suppressed for them so the initial 50/50 layout's
     /// `notify::position` can't clobber the persisted ratio before the restore applies it (cleared once set).
     var splitCaptureSuppressed: Set<UUID> = []
@@ -155,13 +155,11 @@ final class AppController {
         sidebarBox = OpaquePointer(gtk_box_new(GTK_ORIENTATION_VERTICAL, 2))
         gtk_widget_set_vexpand(W(sidebarBox), 1); installSidebarDirectoryDropTarget()
 
-        // Sidebar page: an EMPTY header (no top buttons, matching macOS) over a scrolled list. The
-        // new-workspace / new-session / flagged actions live in the bottom bar below. The window
-        // controls sit on the LEFT here (like the macOS traffic lights), not on the content header.
+        // Sidebar header: regular GTK desktops keep left-side controls; Hyprland owns window actions.
         let sidebarHeader = OpaquePointer(adw_header_bar_new())
         self.sidebarHeader = sidebarHeader
-        "close,minimize,maximize:".withCString { adw_header_bar_set_decoration_layout(sidebarHeader, $0) }
-
+        let decorationLayout = LinuxDesktopEnvironment.hidesClientSideWindowButtons() ? ":" : "close,minimize,maximize:"
+        decorationLayout.withCString { adw_header_bar_set_decoration_layout(sidebarHeader, $0) }
         let scroller = OpaquePointer(gtk_scrolled_window_new())
         sidebarScroller = scroller
         gtk_widget_add_css_class(W(scroller), "agterm-sidebar")   // theme-bg tint target
@@ -196,6 +194,7 @@ final class AppController {
         // the right side carries only the terminal toggles. The palette is still on Ctrl+Shift+P.
         let contentHeader = OpaquePointer(adw_header_bar_new())
         self.contentHeader = contentHeader
+        adw_header_bar_set_show_start_title_buttons(contentHeader, 0)
         adw_header_bar_set_show_end_title_buttons(contentHeader, 0)
         // Title-bar terminal toggles (mirror the macOS top-right controls). pack_end stacks leftward,
         // so the visual left-to-right order is split, scratch, quick, then the menu.
@@ -231,13 +230,7 @@ final class AppController {
         gtk_box_append(cast(contentBox), W(deck))
         adw_toolbar_view_set_content(contentToolbar, W(contentBox))
 
-        // AdwOverlaySplitView gives a collapsible sidebar (toggleable, Ctrl+Shift+B).
-        let split = OpaquePointer(adw_overlay_split_view_new())
-        adw_overlay_split_view_set_sidebar(split, W(sidebarToolbar))
-        adw_overlay_split_view_set_content(split, W(contentToolbar))
-        adw_overlay_split_view_set_max_sidebar_width(split, 300)
-        splitView = split
-        adw_overlay_split_view_set_show_sidebar(split, store.sidebarVisible ? 1 : 0)   // honor the restored visibility at launch
+        let split = buildSidebarSplit(sidebar: sidebarToolbar, content: contentToolbar)
         applyToolbarMode()
         applySidebarFontSize()
         // The whole split (sidebar + deck) sits under a GtkOverlay so the quick terminal can float over
@@ -458,7 +451,7 @@ final class AppController {
 
     func toggleSidebar() {
         store.toggleSidebarVisible()   // saving mutator, so the visibility survives relaunch
-        adw_overlay_split_view_set_show_sidebar(splitView, store.sidebarVisible ? 1 : 0)
+        applySidebarVisibility()
     }
 
     /// Swap the split/scratch title-bar toggles to their `.fill` variant when the active session has that
@@ -971,6 +964,7 @@ final class AppController {
         @define-color view_bg_color \(themeBg);
         @define-color view_fg_color \(fg);
         @define-color headerbar_bg_color \(themeBg);
+        @define-color headerbar_backdrop_color \(themeBg);
         @define-color headerbar_fg_color \(fg);
         @define-color popover_bg_color \(themeBg);
         @define-color popover_fg_color \(fg);
@@ -983,6 +977,11 @@ final class AppController {
         .agterm-sidebar row:selected label { color: \(selFg); }
         .agterm-sidebar button { color: \(fg); }
         .agterm-sidebar separator { background-color: alpha(\(fg), 0.22); }
+        toolbarview.agterm-sidebar-column > .top-bar,
+        toolbarview.agterm-sidebar-column > .bottom-bar { background-color: \(sidebarBg); color: \(fg); }
+        paned.agterm-sidebar-split > separator {
+            min-width: 1px; padding: 0 4px; background-color: alpha(\(fg), 0.18); background-clip: content-box; box-shadow: none;
+        }
         """
         if Self.sidebarThemeProvider == nil {
             let provider = OpaquePointer(gtk_css_provider_new())

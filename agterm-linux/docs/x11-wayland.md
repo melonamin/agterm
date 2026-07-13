@@ -8,7 +8,7 @@ Wayland on a Wayland session; force X11 with `GDK_BACKEND=x11 agterm-linux`.
 
 | Behavior | Wayland | X11 | Notes |
 |---|:---:|:---:|---|
-| Window + chrome (CSD header/footer) | ✅ | ✅ | GTK4 client-side decorations on both — **verified** (the AdwHeaderBar + footer render under both backends) |
+| Window + chrome (CSD header/footer) | ✅ | ✅ | GTK4 client-side decorations with a full-height native resizable sidebar divider; Hyprland omits client-side window buttons and leaves those actions to compositor bindings |
 | GL terminal rendering (GtkGLArea + libghostty) | ✅ | ✅ | **verified** — typed output (`echo X11RENDERTEST`) renders on both; no GL-context errors |
 | Control channel (`agtermctl` over the unix socket) | ✅ | ✅ | backend-independent — **verified** (`session.new` / `session.type` reflect on screen under both) |
 | Primary selection (copy-on-select, middle-click paste) | ✅ | ✅ | GTK abstracts `wl_primary_selection` (Wayland) / `PRIMARY` (X11); copy-on-select drives the same `ghostty` path on both |
@@ -23,8 +23,9 @@ Wayland on a Wayland session; force X11 with `GDK_BACKEND=x11 agterm-linux`.
   Wayland session, which is a compatibility path — fine for everyday use but a layer of indirection.
 - **Blur is the compositor's job on both** — there is no app-controllable blur protocol on Wayland, and
   on X11 it depends on a compositing window manager. The app only requests translucency.
-- **Window decorations**: GTK4 uses CSD on both; a tiling WM that forces SSD on X11 would draw its own
-  title bar around the CSD (cosmetic only — agterm's controls still work).
+- **Window decorations**: GTK4 uses CSD on both. Under Hyprland the header and footer remain, but their
+  close/minimize/maximize buttons are omitted to follow the compositor's window-management convention.
+  A tiling WM that forces SSD on X11 may draw its own title bar around the CSD.
 
 ## Verified
 

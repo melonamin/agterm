@@ -628,7 +628,7 @@ extension AppController: ControlActions {
         let want = mode.desiredValue(current: store.sidebarVisible)
         if store.sidebarVisible != want {
             store.setSidebarVisible(want)
-            adw_overlay_split_view_set_show_sidebar(splitView, want ? 1 : 0)
+            applySidebarVisibility()
         }
         return ok()
     }
