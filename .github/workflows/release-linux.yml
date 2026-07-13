@@ -52,6 +52,7 @@ jobs:
           REQUESTED_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           TAG="$REQUESTED_TAG"
           if [[ ! "$TAG" =~ ^linux-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
             echo "invalid Linux release tag: $TAG" >&2
