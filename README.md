@@ -121,20 +121,37 @@ A file open in the quick terminal, the window's shared scratch overlay:
 
 ### Linux
 
-Linux releases are published from this fork as relocatable `agterm-linux` tarballs. Download the
-latest Linux artifact from the [agterm-linux releases page](https://github.com/melonamin/agterm-linux/releases).
+Linux releases are published from this fork as AppImage, DEB, RPM, and relocatable tar artifacts.
+Download them from the [agterm-linux releases page](https://github.com/melonamin/agterm-linux/releases).
 
-The tarball bundles the Swift runtime, libghostty, Ghostty resources, and a launcher. GTK4 and
-libadwaita are expected from the host distribution.
+The AppImage bundles GTK4, libadwaita, the Swift runtime, libghostty, and Ghostty resources:
+
+```sh
+chmod +x agterm-vX.Y.Z-x86_64.AppImage
+./agterm-vX.Y.Z-x86_64.AppImage
+```
+
+Install the native package for Ubuntu 24.04 / Debian 13 or newer compatible systems:
+
+```sh
+sudo apt install ./agterm-linux-vX.Y.Z-x86_64.deb
+```
+
+On a modern Fedora-compatible system with glibc 2.39 or newer:
+
+```sh
+sudo dnf install ./agterm-linux-vX.Y.Z-x86_64.rpm
+```
+
+The tarball bundles the Swift runtime and libghostty but expects GTK4 and libadwaita from the host:
 
 ```sh
 tar xzf agterm-linux-vX.Y.Z-x86_64.tar.gz
 ./agterm-linux/bin/agterm-linux
 ```
 
-The published x86_64 archive is built on Ubuntu 24.04 and requires a compatible modern Linux
-distribution with GTK4 and libadwaita installed.
-Each release also includes a SHA-256 checksum and GitHub build-provenance attestation.
+All artifacts are built for x86_64 on Ubuntu 24.04.
+Each release includes consolidated SHA-256 checksums and GitHub build-provenance attestations.
 
 ### macOS
 
@@ -182,6 +199,18 @@ cd agterm-linux && swift build -c release
 cd ..
 scripts/dist-linux.sh
 ```
+
+The complete release set uses one staged payload for tar, DEB, RPM, and AppImage.
+It additionally requires nFPM, linuxdeploy with `linuxdeploy-plugin-gtk.sh`, ImageMagick, RPM tools,
+and `cpio`:
+
+```sh
+scripts/package-linux.sh 0.11.0
+scripts/verify-linux-packages.sh 0.11.0
+```
+
+The GitHub release workflow pins and verifies nFPM, linuxdeploy, the GTK plugin, and the AppImage
+runtime before packaging.
 
 Local helper scripts:
 
@@ -241,8 +270,8 @@ Linux-only behavior, including Glibc/socket portability and Linux CLI glue, belo
 
 Linux releases use tags in the `linux-vX.Y.Z` namespace and are built from `linux-port` only.
 The release workflow checks out the exact existing tag, reruns shared-core tests and strict SwiftLint,
-builds and validates the archive, then publishes a versioned x86_64 tarball, SHA-256 checksum, and
-GitHub build-provenance attestation.
+builds and validates all four formats, then publishes the x86_64 artifacts, consolidated SHA-256
+checksums, and GitHub build-provenance attestations.
 
 Create and push the tag after the release commit is already on `linux-port`:
 
@@ -262,8 +291,8 @@ gh workflow run release-linux.yml --ref linux-port -f tag=linux-v0.11.0
 Verify a downloaded release with either mechanism:
 
 ```sh
-sha256sum --check agterm-linux-v0.11.0-x86_64.tar.gz.sha256
-gh attestation verify agterm-linux-v0.11.0-x86_64.tar.gz \
+sha256sum --check agterm-linux-v0.11.0-SHA256SUMS
+gh attestation verify agterm-v0.11.0-x86_64.AppImage \
   --repo melonamin/agterm-linux
 ```
 

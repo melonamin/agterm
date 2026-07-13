@@ -25,6 +25,13 @@ env:
   SWIFTLINT_SHA256: "79306a34e5c7cc55a220cd108cbb861dcad5f10138dcdf261e2624ae8b0a486b"
   LINUX_SOURCEKIT_LIB_PATH: "/usr/lib/libsourcekitdInProc.so"
   ZIG_SHA256: "02aa270f183da276e5b5920b1dac44a63f1a49e55050ebde3aecc9eb82f93239"
+  NFPM_VERSION: "2.47.0"
+  NFPM_SHA256: "0660ca602b2d2d2ae4781a06c692b3eeb9d437ffea05b831d76e41f4a3188783"
+  LINUXDEPLOY_SHA256: "e87ee0815d109282fdda73e34c2361d64d02b0ffaea3674b18f1fd1f6a687dcf"
+  LINUXDEPLOY_GTK_COMMIT: "7a3fbc31a9e5075073ff8790f26effbac5f84453"
+  LINUXDEPLOY_GTK_SHA256: "b0f4cbc684a0103a9651f0955b635eaea0096b3a66c0f5a2c2aa337960375171"
+  APPIMAGE_RUNTIME_SHA256: "1cc49bcf1e2ccd593c379adb17c9f85a36d619088296504de95b1d06215aebbf"
+  LDAI_RUNTIME_FILE: "/usr/local/share/appimage/runtime-x86_64"
 
 jobs:
   release-linux:
@@ -59,15 +66,16 @@ jobs:
           git checkout --detach "$COMMIT"
 
           VERSION="${TAG#linux-}"
-          ARTIFACT="agterm-linux-${VERSION}-x86_64.tar.gz"
+          PACKAGE_VERSION="${VERSION#v}"
           PREVIOUS_TAG="$(git tag --merged "$COMMIT" --list "linux-v*" --sort=-version:refname \
             | awk -v current="$TAG" '$0 != current { print; exit }')"
           {
             echo "tag=$TAG"
             echo "version=$VERSION"
+            echo "package_version=$PACKAGE_VERSION"
             echo "commit=$COMMIT"
-            echo "artifact=$ARTIFACT"
             echo "previous_tag=$PREVIOUS_TAG"
+            echo "source_date_epoch=$(git show -s --format=%ct "$COMMIT")"
           } >> "$GITHUB_OUTPUT"
 
       - name: Install Linux build and test dependencies
@@ -75,7 +83,9 @@ jobs:
           apt-get update
           apt-get install -y --no-install-recommends \
             libgtk-4-dev libadwaita-1-dev libepoxy-dev pkg-config \
-            git curl ca-certificates xz-utils unzip zsh file
+            librsvg2-dev libgirepository1.0-dev gobject-introspection \
+            git curl ca-certificates xz-utils unzip zsh file imagemagick \
+            rpm cpio desktop-file-utils patchelf
           curl -fsSLo /tmp/swiftlint.zip \
             "https://github.com/realm/SwiftLint/releases/download/${SWIFTLINT_VERSION}/swiftlint_linux_amd64.zip"
           echo "${SWIFTLINT_SHA256}  /tmp/swiftlint.zip" | sha256sum --check
@@ -88,6 +98,32 @@ jobs:
           echo "${ZIG_SHA256}  /tmp/zig.tar.xz" | sha256sum --check
           tar -xJf /tmp/zig.tar.xz -C /opt
           echo "/opt/zig-x86_64-linux-0.15.2" >> "$GITHUB_PATH"
+
+      - name: Install Linux packaging tools
+        run: |
+          curl -fsSLo /tmp/nfpm.tar.gz \
+            "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz"
+          echo "${NFPM_SHA256}  /tmp/nfpm.tar.gz" | sha256sum --check
+          tar -xzf /tmp/nfpm.tar.gz -C /usr/local/bin nfpm
+
+          curl -fsSLo /usr/local/bin/linuxdeploy-x86_64.AppImage \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          echo "${LINUXDEPLOY_SHA256}  /usr/local/bin/linuxdeploy-x86_64.AppImage" | sha256sum --check
+          chmod 0755 /usr/local/bin/linuxdeploy-x86_64.AppImage
+
+          curl -fsSLo /usr/local/bin/linuxdeploy-plugin-gtk.sh \
+            "https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/${LINUXDEPLOY_GTK_COMMIT}/linuxdeploy-plugin-gtk.sh"
+          echo "${LINUXDEPLOY_GTK_SHA256}  /usr/local/bin/linuxdeploy-plugin-gtk.sh" | sha256sum --check
+          chmod 0755 /usr/local/bin/linuxdeploy-plugin-gtk.sh
+
+          mkdir -p "$(dirname "$LDAI_RUNTIME_FILE")"
+          curl -fsSLo "$LDAI_RUNTIME_FILE" \
+            https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-x86_64
+          echo "${APPIMAGE_RUNTIME_SHA256}  ${LDAI_RUNTIME_FILE}" | sha256sum --check
+          chmod 0755 "$LDAI_RUNTIME_FILE"
+
+          nfpm --version
+          linuxdeploy-x86_64.AppImage --appimage-extract-and-run --version
 
       - name: Test shared core
         working-directory: agtermCore
@@ -109,57 +145,39 @@ jobs:
         working-directory: agterm-linux
         run: swift build -c release
 
-      - name: Package release archive
+      - name: Package Linux release formats
         env:
-          ARTIFACT: ${{ steps.release.outputs.artifact }}
-        run: |
-          scripts/dist-linux.sh "$ARTIFACT"
-          sha256sum "$ARTIFACT" > "$ARTIFACT.sha256"
+          SOURCE_DATE_EPOCH: ${{ steps.release.outputs.source_date_epoch }}
+        run: scripts/package-linux.sh "${{ steps.release.outputs.package_version }}" dist-linux
 
-      - name: Verify release archive
-        env:
-          ARTIFACT: ${{ steps.release.outputs.artifact }}
-        run: |
-          set -euo pipefail
-          STAGE="$(mktemp -d)"
-          trap 'rm -rf "$STAGE"' EXIT
-          tar -xzf "$ARTIFACT" -C "$STAGE"
-          test -x "$STAGE/agterm-linux/bin/agterm-linux"
-          test -x "$STAGE/agterm-linux/bin/agterm-linux.bin"
-          test -x "$STAGE/agterm-linux/bin/agtermctl"
-          test -f "$STAGE/agterm-linux/lib/libghostty.so"
-          file "$STAGE/agterm-linux/bin/agterm-linux.bin" | grep -q "x86-64"
-          for binary in agterm-linux.bin agtermctl; do
-            LD_LIBRARY_PATH="$STAGE/agterm-linux/lib" \
-              ldd "$STAGE/agterm-linux/bin/$binary" | tee "$STAGE/$binary.ldd"
-            if grep -q "not found" "$STAGE/$binary.ldd"; then
-              echo "$binary has unresolved runtime libraries" >&2
-              exit 1
-            fi
-          done
-          sha256sum --check "$ARTIFACT.sha256"
+      - name: Verify Linux release formats
+        run: scripts/verify-linux-packages.sh "${{ steps.release.outputs.package_version }}" dist-linux
 
-      - name: Generate artifact attestation
+      - name: Generate artifact attestations
         uses: actions/attest@v4
         with:
-          subject-path: ${{ steps.release.outputs.artifact }}
+          subject-path: dist-linux/*
 
       - name: Write release notes
         env:
           TAG: ${{ steps.release.outputs.tag }}
           COMMIT: ${{ steps.release.outputs.commit }}
-          ARTIFACT: ${{ steps.release.outputs.artifact }}
+          VERSION: ${{ steps.release.outputs.version }}
         run: |
           {
-            echo "Linux x86_64 build of agterm ${TAG}."
+            echo "Linux x86_64 builds of agterm ${TAG}."
             echo
-            echo "This archive bundles agterm, agtermctl, the Swift runtime, libghostty, and Ghostty resources."
-            echo "It expects GTK4 and libadwaita from the host and targets Ubuntu 24.04 or a compatible modern distribution."
+            echo "Available formats:"
             echo
-            echo "Verify the download with \`${ARTIFACT}.sha256\` or GitHub's build provenance:"
+            echo "- AppImage: bundles GTK4, libadwaita, the Swift runtime, libghostty, and Ghostty resources."
+            echo "- DEB: Ubuntu 24.04 / Debian 13 or newer compatible systems."
+            echo "- RPM: modern Fedora-compatible systems with glibc 2.39 or newer."
+            echo "- tar.gz: relocatable payload for compatible modern distributions with GTK4 and libadwaita installed."
+            echo
+            echo "Verify downloads with \`agterm-linux-${VERSION}-SHA256SUMS\` or GitHub's build provenance:"
             echo
             echo '```sh'
-            echo "gh attestation verify ${ARTIFACT} --repo ${GITHUB_REPOSITORY}"
+            echo "gh attestation verify agterm-${VERSION}-x86_64.AppImage --repo ${GITHUB_REPOSITORY}"
             echo '```'
             echo
             echo "Source commit: \`${COMMIT}\`"
@@ -172,9 +190,7 @@ jobs:
         with:
           tag_name: ${{ steps.release.outputs.tag }}
           target_commitish: ${{ steps.release.outputs.commit }}
-          files: |
-            ${{ steps.release.outputs.artifact }}
-            ${{ steps.release.outputs.artifact }}.sha256
+          files: dist-linux/*
           fail_on_unmatched_files: true
           name: agterm-linux ${{ steps.release.outputs.version }}
           body_path: release-notes.md

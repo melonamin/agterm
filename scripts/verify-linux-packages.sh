@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+# Validate the structure, metadata, checksums, and runtime-library closure of Linux release artifacts.
+# Usage: scripts/verify-linux-packages.sh VERSION [OUTPUT_DIRECTORY]
+set -euo pipefail
+
+if (( $# < 1 || $# > 2 )); then
+  echo "usage: scripts/verify-linux-packages.sh VERSION [OUTPUT_DIRECTORY]" >&2
+  exit 2
+fi
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+VERSION="${1#v}"
+# nFPM's semver schema maps prerelease separators to '~' so prereleases sort before stable versions.
+PACKAGE_VERSION="${VERSION/-/~}"
+OUT="${2:-dist-linux}"
+[[ "$OUT" = /* ]] || OUT="$ROOT/$OUT"
+
+TAR="$OUT/agterm-linux-v${VERSION}-x86_64.tar.gz"
+DEB="$OUT/agterm-linux-v${VERSION}-x86_64.deb"
+RPM="$OUT/agterm-linux-v${VERSION}-x86_64.rpm"
+APPIMAGE="$OUT/agterm-v${VERSION}-x86_64.AppImage"
+CHECKSUMS="$OUT/agterm-linux-v${VERSION}-SHA256SUMS"
+
+for artifact in "$TAR" "$DEB" "$RPM" "$APPIMAGE" "$CHECKSUMS"; do
+  [[ -f "$artifact" ]] || { echo "missing release artifact: $artifact" >&2; exit 1; }
+done
+
+for command in dpkg-deb rpm rpm2cpio cpio desktop-file-validate file ldd; do
+  command -v "$command" >/dev/null || { echo "$command is required to verify Linux packages" >&2; exit 1; }
+done
+
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+
+verify_payload() {
+  local payload="$1"
+  test -x "$payload/bin/agterm-linux"
+  test -x "$payload/bin/agterm-linux.bin"
+  test -x "$payload/bin/agtermctl"
+  test -x "$payload/bin/agtermctl.bin"
+  test -f "$payload/lib/libghostty.so"
+  test -d "$payload/share/ghostty"
+  test -f "$payload/share/applications/com.umputun.agterm.linux.desktop"
+  desktop-file-validate "$payload/share/applications/com.umputun.agterm.linux.desktop"
+  file "$payload/bin/agterm-linux.bin" | grep -q 'x86-64'
+  for binary in agterm-linux.bin agtermctl.bin; do
+    LD_LIBRARY_PATH="$payload/lib" ldd "$payload/bin/$binary" > "$WORK/$binary.ldd"
+    if grep -q 'not found' "$WORK/$binary.ldd"; then
+      echo "$binary has unresolved runtime libraries in $payload" >&2
+      cat "$WORK/$binary.ldd" >&2
+      exit 1
+    fi
+  done
+  "$payload/bin/agtermctl" --help >/dev/null
+}
+
+mkdir -p "$WORK/tar" "$WORK/deb" "$WORK/rpm" "$WORK/appimage"
+tar -xzf "$TAR" -C "$WORK/tar"
+verify_payload "$WORK/tar/agterm-linux"
+
+[[ "$(dpkg-deb -f "$DEB" Package)" == 'agterm-linux' ]]
+[[ "$(dpkg-deb -f "$DEB" Architecture)" == 'amd64' ]]
+[[ "$(dpkg-deb -f "$DEB" Version)" == "$PACKAGE_VERSION-1" ]]
+dpkg-deb -x "$DEB" "$WORK/deb"
+verify_payload "$WORK/deb/opt/agterm-linux"
+[[ "$(readlink "$WORK/deb/usr/bin/agterm-linux")" == '/opt/agterm-linux/bin/agterm-linux' ]]
+[[ "$(readlink "$WORK/deb/usr/bin/agtermctl")" == '/opt/agterm-linux/bin/agtermctl' ]]
+
+[[ "$(rpm -qp --queryformat '%{NAME}' "$RPM")" == 'agterm-linux' ]]
+[[ "$(rpm -qp --queryformat '%{ARCH}' "$RPM")" == 'x86_64' ]]
+[[ "$(rpm -qp --queryformat '%{VERSION}-%{RELEASE}' "$RPM")" == "$PACKAGE_VERSION-1" ]]
+(
+  cd "$WORK/rpm"
+  # Ubuntu's rpm2cpio can return 1 after emitting a complete archive. Trust cpio's status here; the
+  # payload checks immediately below still reject missing or truncated package contents.
+  set +o pipefail
+  rpm2cpio "$RPM" | cpio -idm --quiet --no-absolute-filenames
+  cpio_status="${PIPESTATUS[1]}"
+  set -o pipefail
+  (( cpio_status == 0 ))
+)
+verify_payload "$WORK/rpm/opt/agterm-linux"
+[[ "$(readlink "$WORK/rpm/usr/bin/agterm-linux")" == '/opt/agterm-linux/bin/agterm-linux' ]]
+[[ "$(readlink "$WORK/rpm/usr/bin/agtermctl")" == '/opt/agterm-linux/bin/agtermctl' ]]
+
+file "$APPIMAGE" | grep -q 'ELF 64-bit'
+(
+  cd "$WORK/appimage"
+  "$APPIMAGE" --appimage-extract >/dev/null
+)
+APPROOT="$WORK/appimage/squashfs-root"
+test -x "$APPROOT/AppRun"
+test -x "$APPROOT/usr/bin/agterm-linux.bin"
+test -x "$APPROOT/usr/bin/agtermctl"
+test -x "$APPROOT/usr/bin/agtermctl.bin"
+find "$APPROOT/usr/lib" -name 'libgtk-4.so.1' -print -quit | grep -q .
+find "$APPROOT/usr/lib" -name 'libadwaita-1.so.0' -print -quit | grep -q .
+find "$APPROOT/usr/lib" -name 'libghostty.so' -print -quit | grep -q .
+APPIMAGE_LIBRARY_PATH="$(find "$APPROOT/usr/lib" -type d -printf '%p:' | sed 's/:$//')"
+for binary in agterm-linux.bin agtermctl.bin; do
+  LD_LIBRARY_PATH="$APPIMAGE_LIBRARY_PATH" ldd "$APPROOT/usr/bin/$binary" > "$WORK/appimage-$binary.ldd"
+  if grep -q 'not found' "$WORK/appimage-$binary.ldd"; then
+    echo "$binary has unresolved AppImage runtime libraries" >&2
+    cat "$WORK/appimage-$binary.ldd" >&2
+    exit 1
+  fi
+done
+"$APPROOT/usr/bin/agtermctl" --help >/dev/null
+
+(
+  cd "$OUT"
+  sha256sum --check "$(basename "$CHECKSUMS")"
+)
+
+echo "→ verified tar, DEB, RPM, and GTK-bundled AppImage artifacts"
