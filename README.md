@@ -275,9 +275,13 @@ Linux-only behavior, including Glibc/socket portability and Linux CLI glue, belo
 `linux/`, `packaging/linux/`, or Linux-specific scripts.
 
 Linux releases use tags in the `linux-vX.Y.Z` namespace and are built from `linux-port` only.
+If Linux-only fixes must follow an already-published upstream-matched release, use an immutable
+`linux-vX.Y.Z+linux.N` revision tag instead of moving or replacing the published tag.
 The release workflow checks out the exact existing tag, reruns shared-core tests and strict SwiftLint,
 builds and validates all four formats, then publishes the x86_64 artifacts, consolidated SHA-256
 checksums, and GitHub build-provenance attestations.
+Release notes copy the matching upstream product notes, omit its macOS installation boilerplate, and
+append a separate Linux section with formats, compatibility, verification, and source details.
 
 Create and push the tag after the release commit is already on `linux-port`:
 

@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing release tag, for example linux-v0.11.0"
+        description: "Existing release tag, for example linux-v0.12.1"
         required: true
         type: string
 
@@ -54,7 +54,7 @@ jobs:
           set -euo pipefail
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           TAG="$REQUESTED_TAG"
-          if [[ ! "$TAG" =~ ^linux-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
+          if [[ ! "$TAG" =~ ^linux-v[0-9]+\.[0-9]+\.[0-9]+(\+linux\.[1-9][0-9]*)?$ ]]; then
             echo "invalid Linux release tag: $TAG" >&2
             exit 1
           fi
@@ -88,7 +88,7 @@ jobs:
           apt-get install -y --no-install-recommends \
             libgtk-4-dev libadwaita-1-dev libepoxy-dev pkg-config \
             librsvg2-dev libgirepository1.0-dev gobject-introspection \
-            git curl ca-certificates xz-utils unzip zsh file imagemagick \
+            git curl jq ca-certificates xz-utils unzip zsh file imagemagick \
             rpm cpio desktop-file-utils patchelf
           curl -fsSLo /tmp/swiftlint.zip \
             "https://github.com/realm/SwiftLint/releases/download/${SWIFTLINT_VERSION}/swiftlint_linux_amd64.zip"
@@ -164,30 +164,12 @@ jobs:
 
       - name: Write release notes
         env:
-          TAG: ${{ steps.release.outputs.tag }}
-          COMMIT: ${{ steps.release.outputs.commit }}
-          VERSION: ${{ steps.release.outputs.version }}
-        run: |
-          {
-            echo "Linux x86_64 builds of agterm ${TAG}."
-            echo
-            echo "Available formats:"
-            echo
-            echo "- AppImage: bundles GTK4, libadwaita, the Swift runtime, libghostty, and Ghostty resources."
-            echo "- DEB: Ubuntu 24.04 / Debian 13 or newer compatible systems."
-            echo "- RPM: modern Fedora-compatible systems with glibc 2.39 or newer."
-            echo "- tar.gz: relocatable payload for compatible modern distributions with GTK4 and libadwaita installed."
-            echo
-            echo "Verify downloads with \`agterm-linux-${VERSION}-SHA256SUMS\` or GitHub's build provenance:"
-            echo
-            echo '```sh'
-            echo "gh attestation verify agterm-${VERSION}-x86_64.AppImage --repo ${GITHUB_REPOSITORY}"
-            echo '```'
-            echo
-            echo "Source commit: \`${COMMIT}\`"
-            echo
-            echo "macOS users should install upstream agterm: https://github.com/umputun/agterm"
-          } > release-notes.md
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          scripts/write-linux-release-notes.sh
+          "${{ steps.release.outputs.tag }}"
+          "${{ steps.release.outputs.commit }}"
+          release-notes.md
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v3
