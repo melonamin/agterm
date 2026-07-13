@@ -102,14 +102,52 @@ final class WindowRegistry {
     }
 
     /// Zooms (the maximize-to-screen toggle) the on-screen window for `id` if one is live, driving the
-    /// standard `NSWindow.zoom` — the same action as the green zoom button and the double-click-header
-    /// gesture. A second call restores the prior frame. Returns false if no window is registered for `id`
+    /// standard `NSWindow.zoom` — the same action as the double-click-header gesture (a plain green-button
+    /// click does native full screen instead; Option-click zooms). A second call restores the prior frame.
+    /// Returns false if no window is registered for `id`
     /// (not open). The control-channel `window.zoom` path.
     @discardableResult
     func zoom(_ id: WindowInfo.ID) -> Bool {
         guard let window = windows[id] else { return false }
         window.zoom(nil)
         return true
+    }
+
+    /// Toggles native macOS full screen for the on-screen window for `id` if one is live, driving the
+    /// standard `NSWindow.toggleFullScreen` — the same action as the green traffic-light button. A second
+    /// call exits full screen. Returns false if no window is registered for `id` (not open). The
+    /// control-channel `window.fullscreen` path; the GUI half toggles the key window directly.
+    @discardableResult
+    func fullscreen(_ id: WindowInfo.ID) -> Bool {
+        guard let window = windows[id] else { return false }
+        window.toggleFullScreen(nil)
+        return true
+    }
+
+    /// The window's current frame in the SAME coordinate system `move`/`resize` accept, so `window.list`'s
+    /// read-back round-trips back through `window.move`/`window.resize`: `x`/`y` are the top-left relative to
+    /// the window's display top-left (y down), `width`/`height` the frame size, `display` the screen index.
+    /// This is the inverse of `move`'s forward math (`x = minX - screen.minX`, `y = screen.maxY - maxY`) to
+    /// integer-point precision: the values round to `Int` since `window.move`/`window.resize` take `Int`, so a
+    /// user-dragged fractional frame restores to the nearest point (which is all those commands accept).
+    /// Nil when no window is registered for `id` (closed) or it has no screen. The `window.list` frame source.
+    func geometry(for id: WindowInfo.ID) -> ControlWindowFrame? {
+        guard let window = windows[id], let screen = window.screen else { return nil }
+        let frame = window.frame
+        let x = Int((frame.minX - screen.frame.minX).rounded())
+        let y = Int((screen.frame.maxY - frame.maxY).rounded())
+        let display = NSScreen.screens.firstIndex(of: screen) ?? 0
+        return ControlWindowFrame(x: x, y: y,
+                                  width: Int(frame.width.rounded()), height: Int(frame.height.rounded()),
+                                  display: display)
+    }
+
+    /// Whether the window for `id` is in native full screen and/or zoomed (maximized-to-screen, NOT full
+    /// screen), or nil when no window is registered (closed). The read side of `window.fullscreen`/`window.zoom`
+    /// on `window.list`, so a script can make those toggles idempotent.
+    func windowFlags(for id: WindowInfo.ID) -> (fullscreen: Bool, zoomed: Bool)? {
+        guard let window = windows[id] else { return nil }
+        return (fullscreen: window.styleMask.contains(.fullScreen), zoomed: window.isZoomed)
     }
 }
 

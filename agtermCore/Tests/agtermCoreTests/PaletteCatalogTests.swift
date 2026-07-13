@@ -10,6 +10,8 @@ struct PaletteCatalogTests {
             "Rename Session",
             "Rename Workspace",
             "Close Session",
+            "Reopen Last Closed Item",
+            "Reopen Closed Item",
             "Clear Status",
             "Previous Session",
             "Next Session",
@@ -20,11 +22,13 @@ struct PaletteCatalogTests {
             "Show Attention",
             "Toggle Split",
             "Toggle Scratch",
+            "Toggle Terminal Zoom",
             "Toggle Sidebar",
             "Flag Session",
             "Focus Workspace",
             "Find…",
             "Quick Terminal",
+            "Toggle Full Screen",
             "Increase Font Size",
             "Decrease Font Size",
             "Actual Font Size",
@@ -45,7 +49,7 @@ struct PaletteCatalogTests {
     }
 
     @Test func catalogHasTheExpectedStaticCommandCount() {
-        #expect(PaletteCommand.allCases.count == 37)
+        #expect(PaletteCommand.allCases.count == 41)
     }
 
     @Test func idsRoundTripThroughRawValue() {
@@ -86,12 +90,19 @@ struct PaletteCatalogTests {
         #expect(PaletteCommand.clearFocus.isVisible(in: PaletteContext(hasFocusedWorkspace: true)))
         #expect(!PaletteCommand.focusLeftPane.isVisible(in: PaletteContext(activeSessionHasSplit: false)))
         #expect(PaletteCommand.focusRightPane.isVisible(in: PaletteContext(activeSessionHasSplit: true)))
+        #expect(!PaletteCommand.undoClose.isVisible(in: PaletteContext(hasPendingClose: false)))
+        #expect(PaletteCommand.undoClose.isVisible(in: PaletteContext(hasPendingClose: true)))
+        #expect(!PaletteCommand.reopenRecent.isVisible(in: PaletteContext(hasRecentClosed: false)))
+        #expect(PaletteCommand.reopenRecent.isVisible(in: PaletteContext(hasRecentClosed: true)))
     }
 
     @Test func builtinMappingsCoverRebindableCommands() {
         #expect(PaletteCommand.newSession.builtinAction == .newSession)
         #expect(PaletteCommand.find.builtinAction == .toggleSearch)
+        #expect(PaletteCommand.toggleTerminalZoom.builtinAction == .toggleTerminalZoom)
         #expect(PaletteCommand.resetFontSize.builtinAction == .resetFontSize)
+        #expect(PaletteCommand.reopenRecent.builtinAction == .reopenRecent)
+        #expect(PaletteCommand.undoClose.builtinAction == .undoClose)
         #expect(PaletteCommand.clearFlagged.builtinAction == nil)
         #expect(PaletteCommand.expandWorkspaces.builtinAction == nil)
     }

@@ -60,6 +60,18 @@ extension AppController: ControlActions {
         }
     }
 
+    private func resolveSessionResponses(_ targets: [String]) -> ResolveResponse<[UUID]> {
+        var resolved: [UUID] = []
+        for target in targets {
+            switch resolveSessionResponse(target) {
+            case .failure(let response): return .failure(response)
+            case .success(let id):
+                if !resolved.contains(id) { resolved.append(id) }
+            }
+        }
+        return .success(resolved)
+    }
+
     func controlTree(window: String?) -> ControlResponse {
         let tree = store.controlTree(
             foreground: { [weak self] session in self?.surfaces[session.id]?.foregroundCommand() },
@@ -130,6 +142,30 @@ extension AppController: ControlActions {
         case .success(let id):
             closeSession(id)
             return ok(id)
+        }
+    }
+
+    func closeSessions(_ targets: [String], window: String?) -> ControlResponse {
+        switch resolveSessionResponses(targets) {
+        case .failure(let response): return response
+        case .success(let ids):
+            guard let first = ids.first else { return err("session.close requires at least one --target") }
+            if ids.count == 1 {
+                closeSession(first)
+                return ok(first)
+            }
+            let affected: Int
+            if linuxSettingsStore().load().closeGraceUndoEnabled ?? true {
+                affected = store.softCloseSessions(ids) ? ids.count : 0
+            } else {
+                affected = ids.reduce(into: 0) { count, id in
+                    guard store.session(withID: id) != nil else { return }
+                    store.closeSession(id)
+                    count += 1
+                }
+            }
+            reconcile()
+            return ControlResponse(ok: true, result: ControlResult(affected: affected))
         }
     }
 
@@ -206,6 +242,50 @@ extension AppController: ControlActions {
         return ok(id)
     }
 
+    func moveSessions(_ targets: [String], window: String?, move: ControlSessionMove) -> ControlResponse {
+        let ids: [UUID]
+        switch resolveSessionResponses(targets) {
+        case .failure(let response): return response
+        case .success(let resolved): ids = resolved
+        }
+        guard !ids.isEmpty else { return err("session.move requires at least one --target") }
+
+        let affected: Int
+        switch move {
+        case .reorder:
+            return err("session.move --target can be repeated only with a workspace or --after/--before")
+        case .workspace(let workspace):
+            switch resolveWorkspaceResponse(workspace) {
+            case .failure(let response): return response
+            case .success(let workspaceID): affected = store.moveSessions(ids, toWorkspace: workspaceID)
+            }
+        case .place(let anchor, let after):
+            let anchorLocation: (workspace: UUID, index: Int)
+            switch resolveAnchorLocation(anchor) {
+            case .failure(let response): return response
+            case .success(let location): anchorLocation = location
+            }
+            let sources = ids.compactMap { id -> SidebarDrop.SessionSource? in
+                guard let location = store.sessionLocation(ofSession: id) else { return nil }
+                return SidebarDrop.SessionSource(workspace: location.workspace, index: location.index)
+            }
+            let count = store.workspaces.first(where: { $0.id == anchorLocation.workspace })?.sessions.count ?? 0
+            let target = SidebarDrop.SessionDropTarget.sessionRow(
+                workspace: anchorLocation.workspace,
+                sessionIndex: anchorLocation.index,
+                sessionCount: count
+            )
+            let childIndex = after ? SidebarDrop.onItemIndex : anchorLocation.index
+            if let resolution = SidebarDrop.resolveSessions(sources: sources, target: target, childIndex: childIndex) {
+                affected = store.moveSessions(ids, toWorkspace: resolution.workspace, at: resolution.destination)
+            } else {
+                affected = 0
+            }
+        }
+        reconcile()
+        return ControlResponse(ok: true, result: ControlResult(affected: affected))
+    }
+
     func moveWorkspace(_ target: String?, window: String?, direction: ReorderDirection) -> ControlResponse {
         switch resolveWorkspaceResponse(target) {
         case .failure(let response): return response
@@ -241,6 +321,16 @@ extension AppController: ControlActions {
             guard let parsed = ControlToggleMode.parse(mode) else { return err("invalid flag mode: \(mode ?? "toggle")") }
             let current = store.session(withID: id)?.flagged ?? false
             store.setFlag(parsed.desiredValue(current: current), forSession: id)
+            rebuildSidebar()
+            return ok(id)
+        }
+    }
+
+    func markSessionSeen(_ target: String?, window: String?) -> ControlResponse {
+        switch resolveSessionResponse(target) {
+        case .failure(let response): return response
+        case .success(let id):
+            store.clearUnseen(id)
             rebuildSidebar()
             return ok(id)
         }
@@ -335,11 +425,31 @@ extension AppController: ControlActions {
         }
     }
 
-    func font(_ target: String?, window: String?, action: String) -> ControlResponse {
+    func setSurfaceZoom(_ target: String?, window: String?, mode: ControlToggleMode) -> ControlResponse {
+        err("surface.zoom is not yet supported on Linux")
+    }
+
+    func font(_ target: String?, window: String?, pane: String?, action: String) -> ControlResponse {
         switch resolveSessionResponse(target) {
         case .failure(let response): return response
         case .success(let id):
-            guard let surface = focusedSurface(for: id) else { return err("session not realized") }
+            guard let session = store.session(withID: id) else { return err("session not realized") }
+            let surface: GhosttySurface?
+            switch pane {
+            case nil, "left": surface = session.addressableSurface as? GhosttySurface
+            case "right":
+                guard let split = session.splitSurface as? GhosttySurface else {
+                    return err("session has no split pane")
+                }
+                surface = split
+            case "scratch":
+                guard let scratch = session.scratchSurface as? GhosttySurface else {
+                    return err("session has no scratch terminal")
+                }
+                surface = scratch
+            case .some(let value): return err("invalid pane: \(value)")
+            }
+            guard let surface else { return err("session not realized") }
             surface.performBindingAction(action)
             return ok(id)
         }
@@ -379,8 +489,14 @@ extension AppController: ControlActions {
         return ok(id)
     }
 
-    func setTheme(name: String?) -> ControlResponse {
-        applyTheme(name)
+    func setTheme(args: ControlArgs?) -> ControlResponse {
+        if args?.name != nil, args?.light != nil {
+            return err("theme.set takes either a name or --light, not both")
+        }
+        if args?.dark != nil {
+            return err("dual light/dark themes are not yet supported on Linux")
+        }
+        applyTheme(ThemeCatalog.resolvedName(args?.name) ?? ThemeCatalog.resolvedName(args?.light))
         return ok()
     }
 
@@ -428,6 +544,39 @@ extension AppController: ControlActions {
         return ok()
     }
 
+    func typeQuick(text: String) async -> ControlResponse {
+        typeQuickSync(text: text)
+    }
+
+    func typeQuickSync(text: String) -> ControlResponse {
+        guard quickSurface != nil || quickVisible else { return err("quick terminal not open") }
+        for _ in 0..<12 {
+            while g_main_context_iteration(nil, 0) != 0 {}
+            if let quickSurface {
+                quickSurface.inject(text: text)
+                return ok()
+            }
+            usleep(30_000)
+        }
+        return err("quick terminal not realized")
+    }
+
+    func readQuickText(all: Bool, lines: Int?) async -> ControlResponse {
+        readQuickTextSync(all: all, lines: lines)
+    }
+
+    func readQuickTextSync(all: Bool, lines: Int?) -> ControlResponse {
+        guard quickSurface != nil || quickVisible else { return err("quick terminal not open") }
+        for _ in 0..<12 {
+            while g_main_context_iteration(nil, 0) != 0 {}
+            if let text = quickSurface?.readScreenText(all: all, lines: lines) {
+                return ControlResponse(ok: true, result: ControlResult(text: text))
+            }
+            usleep(30_000)
+        }
+        return err("failed to read surface buffer")
+    }
+
     func typeSession(_ target: String?, window: String?, options: ControlSessionTypeOptions) async -> ControlResponse {
         typeSessionSync(target, window: window, options: options)
     }
@@ -460,6 +609,26 @@ extension AppController: ControlActions {
                 return err("no selection")
             }
             return ControlResponse(ok: true, result: ControlResult(id: id.uuidString, text: text))
+        }
+    }
+
+    func pasteSession(_ target: String?, window: String?) -> ControlResponse {
+        performSessionBinding(target, action: "paste_from_clipboard")
+    }
+
+    func selectAllSession(_ target: String?, window: String?) -> ControlResponse {
+        performSessionBinding(target, action: "select_all")
+    }
+
+    private func performSessionBinding(_ target: String?, action: String) -> ControlResponse {
+        switch resolveSessionResponse(target) {
+        case .failure(let response): return response
+        case .success(let id):
+            guard let surface = store.session(withID: id)?.addressableSurface as? GhosttySurface else {
+                return err("session not realized")
+            }
+            surface.performBindingAction(action)
+            return ok(id)
         }
     }
 
@@ -523,6 +692,16 @@ extension AppController: ControlActions {
         case .failure(let response): return response
         case .success(let id):
             guard store.closeOverlay(id) else { return err("no overlay") }
+            reconcile()
+            return ok(id)
+        }
+    }
+
+    func resizeSessionOverlay(_ target: String?, window: String?, sizePercent: Int?) -> ControlResponse {
+        switch resolveSessionResponse(target) {
+        case .failure(let response): return response
+        case .success(let id):
+            guard store.resizeOverlay(id, sizePercent: sizePercent) else { return err("no overlay") }
             reconcile()
             return ok(id)
         }
@@ -650,6 +829,20 @@ extension AppController: ControlActions {
                 gtk_window_unmaximize(WIN(ctl.windowPointer))
             } else {
                 gtk_window_maximize(WIN(ctl.windowPointer))
+            }
+            return ok(id)
+        }
+    }
+
+    func windowFullscreen(_ target: String?) -> ControlResponse {
+        switch resolveWindowResponse(target) {
+        case .failure(let response): return response
+        case .success(let id):
+            guard let ctl = gWindows[id] else { return err("window not open — window.select it first") }
+            if gtk_window_is_fullscreen(WIN(ctl.windowPointer)) != 0 {
+                gtk_window_unfullscreen(WIN(ctl.windowPointer))
+            } else {
+                gtk_window_fullscreen(WIN(ctl.windowPointer))
             }
             return ok(id)
         }

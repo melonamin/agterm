@@ -29,14 +29,94 @@ paths:
   text (a luminance-contrast black/white fallback when only the background is set).
   The borderless New-Session `Menu` glyph ignores `foregroundStyle` on its label,
   so it's tinted via `.tint(chromeText)`.
+- **Light/dark theme following is NATIVE — feed the raw dual value, don't pre-resolve.**
+  `theme = light:X,dark:Y` is a first-class runtime conditional in the pinned libghostty (verified on
+  `4dcb09ada`: `Config.zig` has `_conditional_state` + `changeConditionalState` and a light→dark test).
+  So `ghosttyConfigLines()` emits the dual value RAW while following (no `isDark` param, no side-pick) and
+  ghostty resolves the active side.
+  The switch is NOT fully autonomous on `set_color_scheme`: `ghostty_surface/app_set_color_scheme` only
+  RECORD the new conditional state and emit a SOFT `reload_config` action (which agterm does not handle,
+  so it is dropped); libghostty re-resolves only when the host re-feeds the config via `update_config`.
+  agterm therefore triggers the reload ITSELF on a flip.
+  The appearance side is single-sourced from the APP-level `NSApplication.effectiveAppearance`, observed
+  via KVO in `SystemAppearanceObserver` (the same mechanism Ghostty and the AppKit community use — Apple
+  exposes no notification API for appearance).
+  The observer posts `.agtermSystemAppearanceChanged` with the KVO-delivered `isDark` (`change.newValue`,
+  the SETTLED value, never re-read at receive time), and `SettingsModel.appearanceChanged` threads that
+  `isDark` straight into `reloadConfigPreservingSessionZoom` → `GhosttyApp.reloadConfig(surfaces:isDark:)`,
+  which sets the app + each surface scheme from it and re-feeds the config via `update_config` (NOT through
+  `apply()`/`writeGhosttyConfig`, whose text-diff would skip the reload — the raw dual file is byte-identical
+  across flips).
+  KVO is what makes this survive sleep/wake: it fires when the property SETTLES (including the belated
+  update after wake), so there is no dead callback to route around — unlike the old per-view
+  `viewDidChangeEffectiveAppearance` hook, which stopped firing in the wedge and left the terminal stuck
+  on the old theme (the wake-from-sleep bug).
+  Deliberately NOT `AppleInterfaceStyle` (wrong under macOS "Auto" scheduled switching) and NOT the
+  distributed `AppleInterfaceThemeChangedNotification` (fires before `effectiveAppearance` settles).
+  The flip reload PRESERVES each session's ⌘+/⌘− zoom (an automatic OS flip must not wipe it silently):
+  it skips `resetSessionFontSizesAllWindows`, and `reapplySessionConfigIfNeeded` (the widened watermark
+  re-assert) re-emits each zoomed session's `font-size` per surface after the shared-config broadcast.
+  Only the explicit reloads (File ▸ Reload / `config.reload` / a settings change) keep the documented
+  zoom-clearing contract via `reloadConfigClearingSessionZoom`.
+  Every reload records `lastAppliedIsDark` from the `isDark` it applied (the KVO-delivered side threaded
+  through `reloadConfig`), so "latch == applied side" holds by construction — there is ONE source now, so
+  the poster-vs-rendered divergence the old two-source (view + watchdog) design feared is gone.
+  `appearanceChanged` suppresses same-side re-posts via that latch (seeded `false` because a host-loaded
+  config starts light-sided), so the KVO `[.initial]` launch seed and any coalesced burst drive at most
+  one reload.
+  A zero-surface reload is chrome-correct: `reloadConfig` sets the APP scheme (`ghostty_app_set_color_scheme`)
+  before `update_config`, so the CONFIG_CHANGE clone resolves to the applied side even with no surfaces —
+  a dark launch re-sides the sidebar/titlebar before any surface exists.
+  The chrome retints on the same reload, but NOT from the host-loaded config: `ghostty_config_get` on
+  a config the host built always reads the DEFAULT (light) conditional side — there is no C API to
+  re-side a host config.
+  Instead ghostty replies to `ghostty_app_update_config` with a synchronous app-target `CONFIG_CHANGE`
+  action carrying the config it actually APPLIED (the dual resolved to the current side via
+  `changeConditionalState`) — the same channel Ghostty.app reads its chrome colors from.
+  `GhosttyCallbacks` clones that config into a lock-protected box (surface-target `CONFIG_CHANGE`s —
+  watermark overlays — are ignored), and `reloadConfig` takes it for `resolveThemeColors` and frees it;
+  so no `COLOR_CHANGE` callback is needed for this feature.
+- **The sidebar's disclosure triangle tracks the theme via `NSAppearance`, not a color we set.**
+  The expand/collapse triangle is drawn by `NSOutlineView` itself, colored from the view's `NSAppearance`
+  — which follows the macOS system light/dark setting, NOT the terminal theme.
+  So a light theme under macOS dark mode (or the mirror, a dark theme under macOS light mode) draws the
+  triangle in the wrong brightness and it vanishes against the themed sidebar background
+  (the row text/icons stay visible only because they're set explicitly to `terminalForegroundColor`).
+  `WorkspaceSidebar.Coordinator.applyThemeAppearance()` pins `outline.appearance` to `.darkAqua`/`.aqua`
+  from `GhosttyApp.terminalThemeIsDark`, called in `makeNSView` (launch) and `appearanceChanged` (live
+  theme switch — which the Sidebar-Tint slider also posts, so a tint change re-pins).
+  `terminalThemeIsDark` classifies the perceived luminance of the color the triangle actually sits on:
+  the theme background with the sidebar-tint wash applied (`ThemeBrightness.isDark(…, shiftAmount:)`,
+  host-free), NOT the raw background — so a strong tint that pushes a near-threshold theme across the
+  0.5 midpoint still picks the readable triangle.
+  The triangle color is not accessibility-observable, so this is verified by eye, not a UI test — like
+  the cursor solid/hollow case.
 - **Sidebar selection is drawn entirely by `SidebarRowView`, not AppKit.**
-  `outline.selectionHighlightStyle = .none` (set right after `style = .sourceList`,
+  `outline.selectionHighlightStyle = .none` (set right after `style = .plain`,
   which would otherwise reset it) so AppKit draws no selection of its own — otherwise it paints a gray
   *unemphasized* capsule whenever the sidebar isn't first responder (the normal case,
   since focus lives in the terminal), overriding any custom `drawSelection`.
+  The `.plain` style (chosen over `.sourceList` to drop the built-in ~10px top inset above the first row)
+  also reverts the outline's `backgroundColor` to an OPAQUE `controlBackgroundColor`, so
+  `outline.backgroundColor = .clear` is set alongside `scroll.drawsBackground = false` to keep the column
+  transparent over the terminal-colored/translucent window backing.
   The row draws the themed pill in `drawBackground(in:)` for every state,
   and the Coordinator's `refreshSelectionAppearance()` repaints the pills + re-tints the row text on
   selection change (AppKit won't redraw rows on its own with `.none`) and on `.agtermAppearanceChanged`.
+  **The row view is the single source of truth for the cell's selection tint.**
+  The pill reads `isSelected` live at draw time, but the text/icon color is applied imperatively
+  (`SidebarCellView.setColors`), so the two can desync when a re-tint event is missed —
+  the cell builder's `row(forItem:)` can return -1 mid-reload/expand-collapse animation
+  (the constant OSC-title `reloadItem` ticks make this window easy to hit),
+  and on the ~1/3 of themes using the inverted-selection idiom (`selection-background == foreground`,
+  e.g. `Ghostty Default Style Dark`) a stale tint renders the row text fully INVISIBLE
+  (white-on-white pill, plus the previously-selected row dark-on-dark).
+  `SidebarRowView` therefore re-asserts `setColors` from its own live `isSelected`:
+  its `didSet` re-tints the hosted cell on every selection flip,
+  and `didAddSubview` tints a cell the moment it attaches (superseding the builder's build-time guess).
+  Rename `restore` reads the same row-view `isSelected` instead of recomputing via `row(for:)`.
+  Text color is not accessibility-observable, so this is verified by eye — like the disclosure-triangle
+  and cursor solid/hollow cases.
   **`SidebarOutlineView.acceptsFirstResponder` is `false`** so a mouse click selects without stealing
   first responder from the terminal — that responder bounce (terminal → outline → terminal,
   via `mouseDown`'s `focusActiveTerminal`) otherwise makes AppKit re-set `SidebarRowView.isEmphasized`,
@@ -45,7 +125,7 @@ paths:
   **Reconcile splits SHAPE from CONTENT** (`TreeShape` ids/order → full `rebuildAndReload`;
   `RowContent` name/icon/badge → per-row `reloadItem`) so a cwd-driven `displayName` change reloads only
   its row instead of a full `reloadData` + re-expand that re-lays-out and horizontally jitters every
-  source-list row.
+  sidebar row.
   **Inline rename** paints the edit field with the terminal theme's foreground-on-background (the row's
   selection-foreground would be dark-on-dark in the system edit box), and `restore` re-applies the row's
   selection-aware color when editing ends (a same-name commit doesn't reload the row).
@@ -110,15 +190,15 @@ paths:
   `sessionDetail` subtree, so toggling it can't perturb the split at all.
   The bar reads `store.activeSession?.searchActive` and shows only when set.
   Because it is a `detailPane` `.overlay` it composites ABOVE the whole detail deck without any layout change
-  — the in-deck scratch (zIndex 1 inside `sessionDetail`), the FULL overlay (zIndex 2), and the floating
-  overlay panel (zIndex 3) — so search-over-scratch shows the bar on top of the scratch with no HSplitView
+  — the in-deck scratch (zIndex 1 inside `sessionDetail`) and the overlay panel (zIndex 3, hosting BOTH the
+  full and floating overlay) — so search-over-scratch shows the bar on top of the scratch with no HSplitView
   perturbation.
-  The FLOATING overlay takes the opposite route: it IS a `sessionDetail` ZStack sibling (`floatingOverlayPanel`
-  at `.zIndex(3)`), but an ALWAYS-PRESENT, constant-shape one — its panel content (surface + frame +
-  click-catcher) is gated INSIDE the sibling, so the ZStack child count never changes when a floating overlay
-  opens/closes and the `NSSplitView` is never re-hosted, even though the pane(s) stay VISIBLE behind the opaque
-  panel.
-  (`floatingOverlayPanel` is per-session in the eager deck, so its program runs regardless of which session is
+  The overlay takes the opposite route: it IS a `sessionDetail` ZStack sibling (`overlayPanel` at
+  `.zIndex(3)`), but an ALWAYS-PRESENT, constant-shape one — its panel content (surface + frame +
+  click-catcher) is gated INSIDE the sibling, so the ZStack child count never changes when an overlay
+  opens/closes/resizes and the `NSSplitView` is never re-hosted, even when a floating overlay leaves the
+  pane(s) VISIBLE behind its opaque panel.
+  (`overlayPanel` is per-session in the eager deck, so its program runs regardless of which session is
   active — see the surface-lifecycle note.)
 - **Window overlays sit BELOW the custom titlebar, NOT as a body-level `.overlay` (transparent-titlebar-scrim
   rule).** The quick terminal, command palettes, and Ctrl-Tab switcher render via `windowOverlayLayer`
@@ -213,6 +293,28 @@ paths:
   Cursor solid/hollow is not accessibility-observable, so it is NOT unit/UI-testable — verified by instrumenting
   `set_focus` and reading `log show` across split-open + multi-window key switches (exactly one focused
   surface app-wide in every case).
+- **A background window's LEFT reactivation click reaches the surface (`acceptsFirstMouse`), and `scrollWheel` self-syncs the mouse cell.**
+  `GhosttySurfaceView.acceptsFirstMouse(for:)` returns true ONLY for `.leftMouseDown`, so the click that
+  raises an inactive window also runs `mouseDown` — selecting the clicked split pane (`makeFirstResponder`
+  → `onFocusChange` → `splitFocused`), the counterpart to the first-responder path above, instead of AppKit
+  swallowing the click just to raise the window.
+  It is gated to the LEFT button on purpose: a first-mouse right/middle click would otherwise reach
+  `rightMouseDown`/`otherMouseDown`, which forward to libghostty, and with the default
+  `right-click-action = paste` (`AppSettings.rightClickPaste`, nil = paste) that would paste the clipboard
+  into a window you only meant to raise.
+  Separately, `mouse_scroll` reports at libghostty's LAST-KNOWN cell, and a no-mouse-move reactivation
+  (cmd-tab/keyboard, or scrolling to reactivate with the pointer already inside) fires no `mouseDown`/`mouseEntered`,
+  so the position is stale or `-1,-1` (from `mouseExited`).
+  `scrollWheel` therefore pushes `ghostty_surface_mouse_pos` from its own event before `mouse_scroll`, but
+  ONLY when the point is stale — it differs from `lastReportedMousePoint`, which every mouse handler updates
+  through the shared `reportMousePos` helper.
+  So the first scroll after a no-move reactivation lands at the real cell instead of doing nothing until you
+  nudge the mouse, while a normal already-synced scroll does NOT re-push the same cell on every packet —
+  which in an any-motion + sgr-pixel mouse-reporting TUI would otherwise emit a synthetic motion report per
+  packet.
+  It is the companion to the `mouseEntered` restore (which only covers cross-the-boundary re-entry).
+  Like the cursor-focus case, this input plumbing is not accessibility-observable and is verified by hand,
+  not a UI test.
 - **OSC 52 clipboard access is gated in OUR callbacks, not by a ghostty-internal dialog.**
   A program reading (`\e]52;c;?\a`) or writing (`\e]52;c;<base64>\a`) the system clipboard reaches agterm
   through `read_clipboard_cb`/`confirm_read_clipboard_cb` and `write_clipboard_cb` (`GhosttyCallbacks`).

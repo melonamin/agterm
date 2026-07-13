@@ -1,3 +1,4 @@
+import agtermCore
 import AppKit
 
 /// Blends the window title bar with the terminal, mirroring macterm's `WindowAppearance`
@@ -13,6 +14,7 @@ enum WindowAppearance {
     struct Chrome {
         var opacity: Double = 1
         var blurRadius: Int = 0
+        var toolbarMode: ToolbarMode = .compact
     }
 
     /// Apply the blend to `window` using `background` (the terminal background color) and the given
@@ -32,6 +34,14 @@ enum WindowAppearance {
         // title (set by the accessor for the window menu / XCUITest) never shows beside the header.
         window.titleVisibility = .hidden
         window.styleMask.insert(.fullSizeContentView)
+
+        // hidden toolbar mode drops the three traffic-light buttons for a full-bleed terminal; every
+        // other mode restores them. Skipped in fullscreen so entering/exiting fullscreen (which re-runs
+        // this sync) leaves AppKit's own auto-showing title bar buttons intact, like the translucency below.
+        let hideButtons = chrome.toolbarMode == .hidden && !window.styleMask.contains(.fullScreen)
+        for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+            window.standardWindowButton(button)?.isHidden = hideButtons
+        }
 
         // native fullscreen draws its own opaque background and the chrome shows through any
         // transparency, so force opaque while fullscreened.
@@ -68,6 +78,12 @@ enum WindowAppearance {
         // opacity, or when .hiddenTitleBar doesn't hold (the XCUITest reopen path), it would otherwise
         // paint a dark strip above the header.
         container.firstDescendant(withClassName: "NSTitlebarBackgroundView")?.isHidden = true
+        // hidden toolbar mode also has to suppress `_NSTitlebarDecorationView` — a separate full-width
+        // titlebar-height sibling of NSTitlebarView that paints a vibrancy material band (macOS 26).
+        // In tall/compact modes the custom row covers it; in hidden mode (traffic lights gone, row
+        // collapsed to the 3px drag strip) it is left exposed as a textured band over the full-bleed
+        // terminal. Hidden only in hidden mode so tall/compact keep AppKit's normal titlebar rendering.
+        container.firstDescendant(withClassName: "_NSTitlebarDecorationView")?.isHidden = hideButtons
     }
 
     /// Keeps the sidebar see-through so the window background shows through it — the opaque terminal

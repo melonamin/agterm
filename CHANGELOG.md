@@ -1,5 +1,88 @@
 # Changelog
 
+## v0.11.0 - 2026-07-11
+
+### New Features
+
+- multi-select sessions in the sidebar to batch close, move, flag/unflag, or clear status, and drag selected groups between workspaces #179 @melonamin
+- terminal zoom: `cmd+shift+return` renders the active surface full-window over the sidebar and chrome, also driveable over the control API with `surface.zoom` / `agtermctl surface zoom` #158 @melonamin
+- Edit menu Copy/Paste/Select All now work when the terminal has focus, with `session.paste` and `session.selectall` added to the control API #181 @umputun
+- configurable sidebar font size in Settings > Appearance > Window #187 @umputun
+
+### Improvements
+
+- drop the "Closed <name> / Reopen" toast; the undo window is unchanged (cmd-Z during the grace period, File > Reopen Last Closed Item after) cf43d5f @umputun
+
+### Bug Fixes
+
+- re-tint sidebar row text from the row view's live selection state so multi-selected rows stay legible #189 @melonamin
+- let `agtermctl font` target a split or scratch pane #188 @umputun
+- clear the active agent-status glyph on Ctrl-C, not just Escape #185 @umputun
+- keep workspace and session ids unique across close, undo, and reopen #184 @umputun
+- keep keyboard focus on the overlay/scratch, not the pane behind it #182 @umputun
+
+## v0.10.2 - 2026-07-08
+
+### Bug Fixes
+
+- restore a saved window onto a connected display so one left on a now-disconnected external monitor no longer reopens off-screen #178 @melonamin
+- hide a leftover titlebar decoration band that showed over the terminal in hidden toolbar mode df81d56 @umputun
+
+## v0.10.1 - 2026-07-08
+
+### Improvements
+
+- type into the quick terminal and read its screen back over the control API with `quick type` / `quick text` #177 @umputun
+- soften the sidebar workspace name to a medium weight so it reads a touch heavier than the sessions without the heavy bold f793fd3 @umputun
+
+## v0.10.0 - 2026-07-08
+
+### New Features
+
+- hidden toolbar mode - a full-bleed terminal with no titlebar row and no traffic-light buttons #173 @umputun
+- reopen recently closed sessions #174 @melonamin
+- follow the macOS light/dark appearance automatically via ghostty's dual theme value #74 @paul-nameless
+- read-back for the focused split pane, status blink/color, and quick-terminal visibility over the control API #169 @umputun
+- read-back for split ratio, window geometry, workspace focus, sidebar mode, and window fullscreen/zoom over the control API #168 @umputun
+- expose an open overlay's size on the tree read side #167 @umputun
+
+### Improvements
+
+- reveal file:// links in Finder instead of doing nothing #162 @i-kozlov
+
+## v0.9.0 - 2026-07-07
+
+### New Features
+
+- native full screen support #160 @umputun
+- resize an open overlay in place via session.overlay.resize #163 @umputun
+- bind shifted-symbol keys in keymaps via shift+<base> #161 @umputun
+- expose sidebar visibility over the control API #159 @umputun
+- preserve split-pane focus when re-showing a hidden split #159 @umputun
+
+### Bug Fixes
+
+- clear the notification badge when refocusing the app on a visible session #164 @umputun
+
+## v0.8.4 - 2026-07-06
+
+### Bug Fixes
+
+- hiding or showing the sidebar is now instant on windows with many sessions, instead of lagging as every terminal pane re-rendered 9440f1a @umputun
+
+## v0.8.3 - 2026-07-06
+
+### Improvements
+
+- session.seen control command to clear a session's unseen-notification badge headlessly, without opening it #156 @umputun
+
+### Bug Fixes
+
+- mouse-wheel scroll and split-pane selection now work right after clicking back into an inactive window, instead of needing a mouse nudge #157 @umputun
+- keep the sidebar disclosure triangle visible when the theme and system appearance mismatch #152 @umputun
+- show the chrome hairlines on light themes #150 @umputun
+- the selected-session label is now readable on light themes #146 @bigspawn
+
 ## v0.8.2 - 2026-07-05
 
 ### Bug Fixes

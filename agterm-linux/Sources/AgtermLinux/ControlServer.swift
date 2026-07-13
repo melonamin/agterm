@@ -132,8 +132,9 @@ final class ControlServer: @unchecked Sendable {
         }
         switch req.cmd {
         case .sessionClose, .sessionSelect, .sessionGo, .sessionRename, .sessionMove, .sessionType,
-             .sessionStatus, .sessionFlag, .sessionSplit, .sessionScratch, .sessionFocus, .sessionCopy,
-             .sessionSearch, .sessionOverlayOpen, .sessionOverlayClose, .sessionOverlayResult,
+             .sessionStatus, .sessionFlag, .sessionSeen, .sessionSplit, .sessionScratch, .sessionFocus,
+             .sessionCopy, .sessionPaste, .sessionSelectAll, .sessionSearch,
+             .sessionOverlayOpen, .sessionOverlayClose, .sessionOverlayResize, .sessionOverlayResult,
              .sessionBackground, .sessionResize, .sessionText, .notify,
              .fontInc, .fontDec, .fontReset:
             return routeOwningSession(req.target) ?? .controller(gController)
@@ -141,10 +142,11 @@ final class ControlServer: @unchecked Sendable {
             return routeOwningWorkspace(req.target) ?? .controller(gController)
         case .sessionNew:
             return routeOwningWorkspace(req.args?.workspace) ?? .controller(gController)
-        case .tree, .workspaceNew, .quick, .sidebar, .sidebarMode, .sidebarExpand, .sidebarCollapse,
+        case .tree, .workspaceNew, .quick, .quickType, .quickText, .surfaceZoom,
+             .sidebar, .sidebarMode, .sidebarExpand, .sidebarCollapse,
              .windowNew, .windowList, .windowSelect, .windowClose, .windowRename, .windowDelete,
-             .windowResize, .windowMove, .windowZoom, .keymapReload, .configReload, .themeSet, .themeList,
-             .restoreClear:
+             .windowResize, .windowMove, .windowZoom, .windowFullscreen,
+             .keymapReload, .configReload, .themeSet, .themeList, .restoreClear, .debugAppearance:
             return .controller(gController)
         }
     }

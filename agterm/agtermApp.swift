@@ -14,9 +14,11 @@ struct agtermApp: App {
     @State var palette = PaletteController()
     @State private var sessionSwitcher: SessionSwitcher
     @State private var paneShortcuts: PaneShortcuts
+    @State private var undoCloseShortcut: UndoCloseShortcut
     @State var settingsModel: SettingsModel
     @State private var controlServer: ControlServer
     @State private var customCommandRunner: CustomCommandRunner
+    @State private var appearanceObserver: SystemAppearanceObserver
 
     /// The plain `WindowGroup`'s scene id, used by `openWindow(id:)` to spawn additional windows.
     private static let windowGroupID = "terminal"
@@ -35,13 +37,17 @@ struct agtermApp: App {
         _settingsModel = State(initialValue: settingsModel)
         let controlServer = ControlServer(library: library, actions: actions, settingsModel: settingsModel)
         _controlServer = State(initialValue: controlServer)
-        _sessionSwitcher = State(initialValue: SessionSwitcher(library: library))
+        _sessionSwitcher = State(initialValue: SessionSwitcher(library: library, canSwitch: { actions.uiActionsEnabled }))
         _paneShortcuts = State(initialValue: PaneShortcuts(library: library, actions: actions))
+        _undoCloseShortcut = State(initialValue: UndoCloseShortcut(actions: actions))
         // the custom-command runner needs the keymap (settings) and the bound socket path (control
         // server) for the `{AGT_SOCKET}` token; built last so both are available.
         _customCommandRunner = State(initialValue: CustomCommandRunner(
             library: library, settings: settingsModel,
             socketProvider: { controlServer.resolvedSocketPath }))
+        // follows the macOS light/dark appearance via an app-level KVO observer on
+        // NSApp.effectiveAppearance (see SystemAppearanceObserver). No dependencies; started in `.task`.
+        _appearanceObserver = State(initialValue: SystemAppearanceObserver())
     }
 
     var body: some Scene {
@@ -95,6 +101,9 @@ struct agtermApp: App {
                     sessionSwitcher.start()
                     // install the Ctrl-1/Ctrl-2 direct pane-focus key monitor (idempotent).
                     paneShortcuts.start()
+                    // install the undo-close shortcut (idempotent); it passes through text fields so
+                    // native edit undo still wins there.
+                    undoCloseShortcut.start()
                     // install the custom-command key monitor (idempotent); rebuilds its matcher from
                     // the keymap on `.agtermKeymapChanged`. Hand the delegate a reference so it can
                     // remove the monitor on terminate.
@@ -140,6 +149,9 @@ struct agtermApp: App {
                     // open id. runs once (the .task fires per window) via the library latch.
                     reopenWindows()
                     appDelegate.scheduleRestoredWindowReconciliation(reason: "scene-task")
+                    // start following the macOS appearance last: `[.initial]` seeds the launch side once
+                    // the eager-deck surfaces exist (idempotent, so per-window `.task` re-entry is safe).
+                    appearanceObserver.start()
                 }
         }
         // chromeless: no system title bar (the traffic lights float over our custom titlebar row in
@@ -204,13 +216,21 @@ struct agtermApp: App {
             store.closePrimaryPane(sessionID)
             // focus the surviving (now maximized) pane; if the whole (single) session closed instead,
             // focus the session it reselected to. the collapse/switch re-hosts the target, so use the retry.
-            let target = store.session(withID: sessionID)?.activeSurface ?? store.activeSession?.activeSurface
+            // resolve through `topmostSurface`, so a pane exiting under an overlay or scratch hands focus to
+            // the cover on top rather than to the pane it hides.
+            let target = store.session(withID: sessionID)?.topmostSurface ?? store.activeSession?.topmostSurface
             (target as? GhosttySurfaceView)?.focusAfterReparent()
         }
         view.onFocusChange = { focused in
             guard focused else { return }
             store.session(withID: sessionID)?.splitFocused = false
             // focusing a pane means you've seen the session: clear the badge and any delivered banners.
+            store.clearUnseen(sessionID)
+            NotificationManager.shared.clearDelivered(sessionID: sessionID)
+        }
+        // the focus-free half of the clear above, for the zoom-hosted case where the focus report is
+        // suppressed but the refocused user is looking at exactly this surface.
+        view.onClearUnseen = {
             store.clearUnseen(sessionID)
             NotificationManager.shared.clearDelivered(sessionID: sessionID)
         }
@@ -274,9 +294,14 @@ struct agtermApp: App {
             // (it restores the session on its own hide). target the visible `topmostSurface` (overlay >
             // scratch > active pane) and re-assert past the SwiftUI teardown via the bounded retry.
             guard store.selectedSessionID == sessionID else { return }
-            let quickTerminalVisible = library.windowID(forSession: sessionID)
+            let windowID = library.windowID(forSession: sessionID)
+            let quickTerminalVisible = windowID
                 .flatMap { QuickTerminalRegistry.shared.controller(for: $0) }?.isVisible ?? false
             guard !quickTerminalVisible else { return }
+            // terminal zoom owns focus above the whole deck, and zoom-enter itself ends an open search —
+            // this END lands a tick later, so refocusing the deck's topmost surface here would steal
+            // first responder back from the zoomed terminal (the zoom cover bails like the quick one).
+            guard windowID.flatMap({ TerminalZoomRegistry.shared.controller(for: $0) })?.target == nil else { return }
             (session.topmostSurface as? GhosttySurfaceView)?.focusAfterReparent()
         }
         view.onSearchTotal = { total in store.session(withID: sessionID)?.searchTotal = total }
@@ -284,15 +309,15 @@ struct agtermApp: App {
     }
 
     /// Wire the pane-scoped keystroke-clear: `keyDown` fires `onUserInputClearsStatus` unconditionally, and
-    /// this closure clears the status back to idle ONLY when the host-free `AgentIndicator.clearedBy(pane:isEscape:)`
+    /// this closure clears the status back to idle ONLY when the host-free `AgentIndicator.clearedBy(pane:isInterrupt:)`
     /// says the keystroke's OWN pane owns the current status — so a block set from a background pane survives
     /// foreground typing in another pane. Wired by all three surface factories with only the pane differing
     /// (main=`.left`, split=`.right`, scratch=`.scratch`), like `wireSearchCallbacks`; the scratch has no
     /// `view.session`, so the decision must live in this closure rather than `keyDown`.
     @MainActor
     private static func wireStatusClear(_ view: GhosttySurfaceView, store: AppStore, sessionID: UUID, pane: StatusPane) {
-        view.onUserInputClearsStatus = { isEscape in
-            if store.session(withID: sessionID)?.agentIndicator.clearedBy(pane: pane, isEscape: isEscape) == true {
+        view.onUserInputClearsStatus = { isInterrupt in
+            if store.session(withID: sessionID)?.agentIndicator.clearedBy(pane: pane, isInterrupt: isInterrupt) == true {
                 store.setAgentIndicator(AgentIndicator(), forSession: sessionID)
             }
         }
@@ -322,12 +347,19 @@ struct agtermApp: App {
             store.closeSplitPane(sessionID)
             // focus the surviving (now maximized) pane; if the whole session closed (primary already
             // exited), focus the session it reselected to. the collapse/switch re-hosts it, so retry.
-            let target = store.session(withID: sessionID)?.activeSurface ?? store.activeSession?.activeSurface
+            // resolve through `topmostSurface`, so a pane exiting under an overlay or scratch hands focus to
+            // the cover on top rather than to the pane it hides.
+            let target = store.session(withID: sessionID)?.topmostSurface ?? store.activeSession?.topmostSurface
             (target as? GhosttySurfaceView)?.focusAfterReparent()
         }
         view.onFocusChange = { focused in
             guard focused else { return }
             store.session(withID: sessionID)?.splitFocused = true
+            store.clearUnseen(sessionID)
+            NotificationManager.shared.clearDelivered(sessionID: sessionID)
+        }
+        // the focus-free half of the clear above, for the zoom-hosted case (see makeSurface).
+        view.onClearUnseen = {
             store.clearUnseen(sessionID)
             NotificationManager.shared.clearDelivered(sessionID: sessionID)
         }

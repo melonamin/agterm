@@ -92,15 +92,24 @@ final class GhosttySurfaceView: NSView, TerminalSurface {
     /// Called on the main actor when this surface gains (`true`) or loses (`false`) first
     /// responder, so the app can track which split pane is active. Set by the factory.
     var onFocusChange: ((Bool) -> Void)?
+    /// Rehosting for terminal zoom must update libghostty focus without changing app model state such as
+    /// the focused split pane. `TerminalView` flips this while the surface is hosted in the zoom layer.
+    var suppressFocusChange = false
+    /// Called on the main actor to clear the session's unseen badge + delivered banners WITHOUT the
+    /// `splitFocused` write that rides `onFocusChange(true)` — the refocus-clear path for a zoom-hosted
+    /// surface, where the focus report is suppressed but the user is demonstrably looking at the session.
+    /// Set by the main/split factories alongside `onFocusChange`.
+    var onClearUnseen: (() -> Void)?
 
-    /// Called on the main actor on EVERY keystroke into this surface, carrying whether the key was Escape.
-    /// The factory's closure owns the pane-scoped decision (via `AgentIndicator.clearedBy(pane:isEscape:)`):
-    /// it clears the glyph to idle only when THIS surface's pane owns a clearable status — `blocked`/`completed`
-    /// on any key (you've engaged with the prompt / finished result), `active` only on Escape (the interrupt
-    /// key). Typing in a foreground pane therefore no longer wipes a background pane's block. Passing the
-    /// pane in the closure (not reading `view.session`) is what lets the scratch surface — which has no
-    /// `view.session` — self-clear its own block. The status is otherwise control-driven; this is the one
-    /// input-driven clear, covering the decline case Claude Code fires no hook for.
+    /// Called on the main actor on EVERY keystroke into this surface, carrying whether the key interrupts
+    /// the agent (Escape or Ctrl-C). The factory's closure owns the pane-scoped decision (via
+    /// `AgentIndicator.clearedBy(pane:isInterrupt:)`): it clears the glyph to idle only when THIS surface's
+    /// pane owns a clearable status — `blocked`/`completed` on any key (you've engaged with the prompt /
+    /// finished result), `active` only on an interrupt keystroke. Typing in a foreground pane therefore no
+    /// longer wipes a background pane's block. Passing the pane in the closure (not reading `view.session`)
+    /// is what lets the scratch surface — which has no `view.session` — self-clear its own block. The status
+    /// is otherwise control-driven; this is the one input-driven clear, covering the decline case Claude
+    /// Code fires no hook for.
     var onUserInputClearsStatus: ((Bool) -> Void)?
 
     /// Called on the main actor on EVERY keystroke into this surface, so the app can stamp user activity
@@ -227,6 +236,13 @@ final class GhosttySurfaceView: NSView, TerminalSurface {
     /// owns the cursor-rect override and `applyMouseShape`) can read it.
     var mouseShape: ghostty_action_mouse_shape_e = GHOSTTY_MOUSE_SHAPE_TEXT
 
+    /// The last pointer position pushed to libghostty via `ghostty_surface_mouse_pos` (view-flipped
+    /// coordinates), or nil before the first report. `scrollWheel` syncs the position only when the current
+    /// point differs from this, so a normal already-synced scroll doesn't re-push the same cell on every
+    /// packet — which in an any-motion + sgr-pixel mouse-reporting TUI would emit a synthetic motion report
+    /// per packet. Not `private` so the `+Input` extension (which owns the mouse handlers) can read/write it.
+    var lastReportedMousePoint: NSPoint?
+
     init(workingDirectory: String, fontSize: Float? = nil, command: String? = nil, initialInput: String? = nil,
          waitAfterCommand: Bool = false, autoFocus: Bool = false, env: [String: String] = [:]) {
         self.workingDirectory = workingDirectory
@@ -249,10 +265,41 @@ final class GhosttySurfaceView: NSView, TerminalSurface {
     private func observeKeyWindowChanges() {
         let center = NotificationCenter.default
         for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
+            let becameKey = name == NSWindow.didBecomeKeyNotification
             let token = center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.updateGhosttyFocus() }
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.updateGhosttyFocus()
+                    // returning focus to agterm (cmd-tab or a reactivating click) while this pane is the
+                    // one on screen counts as "seeing" the session — clear its unseen badge, the same as a
+                    // focus transition does. becomeFirstResponder can't cover this: AppKit's per-window
+                    // first responder never resigned while agterm was backgrounded, so no focus transition
+                    // fires on return, leaving the badge stuck until you switch sessions and back.
+                    if becameKey { self.clearUnseenOnRefocus() }
+                }
             }
             focusObservers.append(token)
+        }
+    }
+
+    /// Clear the "you've seen it" state (unseen badge + delivered banners) for this pane's session when
+    /// agterm regains key focus on it — the inverse of notification suppression (which drops a banner only
+    /// when the firing pane is the key window's first responder AND the app is active). `liveFocus` already
+    /// encodes both: a window is key only while the app is active, so it fires solely for the focused pane of
+    /// the now-key window, never a background one. Reuses `onFocusChange`, so it clears exactly for the
+    /// main/split panes that already clear on a focus transition (a scratch/overlay has no `onFocusChange`
+    /// and doesn't clear on focus either), and no-ops after teardown (the closure is nil'd).
+    /// Honors `suppressFocusChange` like the first-responder call sites: a zoom-hosted surface is first
+    /// responder of the key window, so `onFocusChange?(true)` here would mutate `splitFocused` on every
+    /// window-key regain — the model change the zoom host suppresses on the other two paths. The unseen
+    /// badge must still clear, though (the user is looking at exactly this surface), so the suppressed
+    /// branch takes the focus-free `onClearUnseen` path instead of dropping the clear.
+    private func clearUnseenOnRefocus() {
+        guard liveFocus else { return }
+        if suppressFocusChange {
+            onClearUnseen?()
+        } else {
+            onFocusChange?(true)
         }
     }
 
@@ -471,10 +518,15 @@ final class GhosttySurfaceView: NSView, TerminalSurface {
 
     /// Triggers a libghostty keybind action on this surface (e.g. `increase_font_size:1`,
     /// `decrease_font_size:1`, `reset_font_size`), so a menu item can drive the same behavior
-    /// as the built-in keybind. A font change rides the usual CELL_SIZE → persist path.
-    func performBindingAction(_ action: String) {
-        guard let surface else { return }
+    /// as the built-in keybind. A font change rides the usual CELL_SIZE → persist path. Returns
+    /// whether the action ran: `false` when the libghostty surface isn't realized yet (the view
+    /// exists but its inner `surface` is nil), so a control caller can report `session not realized`
+    /// instead of a false ok. `@discardableResult` keeps the GUI/menu callers unchanged.
+    @discardableResult
+    func performBindingAction(_ action: String) -> Bool {
+        guard let surface else { return false }
         _ = ghostty_surface_binding_action(surface, action, UInt(action.utf8.count))
+        return true
     }
 
     /// The direction `navigateSearch` steps the selection. The pure enum (with its libghostty mapping)
@@ -534,11 +586,14 @@ final class GhosttySurfaceView: NSView, TerminalSurface {
         ownedConfigs = [config]
     }
 
-    /// Re-assert the session's watermark after a global config reload broadcast the shared config (no
-    /// background image) to this surface via `applyConfig`. No-op when the session has no watermark (so
-    /// a plain surface isn't needlessly rebuilt). Called from `GhosttyApp.reloadConfig`.
-    func reapplyWatermarkIfNeeded() {
-        guard session?.backgroundWatermark != nil else { return }
+    /// Re-assert the session's per-surface config (watermark and/or font zoom) after a global config
+    /// reload broadcast the shared config to this surface via `applyConfig`, wiping both. No-op when the
+    /// session carries neither (so a plain surface isn't needlessly rebuilt). Called from
+    /// `GhosttyApp.reloadConfig`; on the zoom-CLEARING reload paths `session.fontSize` was already nil'd
+    /// before the broadcast, so only a watermark re-applies there — the appearance-flip reload skips the
+    /// reset, and this is what carries each session's zoom across the flip.
+    func reapplySessionConfigIfNeeded() {
+        guard session?.backgroundWatermark != nil || session?.fontSize != nil else { return }
         applyWatermarkFromSession()
     }
 
@@ -573,13 +628,21 @@ final class GhosttySurfaceView: NSView, TerminalSurface {
         ownedConfigs = [config]
     }
 
+    /// The surface's live font size in points (post cmd +/-), read from `inherited_config`; nil when the
+    /// libghostty surface isn't realized yet or hasn't resolved a size. The read side of `font.*` — the
+    /// control `tree` reads it per pane so a script can query what a font change set (the split/scratch
+    /// panes' sizes are otherwise unobservable, being live-only).
+    func currentFontSize() -> Double? {
+        guard let surface else { return nil }
+        let size = Double(ghostty_surface_inherited_config(surface, GHOSTTY_SURFACE_CONTEXT_WINDOW).font_size)
+        return size > 0 ? size : nil
+    }
+
     func reportFontSize() {
         // Already on the main actor (the CELL_SIZE callback hops via DispatchQueue.main.async).
-        // inherited_config carries the surface's live font size (post cmd +/-); a zero means
-        // libghostty hasn't resolved one yet, so skip it. The store no-ops a same-value write.
-        guard let surface else { return }
-        let size = Double(ghostty_surface_inherited_config(surface, GHOSTTY_SURFACE_CONTEXT_WINDOW).font_size)
-        guard size > 0 else { return }
+        // currentFontSize reads the surface's live font size; nil means libghostty hasn't resolved one
+        // yet, so skip it. The store no-ops a same-value write.
+        guard let size = currentFontSize() else { return }
         onFontSizeChange?(size)
     }
 
@@ -654,6 +717,15 @@ final class GhosttySurfaceView: NSView, TerminalSurface {
             configCStrings.append(valuePtr)
             envVars.append(ghostty_env_var_s(key: UnsafePointer(keyPtr), value: UnsafePointer(valuePtr)))
         }
+        // set the app color scheme to the current appearance BEFORE creating the surface: a new surface
+        // derives its initial theme from the app's conditional state (`ghostty_surface_new` reads it), so
+        // a dual `theme = light:,dark:` renders the correct side from the FIRST frame instead of defaulting
+        // to light and only correcting on a later reload. Read the APP-level side (`currentIsDark()`, i.e.
+        // `NSApp.effectiveAppearance`) — the single source the KVO observer also feeds, not this view's own
+        // `effectiveAppearance`. `set_color_scheme` records the state; it early-returns when unchanged.
+        let isDark = GhosttyApp.currentIsDark()
+        ghostty_app_set_color_scheme(app, isDark ? GHOSTTY_COLOR_SCHEME_DARK : GHOSTTY_COLOR_SCHEME_LIGHT)
+
         // create the surface with `config.env_vars` pointing at the retained `envVars` storage. The
         // pointer is taken inside `withUnsafeMutableBufferPointer` AND `ghostty_surface_new` runs in
         // the same closure, so it's never used past the call (no escaping-pointer UB); ghostty copies
@@ -669,7 +741,7 @@ final class GhosttySurfaceView: NSView, TerminalSurface {
         }
         guard let surface else { return }
 
-        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        // record the same scheme on the surface itself, so a later `update_config` re-resolves its side.
         ghostty_surface_set_color_scheme(surface, isDark ? GHOSTTY_COLOR_SCHEME_DARK : GHOSTTY_COLOR_SCHEME_LIGHT)
 
         if let screen = window?.screen ?? NSScreen.main,
@@ -787,6 +859,7 @@ final class GhosttySurfaceView: NSView, TerminalSurface {
         onExit = nil
         onExitCodeCaptured = nil
         onFocusChange = nil
+        onClearUnseen = nil
         onUserInputClearsStatus = nil
         onUserInput = nil
         onFontSizeChange = nil
@@ -836,10 +909,16 @@ final class GhosttySurfaceView: NSView, TerminalSurface {
         updateMetalLayerSize()
     }
 
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
+    /// Record this surface's light/dark scheme from the authoritative `isDark` (the app-level side the
+    /// caller resolved from `NSApp.effectiveAppearance`), so the NEXT `update_config` re-resolves a dual
+    /// `theme = light:,dark:` to the matching side. libghostty derives the active side from the surface's
+    /// RECORDED conditional state at `update_config` time — not from the config file alone — so a surface
+    /// whose recorded state lagged (e.g. created before its window's appearance resolved) would re-derive
+    /// the WRONG side. Re-asserting it before each reload keeps the terminal in sync; `set_color_scheme`
+    /// early-returns when unchanged, so it is cheap. The APP-level scheme is set once by the caller
+    /// (`GhosttyApp.reloadConfig`), so this only touches the surface.
+    func syncColorScheme(isDark: Bool) {
         guard let surface else { return }
-        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         ghostty_surface_set_color_scheme(surface, isDark ? GHOSTTY_COLOR_SCHEME_DARK : GHOSTTY_COLOR_SCHEME_LIGHT)
     }
 
@@ -867,6 +946,18 @@ final class GhosttySurfaceView: NSView, TerminalSurface {
 
     override var acceptsFirstResponder: Bool { true }
 
+    /// Deliver the LEFT click that reactivates a background/inactive window straight to the surface (a
+    /// "first mouse") instead of AppKit swallowing it just to raise the window. Without this, clicking a
+    /// specific pane of a two-pane split from another window raises the window but never runs `mouseDown`,
+    /// so the clicked pane doesn't become first responder and `splitFocused` stays on the previously-focused
+    /// pane ("the mouse works but the pane isn't selected"). The left click then behaves like any normal
+    /// in-window click — it selects the pane AND is reported to the program — matching Terminal.app/iTerm2/Ghostty.
+    /// Gated to `.leftMouseDown` on purpose: a first-mouse right/middle click would otherwise reach
+    /// `rightMouseDown`/`otherMouseDown`, which forward to libghostty, and with the default
+    /// `right-click-action = paste` that would paste the clipboard into a window you only meant to raise —
+    /// so right/middle first clicks just raise the window.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { event?.type == .leftMouseDown }
+
     override func becomeFirstResponder() -> Bool {
         let result = super.becomeFirstResponder()
         if result, let surface {
@@ -875,7 +966,7 @@ final class GhosttySurfaceView: NSView, TerminalSurface {
             // inside this call, so `liveFocus` would read stale. onFocusChange (split-pane tracking) is
             // independent of key state.
             ghostty_surface_set_focus(surface, window?.isKeyWindow ?? false)
-            onFocusChange?(true)
+            if !suppressFocusChange { onFocusChange?(true) }
         }
         return result
     }
@@ -884,7 +975,7 @@ final class GhosttySurfaceView: NSView, TerminalSurface {
         let result = super.resignFirstResponder()
         if result, let surface {
             ghostty_surface_set_focus(surface, false)
-            onFocusChange?(false)
+            if !suppressFocusChange { onFocusChange?(false) }
         }
         return result
     }

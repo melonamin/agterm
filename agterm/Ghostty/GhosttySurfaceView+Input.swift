@@ -31,7 +31,19 @@ extension GhosttySurfaceView {
 
     // MARK: - Keyboard
 
-    private static let escapeKeyCode: UInt16 = 53
+    /// Reduce an `NSEvent` to the host-free `InterruptKeystroke` classifier — Escape or a bare Ctrl-C
+    /// clears a stale `active` glyph. The classification (and its negatives) is unit-tested in `agtermCore`.
+    private func isInterruptKeystroke(_ event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        var modifiers: KeyModifiers = []
+        if flags.contains(.control) { modifiers.insert(.control) }
+        if flags.contains(.command) { modifiers.insert(.command) }
+        if flags.contains(.option) { modifiers.insert(.option) }
+        if flags.contains(.shift) { modifiers.insert(.shift) }
+        return InterruptKeystroke.isInterrupt(keyCode: event.keyCode,
+                                              character: event.charactersIgnoringModifiers,
+                                              modifiers: modifiers)
+    }
 
     override func keyDown(with event: NSEvent) {
         guard let surface else {
@@ -43,15 +55,16 @@ extension GhosttySurfaceView {
         // timer alive and the user would be yanked to a blocked session mid-type.
         onUserInput?()
         // a keystroke in a session flagged for your attention clears the glyph to idle: blocked/completed
-        // on ANY key (you've engaged with the prompt / finished result), active ONLY on Escape — the
-        // interrupt key — so ordinary typing while the agent works doesn't wipe the "working" glyph, but
-        // cancelling a pending prompt (Esc) does. Esc-interrupt fires no Claude Code hook and a pending
-        // prompt can still read active when you cancel (the blocked notification lands seconds later), so
-        // this keystroke clear is the only signal that drops the stale glyph. fire it UNCONDITIONALLY with
-        // the isEscape flag — the factory's closure owns the pane-scoped decision (AgentIndicator.clearedBy),
-        // so the scratch (which has no view.session) self-clears too, and a background pane's block survives
-        // foreground typing.
-        onUserInputClearsStatus?(event.keyCode == Self.escapeKeyCode)
+        // on ANY key (you've engaged with the prompt / finished result), active ONLY on an interrupt
+        // keystroke — Escape or Ctrl-C — so ordinary typing while the agent works doesn't wipe the
+        // "working" glyph, but cancelling a pending prompt does. Claude Code treats Ctrl-C like Esc for
+        // dismissing a prompt, yet neither fires a hook, and a pending prompt can still read active when
+        // you cancel (the blocked notification lands seconds later), so this keystroke clear is the only
+        // signal that drops the stale glyph. fire it UNCONDITIONALLY with the isInterrupt flag — the
+        // factory's closure owns the pane-scoped decision (AgentIndicator.clearedBy), so the scratch
+        // (which has no view.session) self-clears too, and a background pane's block survives foreground
+        // typing.
+        onUserInputClearsStatus?(isInterruptKeystroke(event))
         let action: ghostty_input_action_e = event.isARepeat ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
 
@@ -135,19 +148,28 @@ extension GhosttySurfaceView {
         return NSPoint(x: local.x, y: bounds.height - local.y)
     }
 
+    /// Push the pointer position from `event` to libghostty and remember it in `lastReportedMousePoint`.
+    /// Every handler that reports a position routes through here so `scrollWheel` can tell when the position
+    /// is already current and skip a redundant `mouse_pos` (which a mouse-reporting TUI would otherwise turn
+    /// into a per-packet synthetic motion report).
+    private func reportMousePos(from event: NSEvent) {
+        guard let surface else { return }
+        let pt = mousePoint(from: event)
+        ghostty_surface_mouse_pos(surface, pt.x, pt.y, mods(event))
+        lastReportedMousePoint = pt
+    }
+
     override func mouseDown(with event: NSEvent) {
         guard let surface else { return }
         window?.makeFirstResponder(self)
         updateGhosttyFocus()
-        let pt = mousePoint(from: event)
-        ghostty_surface_mouse_pos(surface, pt.x, pt.y, mods(event))
+        reportMousePos(from: event)
         _ = ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_LEFT, mods(event))
     }
 
     override func mouseUp(with event: NSEvent) {
         guard let surface else { return }
-        let pt = mousePoint(from: event)
-        ghostty_surface_mouse_pos(surface, pt.x, pt.y, mods(event))
+        reportMousePos(from: event)
         _ = ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_LEFT, mods(event))
     }
 
@@ -157,15 +179,13 @@ extension GhosttySurfaceView {
     // terminal context menu, so the return value is discarded like the left handler.
     override func rightMouseDown(with event: NSEvent) {
         guard let surface else { return }
-        let pt = mousePoint(from: event)
-        ghostty_surface_mouse_pos(surface, pt.x, pt.y, mods(event))
+        reportMousePos(from: event)
         _ = ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_RIGHT, mods(event))
     }
 
     override func rightMouseUp(with event: NSEvent) {
         guard let surface else { return }
-        let pt = mousePoint(from: event)
-        ghostty_surface_mouse_pos(surface, pt.x, pt.y, mods(event))
+        reportMousePos(from: event)
         _ = ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_RIGHT, mods(event))
     }
 
@@ -173,15 +193,13 @@ extension GhosttySurfaceView {
     // (back/forward, etc.) falls through to the responder chain via super.
     override func otherMouseDown(with event: NSEvent) {
         guard event.buttonNumber == 2, let surface else { super.otherMouseDown(with: event); return }
-        let pt = mousePoint(from: event)
-        ghostty_surface_mouse_pos(surface, pt.x, pt.y, mods(event))
+        reportMousePos(from: event)
         _ = ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_MIDDLE, mods(event))
     }
 
     override func otherMouseUp(with event: NSEvent) {
         guard event.buttonNumber == 2, let surface else { super.otherMouseUp(with: event); return }
-        let pt = mousePoint(from: event)
-        ghostty_surface_mouse_pos(surface, pt.x, pt.y, mods(event))
+        reportMousePos(from: event)
         _ = ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_MIDDLE, mods(event))
     }
 
@@ -189,21 +207,13 @@ extension GhosttySurfaceView {
     override func rightMouseDragged(with event: NSEvent) { mouseMoved(with: event) }
     override func otherMouseDragged(with event: NSEvent) { mouseMoved(with: event) }
 
-    override func mouseMoved(with event: NSEvent) {
-        guard let surface else { return }
-        let pt = mousePoint(from: event)
-        ghostty_surface_mouse_pos(surface, pt.x, pt.y, mods(event))
-    }
+    override func mouseMoved(with event: NSEvent) { reportMousePos(from: event) }
 
-    /// The pointer entered the surface: restore libghostty's mouse position from the current point. Paired
-    /// with `mouseExited`'s `-1, -1` reset — without it, `scrollWheel` (which never sets `mouse_pos`) would
-    /// report a scroll at the stale `-1, -1` if you scroll right after re-entering, before any move, inside
-    /// a mouse-reporting TUI (vim/less/htop).
-    override func mouseEntered(with event: NSEvent) {
-        guard let surface else { return }
-        let pt = mousePoint(from: event)
-        ghostty_surface_mouse_pos(surface, pt.x, pt.y, mods(event))
-    }
+    /// The pointer entered the surface: restore libghostty's mouse position from the current point, undoing
+    /// `mouseExited`'s `-1, -1` reset so hovered-link and cursor-shape state are correct on re-entry.
+    /// (`scrollWheel` also syncs `mouse_pos` when stale, so the first post-re-entry scroll no longer depends
+    /// on this — but the restore still matters for hover/link state before any move.)
+    override func mouseEntered(with event: NSEvent) { reportMousePos(from: event) }
 
     /// The pointer left the surface. Report negative coordinates so libghostty clears any hovered-link
     /// state — it drops `over_link`, reverts the mouse shape, and re-renders without the underline (see its
@@ -213,10 +223,25 @@ extension GhosttySurfaceView {
     override func mouseExited(with event: NSEvent) {
         guard let surface, NSEvent.pressedMouseButtons == 0 else { return }
         ghostty_surface_mouse_pos(surface, -1, -1, mods(event))
+        lastReportedMousePoint = NSPoint(x: -1, y: -1)
     }
 
     override func scrollWheel(with event: NSEvent) {
         guard let surface else { return }
+        // sync libghostty's mouse position before scrolling, but ONLY when it's stale: mouse_scroll reports
+        // at the last-known cell, and reactivating the window with no mouse move — cmd-tab/keyboard, or
+        // scrolling to reactivate with the pointer already inside — delivers no mouseDown/mouseEntered, so
+        // the position stays stale or -1,-1 (from mouseExited) and the first scroll inside a mouse-reporting
+        // TUI (Claude Code, vim, less) reports at the wrong cell until you nudge the mouse. gating on
+        // lastReportedMousePoint means an already-synced (normal) scroll doesn't re-push the same cell every
+        // packet — which in an any-motion + sgr-pixel TUI would emit a synthetic motion report per packet.
+        // (a LEFT click reactivation is already covered by mouseDown via acceptsFirstMouse; this handles the
+        // no-click paths.)
+        let pt = mousePoint(from: event)
+        if pt != lastReportedMousePoint {
+            ghostty_surface_mouse_pos(surface, pt.x, pt.y, mods(event))
+            lastReportedMousePoint = pt
+        }
         var scrollMods: ghostty_input_scroll_mods_t = 0
         if event.hasPreciseScrollingDeltas { scrollMods |= 1 }
         ghostty_surface_mouse_scroll(surface, event.scrollingDeltaX, event.scrollingDeltaY, scrollMods)
@@ -419,11 +444,61 @@ extension GhosttySurfaceView: @preconcurrency NSTextInputClient {
         }
     }
 
-    /// Opens a URL from a link click (`GHOSTTY_ACTION_OPEN_URL`). The scheme allowlist lives in the
-    /// host-free `LinkPolicy` (unit-tested); this is just the AppKit glue. Silently ignores a disallowed
-    /// or unparseable link.
+    /// Acts on a clicked terminal link (`GHOSTTY_ACTION_OPEN_URL`). The scheme/host decision lives in the
+    /// host-free `LinkPolicy` (unit-tested); this is just the AppKit glue for the three dispositions: OPEN a
+    /// web/mail URL, REVEAL a `file://` link in Finder (never opened — reveal selects it, executing nothing),
+    /// or IGNORE anything else.
     func openLink(_ raw: String) {
-        guard let url = LinkPolicy.permittedURL(from: raw) else { return }
-        NSWorkspace.shared.open(url)
+        switch LinkPolicy.disposition(for: raw) {
+        case let .open(url): NSWorkspace.shared.open(url)
+        case let .reveal(url): NSWorkspace.shared.activateFileViewerSelecting([url])
+        case .ignore: return
+        }
+    }
+}
+
+// MARK: - Standard Edit menu (responder chain)
+
+/// The stock Edit ▸ Copy/Paste/Select All actions, implemented on the surface so AppKit's automatic menu
+/// enabling routes them to the terminal when it holds first responder — while a focused text field (inline
+/// rename, palette search, Settings) keeps its own `copy:`/`paste:`/`selectAll:` because its field editor
+/// wins the responder chain. This is why agterm keeps the standard SwiftUI Edit menu instead of a custom
+/// Commands group. Each action runs the same libghostty binding ⌘C/⌘V/⌘A use. Cut is deliberately NOT
+/// implemented here, so it stays disabled for the terminal (nothing to cut) yet still works in text fields;
+/// it cannot be dropped on its own, sharing SwiftUI's `.pasteboard` group with Copy/Paste/Select All.
+/// Undo/Redo are removed from the menu entirely (`CommandGroup(replacing: .undoRedo)` in `agtermApp+Menus`).
+extension GhosttySurfaceView: NSMenuItemValidation {
+    @objc func copy(_ sender: Any?) { performBindingAction("copy_to_clipboard") }
+
+    @objc func paste(_ sender: Any?) { performBindingAction("paste_from_clipboard") }
+
+    /// `override` because `selectAll(_:)` is declared on `NSResponder`, unlike `copy:`/`paste:`.
+    override func selectAll(_ sender: Any?) { performBindingAction("select_all") }
+
+    /// Gate the three items on real availability: Copy needs a selection, Paste needs something the paste
+    /// path can actually insert, Select All needs a realized surface. All three require a realized surface,
+    /// since `performBindingAction` no-ops without one. Items we don't own enable by default (AppKit only
+    /// consults this on the responder that implements the action, so `cut:` never reaches it).
+    ///
+    /// Paste asks `GhosttyCallbacks.hasPasteboardText()`, which runs the same branches as `pasteboardText` —
+    /// the SAME reader `paste_from_clipboard` ends up using — rather than probing for a plain string. The
+    /// clipboard may hold a file/web URL with no string representation (a Finder copy), which that reader
+    /// turns into a shell-escaped path: probing for `NSString` alone reports "nothing to paste" while ⌘V
+    /// happily pastes the path, which is exactly the menu-vs-keyboard divergence these responder methods
+    /// exist to remove. A bare `canReadObject([NSURL])` TYPE probe is wrong the other way, enabling Paste for a
+    /// pasteboard that only declares a URL type. The gate short-circuits on the first usable URL, so it never
+    /// escapes and joins a whole Finder copy just to answer yes/no.
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        switch menuItem.action {
+        case #selector(copy(_:)):
+            guard let surface else { return false }
+            return ghostty_surface_has_selection(surface)
+        case #selector(paste(_:)):
+            return surface != nil && GhosttyCallbacks.hasPasteboardText()
+        case #selector(selectAll(_:)):
+            return surface != nil
+        default:
+            return true
+        }
     }
 }

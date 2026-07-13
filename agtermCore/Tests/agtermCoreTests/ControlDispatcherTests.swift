@@ -268,6 +268,26 @@ struct ControlDispatcherTests {
         ])
     }
 
+    @Test func sessionCloseRoutesBatchTargets() async {
+        let actions = MockControlActions()
+        let dispatcher = ControlDispatcher(actions: actions)
+
+        let closed = await dispatcher.dispatch(ControlRequest(
+            cmd: .sessionClose,
+            args: ControlArgs(targets: ["a", "b"], window: "win")
+        ))
+        let empty = await dispatcher.dispatch(ControlRequest(
+            cmd: .sessionClose,
+            args: ControlArgs(targets: [])
+        ))
+
+        #expect(closed == ControlResponse(ok: true))
+        #expect(empty == ControlResponse(ok: false, error: "session.close requires at least one --target"))
+        #expect(actions.calls == [
+            .sessionCloseBatch(targets: ["a", "b"], window: "win")
+        ])
+    }
+
     @Test func sessionGoAndRenameRejectInvalidInputsWithoutCallingActions() async {
         let actions = MockControlActions()
         let dispatcher = ControlDispatcher(actions: actions)
@@ -362,6 +382,56 @@ struct ControlDispatcherTests {
         ])
     }
 
+    @Test func sessionMoveRoutesBatchWorkspaceAndPlacementForms() async {
+        let actions = MockControlActions()
+        let dispatcher = ControlDispatcher(actions: actions)
+
+        let workspace = await dispatcher.dispatch(ControlRequest(
+            cmd: .sessionMove,
+            args: ControlArgs(targets: ["a", "b"], workspace: "dest", window: "win")
+        ))
+        let after = await dispatcher.dispatch(ControlRequest(
+            cmd: .sessionMove,
+            args: ControlArgs(targets: ["a", "b"], after: "anchor")
+        ))
+        let reorder = await dispatcher.dispatch(ControlRequest(
+            cmd: .sessionMove,
+            args: ControlArgs(targets: ["a", "b"], to: "up")
+        ))
+
+        #expect(workspace == ControlResponse(ok: true))
+        #expect(after == ControlResponse(ok: true))
+        #expect(reorder == ControlResponse(
+            ok: false,
+            error: "session.move --target can be repeated only with a workspace or --after/--before"
+        ))
+        #expect(actions.calls == [
+            .sessionMoveBatch(targets: ["a", "b"], window: "win", .workspace("dest")),
+            .sessionMoveBatch(targets: ["a", "b"], window: nil, .place(anchor: "anchor", after: true))
+        ])
+    }
+
+    @Test func sessionMoveNormalizesOneArrayTargetToSingularAction() async {
+        let actions = MockControlActions()
+        let dispatcher = ControlDispatcher(actions: actions)
+
+        let workspace = await dispatcher.dispatch(ControlRequest(
+            cmd: .sessionMove,
+            args: ControlArgs(targets: ["a"], workspace: "dest", window: "win")
+        ))
+        let after = await dispatcher.dispatch(ControlRequest(
+            cmd: .sessionMove,
+            args: ControlArgs(targets: ["b"], after: "anchor")
+        ))
+
+        #expect(workspace == ControlResponse(ok: true))
+        #expect(after == ControlResponse(ok: true))
+        #expect(actions.calls == [
+            .sessionMove(target: "a", window: "win", .workspace("dest")),
+            .sessionMove(target: "b", window: nil, .place(anchor: "anchor", after: true)),
+        ])
+    }
+
     @Test func sessionMoveRejectsInvalidForms() async {
         let actions = MockControlActions()
         let dispatcher = ControlDispatcher(actions: actions)
@@ -436,6 +506,25 @@ struct ControlDispatcherTests {
         #expect(actions.calls == [
             .sessionFlag(target: "session", window: "win", "on"),
             .sessionFlag(target: nil, window: nil, "clear")
+        ])
+    }
+
+    @Test func sessionSeenRoutesTargetAndWindow() async {
+        let actions = MockControlActions()
+        let dispatcher = ControlDispatcher(actions: actions)
+
+        let seen = await dispatcher.dispatch(ControlRequest(
+            cmd: .sessionSeen,
+            target: "session",
+            args: ControlArgs(window: "win")
+        ))
+        let active = await dispatcher.dispatch(ControlRequest(cmd: .sessionSeen))
+
+        #expect(seen == ControlResponse(ok: true))
+        #expect(active == ControlResponse(ok: true))
+        #expect(actions.calls == [
+            .markSessionSeen(target: "session", window: "win"),
+            .markSessionSeen(target: nil, window: nil)
         ])
     }
 
@@ -608,9 +697,28 @@ struct ControlDispatcherTests {
         #expect(dec == ControlResponse(ok: true, result: ControlResult(id: "session")))
         #expect(reset == ControlResponse(ok: true, result: ControlResult(id: "session")))
         #expect(actions.calls == [
-            .font(target: "session", window: "win", "increase_font_size:1"),
-            .font(target: "session", window: nil, "decrease_font_size:1"),
-            .font(target: "session", window: nil, "reset_font_size")
+            .font(target: "session", window: "win", pane: nil, "increase_font_size:1"),
+            .font(target: "session", window: nil, pane: nil, "decrease_font_size:1"),
+            .font(target: "session", window: nil, pane: nil, "reset_font_size")
+        ])
+    }
+
+    @Test func fontCommandsThreadPane() async {
+        let actions = MockControlActions()
+        let dispatcher = ControlDispatcher(actions: actions)
+        actions.nextFontResponse = ControlResponse(ok: true, result: ControlResult(id: "session"))
+
+        _ = await dispatcher.dispatch(ControlRequest(cmd: .fontDec, target: "session",
+                                                     args: ControlArgs(pane: "right")))
+        _ = await dispatcher.dispatch(ControlRequest(cmd: .fontInc, target: "session",
+                                                     args: ControlArgs(window: "win", pane: "scratch")))
+        _ = await dispatcher.dispatch(ControlRequest(cmd: .fontReset, target: "session",
+                                                     args: ControlArgs(pane: "left")))
+
+        #expect(actions.calls == [
+            .font(target: "session", window: nil, pane: "right", "decrease_font_size:1"),
+            .font(target: "session", window: "win", pane: "scratch", "increase_font_size:1"),
+            .font(target: "session", window: nil, pane: "left", "reset_font_size")
         ])
     }
 
@@ -760,6 +868,336 @@ struct ControlDispatcherTests {
         #expect(actions.calls == [.sessionCopy(target: "session", window: nil)])
     }
 
+    @Test func sessionPasteRoutesTargetAndWindow() async {
+        let actions = MockControlActions()
+        let dispatcher = ControlDispatcher(actions: actions)
+        actions.nextSessionPasteResponse = ControlResponse(ok: true, result: ControlResult(id: "session"))
+
+        let response = await dispatcher.dispatch(ControlRequest(
+            cmd: .sessionPaste, target: "session", args: ControlArgs(window: "win")))
+
+        #expect(response == ControlResponse(ok: true, result: ControlResult(id: "session")))
+        #expect(actions.calls == [.sessionPaste(target: "session", window: "win")])
+    }
+
+    @Test func sessionSelectAllRoutesTargetAndWindow() async {
+        let actions = MockControlActions()
+        let dispatcher = ControlDispatcher(actions: actions)
+        actions.nextSessionSelectAllResponse = ControlResponse(ok: true, result: ControlResult(id: "session"))
+
+        let response = await dispatcher.dispatch(ControlRequest(
+            cmd: .sessionSelectAll, target: "session", args: ControlArgs(window: "win")))
+
+        #expect(response == ControlResponse(ok: true, result: ControlResult(id: "session")))
+        #expect(actions.calls == [.sessionSelectAll(target: "session", window: "win")])
+    }
+
+    @Test func sessionOverlayOpenRejectsInvalidInputsBeforeCallingActions() async {
+        let actions = MockControlActions()
+        let dispatcher = ControlDispatcher(actions: actions)
+
+        let missing = await dispatcher.dispatch(ControlRequest(cmd: .sessionOverlayOpen, target: "session"))
+        let empty = await dispatcher.dispatch(ControlRequest(
+            cmd: .sessionOverlayOpen,
+            target: "session",
+            args: ControlArgs(command: "")
+        ))
+        let badColor = await dispatcher.dispatch(ControlRequest(
+            cmd: .sessionOverlayOpen,
+            target: "session",
+            args: ControlArgs(command: "cat", color: "purple")
+        ))
+
+        #expect(missing == ControlResponse(ok: false, error: "session.overlay.open requires a command"))
+        #expect(empty == ControlResponse(ok: false, error: "session.overlay.open requires a command"))
+        #expect(badColor == ControlResponse(ok: false, error: "invalid color: purple (#rrggbb)"))
+        #expect(actions.calls.isEmpty)
+    }
+
+    @Test func sessionOverlayOpenRoutesOptionsAndEchoesActionResponse() async {
+        let actions = MockControlActions()
+        let dispatcher = ControlDispatcher(actions: actions)
+        actions.nextOverlayOpenResponse = ControlResponse(ok: false, error: "overlay already open")
+
+        let response = await dispatcher.dispatch(ControlRequest(
+            cmd: .sessionOverlayOpen,
+            target: "session",
+            args: ControlArgs(cwd: "/tmp", command: "cat", wait: true,
+                              sizePercent: 70, follow: true, window: "win", color: "#2a1a3a")
+        ))
+
+        #expect(response == ControlResponse(ok: false, error: "overlay already open"))
+        #expect(actions.calls == [
+            .overlayOpen(target: "session", window: "win",
+                         ControlSessionOverlayOpenOptions(command: "cat", cwd: "/tmp", wait: true,
+                                                          sizePercent: 70, backgroundColor: "#2a1a3a",
+                                                          follow: true))
+        ])
+    }
+
+    @Test func sessionOverlayOpenDefaultsFollowToFalseWhenOmitted() async {
+        let actions = MockControlActions()
+        let dispatcher = ControlDispatcher(actions: actions)
+        actions.nextOverlayOpenResponse = ControlResponse(ok: true, result: ControlResult(id: "session"))
+
+        let response = await dispatcher.dispatch(ControlRequest(
+            cmd: .sessionOverlayOpen,
+            target: "session",
+            args: ControlArgs(command: "cat")
+        ))
+
+        #expect(response == ControlResponse(ok: true, result: ControlResult(id: "session")))
+        #expect(actions.calls == [
+            .overlayOpen(target: "session", window: nil,
+                         ControlSessionOverlayOpenOptions(command: "cat", cwd: nil, wait: false,
+                                                          sizePercent: nil, backgroundColor: nil,
+                                                          follow: false))
+        ])
+    }
+
+    @Test func sessionOverlayCloseAndResultRouteTargetAndWindow() async {
+        let actions = MockControlActions()
+        let dispatcher = ControlDispatcher(actions: actions)
+        actions.nextOverlayCloseResponse = ControlResponse(ok: true, result: ControlResult(id: "session"))
+        actions.nextOverlayResultResponse = ControlResponse(ok: true, result: ControlResult(id: "session", exitCode: 7))
+
+        let close = await dispatcher.dispatch(ControlRequest(
+            cmd: .sessionOverlayClose,
+            target: "session",
+            args: ControlArgs(window: "win")
+        ))
+        let result = await dispatcher.dispatch(ControlRequest(
+            cmd: .sessionOverlayResult,
+            target: "session",
+            args: ControlArgs(window: "win")
+        ))
+
+        #expect(close == ControlResponse(ok: true, result: ControlResult(id: "session")))
+        #expect(result == ControlResponse(ok: true, result: ControlResult(id: "session", exitCode: 7)))
+        #expect(actions.calls == [
+            .overlayClose(target: "session", window: "win"),
+            .overlayResult(target: "session", window: "win")
+        ])
+    }
+
+    @Test func sessionOverlayResultKeepsExactActionErrorResponse() async {
+        let actions = MockControlActions()
+        let dispatcher = ControlDispatcher(actions: actions)
+        actions.nextOverlayResultResponse = ControlResponse(ok: false, error: OverlayResultError.stillRunning)
+
+        let response = await dispatcher.dispatch(ControlRequest(cmd: .sessionOverlayResult, target: "session"))
+
+        #expect(response == ControlResponse(ok: false, error: OverlayResultError.stillRunning))
+        #expect(actions.calls == [.overlayResult(target: "session", window: nil)])
+    }
+
+    @Test func sessionOverlayResizeRoutesSizePercentAndWindow() async {
+        let actions = MockControlActions()
+        let dispatcher = ControlDispatcher(actions: actions)
+        actions.nextOverlayResizeResponse = ControlResponse(ok: true, result: ControlResult(id: "session"))
+
+        let response = await dispatcher.dispatch(ControlRequest(
+            cmd: .sessionOverlayResize, target: "session",
+            args: ControlArgs(sizePercent: 60, window: "win")
+        ))
+
+        #expect(response == ControlResponse(ok: true, result: ControlResult(id: "session")))
+        #expect(actions.calls == [.overlayResize(target: "session", window: "win", sizePercent: 60)])
+    }
+
+    @Test func sessionOverlayResizeFullRoutesNilSizePercent() async {
+        let actions = MockControlActions()
+        let dispatcher = ControlDispatcher(actions: actions)
+
+        let response = await dispatcher.dispatch(ControlRequest(
+            cmd: .sessionOverlayResize, target: "session", args: ControlArgs(full: true)
+        ))
+
+        #expect(response?.ok == true)
+        #expect(actions.calls == [.overlayResize(target: "session", window: nil, sizePercent: nil)])
+    }
+
+    @Test func sessionOverlayResizeRejectsMissingConflictingAndOutOfRange() async {
+        let actions = MockControlActions()
+        let dispatcher = ControlDispatcher(actions: actions)
+
+        let missing = await dispatcher.dispatch(ControlRequest(cmd: .sessionOverlayResize, target: "session"))
+        let both = await dispatcher.dispatch(ControlRequest(
+            cmd: .sessionOverlayResize, target: "session", args: ControlArgs(sizePercent: 50, full: true)))
+        let tooBig = await dispatcher.dispatch(ControlRequest(
+            cmd: .sessionOverlayResize, target: "session", args: ControlArgs(sizePercent: 101)))
+        let tooSmall = await dispatcher.dispatch(ControlRequest(
+            cmd: .sessionOverlayResize, target: "session", args: ControlArgs(sizePercent: 0)))
+
+        #expect(missing == ControlResponse(ok: false, error: "session.overlay.resize requires --size-percent or --full"))
+        #expect(both == ControlResponse(ok: false, error: "session.overlay.resize: --full is mutually exclusive with --size-percent"))
+        #expect(tooBig == ControlResponse(ok: false, error: "session.overlay.resize: --size-percent must be 1...100"))
+        #expect(tooSmall == ControlResponse(ok: false, error: "session.overlay.resize: --size-percent must be 1...100"))
+        #expect(actions.calls.isEmpty)
+    }
+
+    @Test func sessionBackgroundRoutesParsedTextImageColorAndClearForms() async {
+        let actions = MockControlActions()
+        let dispatcher = ControlDispatcher(actions: actions)
+        actions.nextSessionBackgroundResponse = ControlResponse(ok: true, result: ControlResult(id: "session"))
+
+        let text = await dispatcher.dispatch(ControlRequest(
+            cmd: .sessionBackground,
+            target: "session",
+            args: ControlArgs(text: "DRAFT", mode: "text", window: "win", color: "#ff0000",
+                              opacity: 0.15, fit: "contain", position: "top-left")
+        ))
+        let image = await dispatcher.dispatch(ControlRequest(
+            cmd: .sessionBackground,
+            target: "session",
+            args: ControlArgs(mode: "image", path: "/tmp/bg.png", fit: "cover",
+                              position: "bottom-right", repeats: true)
+        ))
+        let color = await dispatcher.dispatch(ControlRequest(
+            cmd: .sessionBackground,
+            target: "session",
+            args: ControlArgs(mode: "color", color: "#102030")
+        ))
+        let clear = await dispatcher.dispatch(ControlRequest(cmd: .sessionBackground, target: "session"))
+
+        let textWatermark = BackgroundWatermark(kind: .text, text: "DRAFT", colorHex: "#ff0000",
+                                                opacity: 0.15, fit: .contain, position: .topLeft)
+        let imageWatermark = BackgroundWatermark(kind: .image, imagePath: "/tmp/bg.png",
+                                                 fit: .cover, position: .bottomRight, repeats: true)
+        let colorWatermark = BackgroundWatermark(kind: .color, colorHex: "#102030")
+        #expect(text == ControlResponse(ok: true, result: ControlResult(id: "session")))
+        #expect(image == ControlResponse(ok: true, result: ControlResult(id: "session")))
+        #expect(color == ControlResponse(ok: true, result: ControlResult(id: "session")))
+        #expect(clear == ControlResponse(ok: true, result: ControlResult(id: "session")))
+        #expect(actions.calls == [
+            .sessionBackground(target: "session", window: "win",
+                               ControlSessionBackgroundOptions(watermark: textWatermark)),
+            .sessionBackground(target: "session", window: nil,
+                               ControlSessionBackgroundOptions(watermark: imageWatermark)),
+            .sessionBackground(target: "session", window: nil,
+                               ControlSessionBackgroundOptions(watermark: colorWatermark)),
+            .sessionBackground(target: "session", window: nil,
+                               ControlSessionBackgroundOptions(watermark: nil))
+        ])
+    }
+
+    @Test func sessionBackgroundRejectsInvalidInputsBeforeCallingActions() async {
+        let actions = MockControlActions()
+        let dispatcher = ControlDispatcher(actions: actions)
+        let tooLong = String(repeating: "x", count: WatermarkConfig.maxTextLength + 1)
+
+        let badFit = await dispatcher.dispatch(ControlRequest(
+            cmd: .sessionBackground,
+            args: ControlArgs(mode: "image", path: "/tmp/bg.png", fit: "wide")
+        ))
+        let badPosition = await dispatcher.dispatch(ControlRequest(
+            cmd: .sessionBackground,
+            args: ControlArgs(mode: "image", path: "/tmp/bg.png", position: "middle")
+        ))
+        let badOpacity = await dispatcher.dispatch(ControlRequest(
+            cmd: .sessionBackground,
+            args: ControlArgs(mode: "image", path: "/tmp/bg.png", opacity: 1.5)
+        ))
+        let missingPath = await dispatcher.dispatch(ControlRequest(
+            cmd: .sessionBackground,
+            args: ControlArgs(mode: "image")
+        ))
+        let controlPath = await dispatcher.dispatch(ControlRequest(
+            cmd: .sessionBackground,
+            args: ControlArgs(mode: "image", path: "/tmp/bg\n.png")
+        ))
+        let missingText = await dispatcher.dispatch(ControlRequest(
+            cmd: .sessionBackground,
+            args: ControlArgs(mode: "text")
+        ))
+        let longText = await dispatcher.dispatch(ControlRequest(
+            cmd: .sessionBackground,
+            args: ControlArgs(text: tooLong, mode: "text")
+        ))
+        let badTextColor = await dispatcher.dispatch(ControlRequest(
+            cmd: .sessionBackground,
+            args: ControlArgs(text: "DRAFT", mode: "text", color: "red")
+        ))
+        let missingColor = await dispatcher.dispatch(ControlRequest(
+            cmd: .sessionBackground,
+            args: ControlArgs(mode: "color")
+        ))
+        let badColor = await dispatcher.dispatch(ControlRequest(
+            cmd: .sessionBackground,
+            args: ControlArgs(mode: "color", color: "blue")
+        ))
+        let badMode = await dispatcher.dispatch(ControlRequest(
+            cmd: .sessionBackground,
+            args: ControlArgs(mode: "pattern")
+        ))
+
+        #expect(badFit == ControlResponse(ok: false, error: "invalid fit: wide (contain|cover|stretch|none)"))
+        #expect(badPosition == ControlResponse(ok: false, error: "invalid position: middle"))
+        #expect(badOpacity == ControlResponse(ok: false, error: "invalid opacity: 1.5 (0.0-1.0)"))
+        #expect(missingPath == ControlResponse(ok: false, error: "session.background image requires a path"))
+        #expect(controlPath == ControlResponse(ok: false, error: "image path must not contain control characters"))
+        #expect(missingText == ControlResponse(ok: false, error: "session.background text requires text"))
+        #expect(longText == ControlResponse(
+            ok: false,
+            error: "session.background text too long (max \(WatermarkConfig.maxTextLength) characters)"
+        ))
+        #expect(badTextColor == ControlResponse(ok: false, error: "invalid color: red (#rrggbb)"))
+        #expect(missingColor == ControlResponse(ok: false, error: "session.background color requires a color"))
+        #expect(badColor == ControlResponse(ok: false, error: "invalid color: blue (#rrggbb)"))
+        #expect(badMode == ControlResponse(
+            ok: false,
+            error: "invalid background mode: pattern (image|text|color|clear)"
+        ))
+        #expect(actions.calls.isEmpty)
+    }
+
+    @Test func sessionTextRoutesOptionsAndKeepsExactActionResponse() async {
+        let actions = MockControlActions()
+        let dispatcher = ControlDispatcher(actions: actions)
+        actions.nextSessionTextResponse = ControlResponse(ok: true, result: ControlResult(text: "line\n"))
+
+        let response = await dispatcher.dispatch(ControlRequest(
+            cmd: .sessionText,
+            target: "session",
+            args: ControlArgs(window: "win", pane: "scratch", lines: 10)
+        ))
+
+        #expect(response == ControlResponse(ok: true, result: ControlResult(text: "line\n")))
+        #expect(actions.calls == [
+            .sessionText(target: "session", window: "win",
+                         ControlSessionTextOptions(pane: "scratch", all: false, lines: 10))
+        ])
+    }
+
+    @Test func sessionTextRejectsInvalidLineOptionsBeforeCallingActions() async {
+        let actions = MockControlActions()
+        let dispatcher = ControlDispatcher(actions: actions)
+
+        let both = await dispatcher.dispatch(ControlRequest(
+            cmd: .sessionText,
+            args: ControlArgs(all: true, lines: 5)
+        ))
+        let zero = await dispatcher.dispatch(ControlRequest(
+            cmd: .sessionText,
+            args: ControlArgs(lines: 0)
+        ))
+
+        #expect(both == ControlResponse(ok: false, error: "use either --all or --lines, not both"))
+        #expect(zero == ControlResponse(ok: false, error: "--lines must be greater than 0"))
+        #expect(actions.calls.isEmpty)
+    }
+
+    @Test func restoreClearRoutesThroughActions() async {
+        let actions = MockControlActions()
+        let dispatcher = ControlDispatcher(actions: actions)
+        actions.nextRestoreClearResponse = ControlResponse(ok: true)
+
+        let response = await dispatcher.dispatch(ControlRequest(cmd: .restoreClear))
+
+        #expect(response == ControlResponse(ok: true))
+        #expect(actions.calls == [.restoreClear])
+    }
+
     @Test func quickRoutesRawModeAndKeepsActionResponse() async {
         let actions = MockControlActions()
         let dispatcher = ControlDispatcher(actions: actions)
@@ -772,6 +1210,110 @@ struct ControlDispatcherTests {
 
         #expect(response == ControlResponse(ok: false, error: "invalid quick mode: maybe"))
         #expect(actions.calls == [.quick("maybe")])
+    }
+
+    @Test func quickTypeRoutesTextAndKeepsActionResponse() async {
+        let actions = MockControlActions()
+        let dispatcher = ControlDispatcher(actions: actions)
+        actions.nextQuickTypeResponse = ControlResponse(ok: false, error: "quick terminal not open")
+
+        let response = await dispatcher.dispatch(ControlRequest(
+            cmd: .quickType,
+            args: ControlArgs(text: "hello")
+        ))
+
+        #expect(response == ControlResponse(ok: false, error: "quick terminal not open"))
+        #expect(actions.calls == [.quickType(text: "hello")])
+    }
+
+    @Test func quickTypeRequiresTextBeforeCallingActions() async {
+        let actions = MockControlActions()
+        let dispatcher = ControlDispatcher(actions: actions)
+
+        let response = await dispatcher.dispatch(ControlRequest(cmd: .quickType))
+
+        #expect(response == ControlResponse(ok: false, error: "quick.type requires text"))
+        #expect(actions.calls.isEmpty)
+    }
+
+    @Test func quickTextRoutesOptionsAndKeepsExactActionResponse() async {
+        let actions = MockControlActions()
+        let dispatcher = ControlDispatcher(actions: actions)
+        actions.nextQuickTextResponse = ControlResponse(ok: true, result: ControlResult(text: "line\n"))
+
+        let response = await dispatcher.dispatch(ControlRequest(
+            cmd: .quickText,
+            args: ControlArgs(lines: 10)
+        ))
+
+        #expect(response == ControlResponse(ok: true, result: ControlResult(text: "line\n")))
+        #expect(actions.calls == [.quickText(all: false, lines: 10)])
+    }
+
+    @Test func quickTextRoutesAllFlagOnTheSuccessPath() async {
+        let actions = MockControlActions()
+        let dispatcher = ControlDispatcher(actions: actions)
+        actions.nextQuickTextResponse = ControlResponse(ok: true, result: ControlResult(text: "full\n"))
+
+        let response = await dispatcher.dispatch(ControlRequest(
+            cmd: .quickText,
+            args: ControlArgs(all: true)
+        ))
+
+        #expect(response == ControlResponse(ok: true, result: ControlResult(text: "full\n")))
+        #expect(actions.calls == [.quickText(all: true, lines: nil)])
+    }
+
+    @Test func quickTextRejectsInvalidLineOptionsBeforeCallingActions() async {
+        let actions = MockControlActions()
+        let dispatcher = ControlDispatcher(actions: actions)
+
+        let both = await dispatcher.dispatch(ControlRequest(
+            cmd: .quickText,
+            args: ControlArgs(all: true, lines: 5)
+        ))
+        let zero = await dispatcher.dispatch(ControlRequest(
+            cmd: .quickText,
+            args: ControlArgs(lines: 0)
+        ))
+
+        #expect(both == ControlResponse(ok: false, error: "use either --all or --lines, not both"))
+        #expect(zero == ControlResponse(ok: false, error: "--lines must be greater than 0"))
+        #expect(actions.calls.isEmpty)
+    }
+
+    @Test func surfaceZoomParsesModeAndRoutesTargetWindow() async {
+        let actions = MockControlActions()
+        let dispatcher = ControlDispatcher(actions: actions)
+        actions.nextSurfaceZoomResponse = ControlResponse(ok: true, result: ControlResult(id: "surface:s1:right"))
+
+        let response = await dispatcher.dispatch(ControlRequest(
+            cmd: .surfaceZoom,
+            target: "surface:s1:right",
+            args: ControlArgs(mode: "show", window: "win")
+        ))
+
+        #expect(response == ControlResponse(ok: true, result: ControlResult(id: "surface:s1:right")))
+        #expect(actions.calls == [.surfaceZoom(target: "surface:s1:right", window: "win", .on)])
+    }
+
+    @Test func surfaceZoomDefaultsToToggle() async {
+        let actions = MockControlActions()
+        let dispatcher = ControlDispatcher(actions: actions)
+
+        _ = await dispatcher.dispatch(ControlRequest(cmd: .surfaceZoom))
+
+        #expect(actions.calls == [.surfaceZoom(target: nil, window: nil, .toggle)])
+    }
+
+    @Test func surfaceZoomRejectsInvalidModeWithoutCallingActions() async {
+        let actions = MockControlActions()
+        let dispatcher = ControlDispatcher(actions: actions)
+
+        let response = await dispatcher.dispatch(ControlRequest(cmd: .surfaceZoom, args: ControlArgs(mode: "zoom")))
+
+        #expect(response == ControlResponse(ok: false, error: "invalid surface zoom mode: zoom"))
+        #expect(actions.calls.isEmpty)
     }
 
     @Test func sessionSearchRoutesRawInputsAndKeepsActionResponse() async {
@@ -854,16 +1396,20 @@ struct ControlDispatcherTests {
             args: ControlArgs(x: 100, y: 50, display: 1)
         ))
         let zoomed = await dispatcher.dispatch(ControlRequest(cmd: .windowZoom, target: "9f3c"))
+        actions.nextWindowFullscreenResponse = ControlResponse(ok: true, result: ControlResult(id: "win"))
+        let fullscreen = await dispatcher.dispatch(ControlRequest(cmd: .windowFullscreen, target: "9f3c"))
 
         #expect(renamed == ControlResponse(ok: true, result: ControlResult(id: "win")))
         #expect(resized == ControlResponse(ok: true, result: ControlResult(id: "win")))
         #expect(moved == ControlResponse(ok: true, result: ControlResult(id: "win")))
         #expect(zoomed == ControlResponse(ok: false, error: "window not open — window.select it first"))
+        #expect(fullscreen == ControlResponse(ok: true, result: ControlResult(id: "win")))
         #expect(actions.calls == [
             .windowRename(target: "9f3c", "Renamed"),
             .windowResize(target: "9f3c", width: 1200, height: 800),
             .windowMove(target: "9f3c", x: 100, y: 50, display: 1),
-            .windowZoom(target: "9f3c")
+            .windowZoom(target: "9f3c"),
+            .windowFullscreen(target: "9f3c")
         ])
     }
 
@@ -926,4 +1472,405 @@ struct ControlDispatcherTests {
         ])
     }
 
+}
+
+@MainActor
+private final class MockControlActions: ControlActions {
+    enum Call: Equatable {
+        case tree(window: String?)
+        case sessionNew(ControlSessionCreateOptions)
+        case sessionSelect(target: String?, window: String?)
+        case sessionGo(window: String?, SessionNavigation)
+        case sessionClose(target: String?, window: String?)
+        case sessionCloseBatch(targets: [String], window: String?)
+        case sessionRename(target: String?, window: String?, String)
+        case workspaceNew(window: String?, String?)
+        case workspaceSelect(target: String?, window: String?)
+        case workspaceRename(target: String?, window: String?, String)
+        case workspaceDelete(target: String?, window: String?)
+        case sessionMove(target: String?, window: String?, ControlSessionMove)
+        case sessionMoveBatch(targets: [String], window: String?, ControlSessionMove)
+        case workspaceMove(target: String?, window: String?, ReorderDirection)
+        case workspaceFocus(target: String?, window: String?, String?)
+        case sessionFlag(target: String?, window: String?, String?)
+        case markSessionSeen(target: String?, window: String?)
+        case sessionStatus(target: String?, window: String?, ControlSessionStatusUpdate)
+        case sessionSplit(target: String?, window: String?, String?)
+        case sessionScratch(target: String?, window: String?, String?, command: String?)
+        case sessionFocus(target: String?, window: String?, String?)
+        case sessionResize(target: String?, window: String?, ControlSplitResize)
+        case surfaceZoom(target: String?, window: String?, ControlToggleMode)
+        case font(target: String?, window: String?, pane: String?, String)
+        case keymapReload
+        case configReload
+        case notify(target: String?, window: String?, title: String?, body: String)
+        case themeSet(String?)
+        case themeList
+        case sidebarVisibility(ControlToggleMode)
+        case sidebarViewMode(ControlSidebarViewMode)
+        case expand(window: String?)
+        case collapse(window: String?)
+        case quick(String?)
+        case quickType(text: String)
+        case quickText(all: Bool, lines: Int?)
+        case sessionType(target: String?, window: String?, ControlSessionTypeOptions)
+        case sessionCopy(target: String?, window: String?)
+        case sessionPaste(target: String?, window: String?)
+        case sessionSelectAll(target: String?, window: String?)
+        case sessionSearch(target: String?, window: String?, text: String?, to: String?)
+        case overlayOpen(target: String?, window: String?, ControlSessionOverlayOpenOptions)
+        case overlayClose(target: String?, window: String?)
+        case overlayResize(target: String?, window: String?, sizePercent: Int?)
+        case overlayResult(target: String?, window: String?)
+        case sessionBackground(target: String?, window: String?, ControlSessionBackgroundOptions)
+        case sessionText(target: String?, window: String?, ControlSessionTextOptions)
+        case windowNew(String?)
+        case windowList
+        case windowSelect(target: String?)
+        case windowClose(target: String?)
+        case windowRename(target: String?, String)
+        case windowDelete(target: String?)
+        case windowResize(target: String?, width: Int, height: Int)
+        case windowMove(target: String?, x: Int, y: Int, display: Int?)
+        case windowZoom(target: String?)
+        case windowFullscreen(target: String?)
+        case restoreClear
+    }
+
+    var calls: [Call] = []
+    var nextTreeResponse = ControlResponse(ok: false, error: "tree not stubbed")
+    var nextSessionNewResponse = ControlResponse(ok: true)
+    var nextSidebarVisibilityResponse = ControlResponse(ok: true)
+    var nextSidebarViewModeResponse = ControlResponse(ok: true)
+    var nextExpandResponse = ControlResponse(ok: true)
+    var nextCollapseResponse = ControlResponse(ok: true)
+    var nextFontResponse = ControlResponse(ok: true)
+    var nextNotifyResponse = ControlResponse(ok: true)
+    var nextKeymapResponse = ControlResponse(ok: true)
+    var nextConfigResponse = ControlResponse(ok: true)
+    var nextThemeSetResponse = ControlResponse(ok: true)
+    var nextThemeListResponse = ControlResponse(ok: true)
+    var nextQuickResponse = ControlResponse(ok: true)
+    var nextQuickTypeResponse = ControlResponse(ok: true)
+    var nextQuickTextResponse = ControlResponse(ok: true)
+    var nextSessionTypeResponse = ControlResponse(ok: true)
+    var nextSessionCopyResponse = ControlResponse(ok: true)
+    var nextSessionPasteResponse = ControlResponse(ok: true)
+    var nextSessionSelectAllResponse = ControlResponse(ok: true)
+    var nextSessionSearchResponse = ControlResponse(ok: true)
+    var nextOverlayOpenResponse = ControlResponse(ok: true)
+    var nextOverlayCloseResponse = ControlResponse(ok: true)
+    var nextOverlayResizeResponse = ControlResponse(ok: true)
+    var nextOverlayResultResponse = ControlResponse(ok: true)
+    var nextSessionBackgroundResponse = ControlResponse(ok: true)
+    var nextSessionTextResponse = ControlResponse(ok: true)
+    var nextSurfaceZoomResponse = ControlResponse(ok: true)
+    var nextWindowNewResponse = ControlResponse(ok: true)
+    var nextWindowListResponse = ControlResponse(ok: true)
+    var nextWindowSelectResponse = ControlResponse(ok: true)
+    var nextWindowCloseResponse = ControlResponse(ok: true)
+    var nextWindowRenameResponse = ControlResponse(ok: true)
+    var nextWindowDeleteResponse = ControlResponse(ok: true)
+    var nextWindowResizeResponse = ControlResponse(ok: true)
+    var nextWindowMoveResponse = ControlResponse(ok: true)
+    var nextWindowZoomResponse = ControlResponse(ok: true)
+    var nextWindowFullscreenResponse = ControlResponse(ok: true)
+    var nextRestoreClearResponse = ControlResponse(ok: true)
+
+    func controlTree(window: String?) -> ControlResponse {
+        calls.append(.tree(window: window))
+        return nextTreeResponse
+    }
+
+    func createSession(_ options: ControlSessionCreateOptions) -> ControlResponse {
+        calls.append(.sessionNew(options))
+        return nextSessionNewResponse
+    }
+
+    func selectSession(_ target: String?, window: String?) -> ControlResponse {
+        calls.append(.sessionSelect(target: target, window: window))
+        return ControlResponse(ok: true)
+    }
+
+    func goSession(window: String?, direction: SessionNavigation) -> ControlResponse {
+        calls.append(.sessionGo(window: window, direction))
+        return ControlResponse(ok: true)
+    }
+
+    func closeSession(_ target: String?, window: String?) -> ControlResponse {
+        calls.append(.sessionClose(target: target, window: window))
+        return ControlResponse(ok: true)
+    }
+
+    func closeSessions(_ targets: [String], window: String?) -> ControlResponse {
+        calls.append(.sessionCloseBatch(targets: targets, window: window))
+        return ControlResponse(ok: true)
+    }
+
+    func renameSession(_ target: String?, window: String?, name: String) -> ControlResponse {
+        calls.append(.sessionRename(target: target, window: window, name))
+        return ControlResponse(ok: true)
+    }
+
+    func createWorkspace(window: String?, name: String?) -> ControlResponse {
+        calls.append(.workspaceNew(window: window, name))
+        return ControlResponse(ok: true)
+    }
+
+    func selectWorkspace(_ target: String?, window: String?) -> ControlResponse {
+        calls.append(.workspaceSelect(target: target, window: window))
+        return ControlResponse(ok: true)
+    }
+
+    func renameWorkspace(_ target: String?, window: String?, name: String) -> ControlResponse {
+        calls.append(.workspaceRename(target: target, window: window, name))
+        return ControlResponse(ok: true)
+    }
+
+    func deleteWorkspace(_ target: String?, window: String?) -> ControlResponse {
+        calls.append(.workspaceDelete(target: target, window: window))
+        return ControlResponse(ok: true)
+    }
+
+    func moveSession(_ target: String?, window: String?, move: ControlSessionMove) -> ControlResponse {
+        calls.append(.sessionMove(target: target, window: window, move))
+        return ControlResponse(ok: true)
+    }
+
+    func moveSessions(_ targets: [String], window: String?, move: ControlSessionMove) -> ControlResponse {
+        calls.append(.sessionMoveBatch(targets: targets, window: window, move))
+        return ControlResponse(ok: true)
+    }
+
+    func moveWorkspace(_ target: String?, window: String?, direction: ReorderDirection) -> ControlResponse {
+        calls.append(.workspaceMove(target: target, window: window, direction))
+        return ControlResponse(ok: true)
+    }
+
+    func focusWorkspace(_ target: String?, window: String?, mode: String?) -> ControlResponse {
+        calls.append(.workspaceFocus(target: target, window: window, mode))
+        return ControlResponse(ok: true)
+    }
+
+    func setSessionFlag(_ target: String?, window: String?, mode: String?) -> ControlResponse {
+        calls.append(.sessionFlag(target: target, window: window, mode))
+        return ControlResponse(ok: true)
+    }
+
+    func markSessionSeen(_ target: String?, window: String?) -> ControlResponse {
+        calls.append(.markSessionSeen(target: target, window: window))
+        return ControlResponse(ok: true)
+    }
+
+    func setSessionStatus(_ target: String?, window: String?,
+                          update: ControlSessionStatusUpdate) -> ControlResponse {
+        calls.append(.sessionStatus(target: target, window: window, update))
+        return ControlResponse(ok: true)
+    }
+
+    func splitSession(_ target: String?, window: String?, mode: String?) -> ControlResponse {
+        calls.append(.sessionSplit(target: target, window: window, mode))
+        return ControlResponse(ok: true)
+    }
+
+    func scratchSession(_ target: String?, window: String?, mode: String?,
+                        command: String?) -> ControlResponse {
+        calls.append(.sessionScratch(target: target, window: window, mode, command: command))
+        return ControlResponse(ok: true)
+    }
+
+    func focusSessionPane(_ target: String?, window: String?, pane: String?) -> ControlResponse {
+        calls.append(.sessionFocus(target: target, window: window, pane))
+        return ControlResponse(ok: true)
+    }
+
+    func resizeSplit(_ target: String?, window: String?, resize: ControlSplitResize) -> ControlResponse {
+        calls.append(.sessionResize(target: target, window: window, resize))
+        return ControlResponse(ok: true)
+    }
+
+    func setSurfaceZoom(_ target: String?, window: String?, mode: ControlToggleMode) -> ControlResponse {
+        calls.append(.surfaceZoom(target: target, window: window, mode))
+        return nextSurfaceZoomResponse
+    }
+
+    func font(_ target: String?, window: String?, pane: String?, action: String) -> ControlResponse {
+        calls.append(.font(target: target, window: window, pane: pane, action))
+        return nextFontResponse
+    }
+
+    func reloadKeymap() -> ControlResponse {
+        calls.append(.keymapReload)
+        return nextKeymapResponse
+    }
+
+    func reloadGhosttyConfig() -> ControlResponse {
+        calls.append(.configReload)
+        return nextConfigResponse
+    }
+
+    func sendNotification(_ target: String?, window: String?,
+                          title: String?, body: String) -> ControlResponse {
+        calls.append(.notify(target: target, window: window, title: title, body: body))
+        return nextNotifyResponse
+    }
+
+    func setTheme(args: ControlArgs?) -> ControlResponse {
+        calls.append(.themeSet(args?.name))
+        return nextThemeSetResponse
+    }
+
+    func listThemes() -> ControlResponse {
+        calls.append(.themeList)
+        return nextThemeListResponse
+    }
+
+    func setSidebarVisibility(_ mode: ControlToggleMode) -> ControlResponse {
+        calls.append(.sidebarVisibility(mode))
+        return nextSidebarVisibilityResponse
+    }
+
+    func setSidebarViewMode(_ mode: ControlSidebarViewMode) -> ControlResponse {
+        calls.append(.sidebarViewMode(mode))
+        return nextSidebarViewModeResponse
+    }
+
+    func expandSidebar(window: String?) -> ControlResponse {
+        calls.append(.expand(window: window))
+        return nextExpandResponse
+    }
+
+    func collapseSidebar(window: String?) -> ControlResponse {
+        calls.append(.collapse(window: window))
+        return nextCollapseResponse
+    }
+
+    func setQuickTerminal(mode: String?) -> ControlResponse {
+        calls.append(.quick(mode))
+        return nextQuickResponse
+    }
+
+    func typeQuick(text: String) async -> ControlResponse {
+        calls.append(.quickType(text: text))
+        return nextQuickTypeResponse
+    }
+
+    func readQuickText(all: Bool, lines: Int?) async -> ControlResponse {
+        calls.append(.quickText(all: all, lines: lines))
+        return nextQuickTextResponse
+    }
+
+    func typeSession(_ target: String?, window: String?,
+                     options: ControlSessionTypeOptions) async -> ControlResponse {
+        calls.append(.sessionType(target: target, window: window, options))
+        return nextSessionTypeResponse
+    }
+
+    func copySessionSelection(_ target: String?, window: String?) -> ControlResponse {
+        calls.append(.sessionCopy(target: target, window: window))
+        return nextSessionCopyResponse
+    }
+
+    func pasteSession(_ target: String?, window: String?) -> ControlResponse {
+        calls.append(.sessionPaste(target: target, window: window))
+        return nextSessionPasteResponse
+    }
+
+    func selectAllSession(_ target: String?, window: String?) -> ControlResponse {
+        calls.append(.sessionSelectAll(target: target, window: window))
+        return nextSessionSelectAllResponse
+    }
+
+    func searchSession(_ target: String?, window: String?,
+                       text: String?, to: String?) async -> ControlResponse {
+        calls.append(.sessionSearch(target: target, window: window, text: text, to: to))
+        return nextSessionSearchResponse
+    }
+
+    func openSessionOverlay(_ target: String?, window: String?,
+                            options: ControlSessionOverlayOpenOptions) -> ControlResponse {
+        calls.append(.overlayOpen(target: target, window: window, options))
+        return nextOverlayOpenResponse
+    }
+
+    func closeSessionOverlay(_ target: String?, window: String?) -> ControlResponse {
+        calls.append(.overlayClose(target: target, window: window))
+        return nextOverlayCloseResponse
+    }
+
+    func resizeSessionOverlay(_ target: String?, window: String?, sizePercent: Int?) -> ControlResponse {
+        calls.append(.overlayResize(target: target, window: window, sizePercent: sizePercent))
+        return nextOverlayResizeResponse
+    }
+
+    func sessionOverlayResult(_ target: String?, window: String?) -> ControlResponse {
+        calls.append(.overlayResult(target: target, window: window))
+        return nextOverlayResultResponse
+    }
+
+    func setSessionBackground(_ target: String?, window: String?,
+                              options: ControlSessionBackgroundOptions) -> ControlResponse {
+        calls.append(.sessionBackground(target: target, window: window, options))
+        return nextSessionBackgroundResponse
+    }
+
+    func readSessionText(_ target: String?, window: String?, options: ControlSessionTextOptions) -> ControlResponse {
+        calls.append(.sessionText(target: target, window: window, options))
+        return nextSessionTextResponse
+    }
+
+    func windowNew(name: String?) -> ControlResponse {
+        calls.append(.windowNew(name))
+        return nextWindowNewResponse
+    }
+
+    func windowList() -> ControlResponse {
+        calls.append(.windowList)
+        return nextWindowListResponse
+    }
+
+    func windowSelect(_ target: String?) async -> ControlResponse {
+        calls.append(.windowSelect(target: target))
+        return nextWindowSelectResponse
+    }
+
+    func windowClose(_ target: String?) async -> ControlResponse {
+        calls.append(.windowClose(target: target))
+        return nextWindowCloseResponse
+    }
+
+    func windowRename(_ target: String?, name: String) -> ControlResponse {
+        calls.append(.windowRename(target: target, name))
+        return nextWindowRenameResponse
+    }
+
+    func windowDelete(_ target: String?) -> ControlResponse {
+        calls.append(.windowDelete(target: target))
+        return nextWindowDeleteResponse
+    }
+
+    func windowResize(_ target: String?, width: Int, height: Int) -> ControlResponse {
+        calls.append(.windowResize(target: target, width: width, height: height))
+        return nextWindowResizeResponse
+    }
+
+    func windowMove(_ target: String?, x: Int, y: Int, display: Int?) -> ControlResponse {
+        calls.append(.windowMove(target: target, x: x, y: y, display: display))
+        return nextWindowMoveResponse
+    }
+
+    func windowZoom(_ target: String?) -> ControlResponse {
+        calls.append(.windowZoom(target: target))
+        return nextWindowZoomResponse
+    }
+
+    func windowFullscreen(_ target: String?) -> ControlResponse {
+        calls.append(.windowFullscreen(target: target))
+        return nextWindowFullscreenResponse
+    }
+
+    func clearRestoreCommands() -> ControlResponse {
+        calls.append(.restoreClear)
+        return nextRestoreClearResponse
+    }
 }

@@ -66,6 +66,11 @@ extension AppController {
             }
             setQuick(mode.desiredValue(current: quickVisible))
             return ok()
+        case .quickType:
+            guard let text = req.args?.text else { return err("quick.type requires text") }
+            return typeQuickSync(text: text)
+        case .quickText:
+            return readQuickTextSync(all: req.args?.all ?? false, lines: req.args?.lines)
         case .windowNew:
             let info = library.newWindow(name: req.args?.name?.linuxTrimmedOrNil)
             openWindow(info.id)
@@ -127,6 +132,22 @@ extension AppController {
 
     /// Open a brand-new window (the New Window palette action).
     func openNewWindow() { openWindow(gLibrary.newWindow().id) }
+
+    func reopenRecentClosed() {
+        if library.reopenLatestRecentClosed(into: store) { reconcile() }
+    }
+
+    func undoPendingClose() {
+        if store.undoPendingClose() { reconcile() }
+    }
+
+    func toggleWindowFullscreen() {
+        _ = windowFullscreen(windowID.uuidString)
+    }
+
+    func toggleTerminalZoom() {
+        _ = setSurfaceZoom("active", window: windowID.uuidString, mode: .toggle)
+    }
 
     func resolveWorkspace(_ target: String?) -> UUID? {
         guard let target else { return nil }

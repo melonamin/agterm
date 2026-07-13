@@ -105,6 +105,19 @@ final class GhosttyCallbacks: @unchecked Sendable {
             let value = raw < 0 ? nil : Int(raw)
             DispatchQueue.main.async { view.onSearchSelected?(value) }
             return true
+        case GHOSTTY_ACTION_CONFIG_CHANGE:
+            // ghostty replies to `ghostty_app_update_config` with the config it actually APPLIED — for
+            // the app target that is the dual `theme = light:,dark:` conditional resolved to the current
+            // appearance side, which the host-loaded config can never show (`ghostty_config_get` on it
+            // always reads the default = light side). Clone it synchronously (the core frees its derived
+            // copy right after this callback returns) and stash it for `GhosttyApp.reloadConfig` to read
+            // the chrome colors from. Surface-targeted changes (per-surface watermark overlays) must not
+            // repaint app-level chrome, so only the app target is stashed.
+            guard target.tag == GHOSTTY_TARGET_APP,
+                  let cfg = action.action.config_change.config,
+                  let clone = ghostty_config_clone(cfg) else { return true }
+            stashDerivedAppConfig(clone)
+            return true
         case GHOSTTY_ACTION_MOUSE_VISIBILITY:
             // libghostty asks the host to hide/show the pointer — the mechanism behind
             // mouse-hide-while-typing (the core never touches the cursor itself). setHiddenUntilMouseMoves
@@ -135,6 +148,33 @@ final class GhosttyCallbacks: @unchecked Sendable {
         }
     }
 
+    /// The app-target CONFIG_CHANGE clone awaiting pickup, as a bit pattern (raw pointers aren't
+    /// Sendable, so the lock holds `UInt`; 0 = none). Written synchronously by the CONFIG_CHANGE arm
+    /// during `ghostty_app_update_config`, taken right after by `GhosttyApp.reloadConfig`.
+    private let pendingAppConfig = OSAllocatedUnfairLock<UInt>(initialState: 0)
+
+    /// Stash the cloned app-level derived config, freeing any stale one left from a take-less update
+    /// (e.g. an update_config outside `reloadConfig`) so the box never leaks more than one clone.
+    private func stashDerivedAppConfig(_ config: ghostty_config_t) {
+        let raw = UInt(bitPattern: config)
+        let stale = pendingAppConfig.withLock { pending -> UInt in
+            let previous = pending
+            pending = raw
+            return previous
+        }
+        if let staleConfig = ghostty_config_t(bitPattern: stale) { ghostty_config_free(staleConfig) }
+    }
+
+    /// Hand the pending derived config (if any) to the caller, which owns freeing it.
+    func takeDerivedAppConfig() -> ghostty_config_t? {
+        let raw = pendingAppConfig.withLock { pending -> UInt in
+            let current = pending
+            pending = 0
+            return current
+        }
+        return ghostty_config_t(bitPattern: raw)
+    }
+
     func readClipboard(ud: UnsafeMutableRawPointer?, location _: ghostty_clipboard_e, state: UnsafeMutableRawPointer?) -> Bool {
         let text = Self.readPasteboardText() ?? ""
         text.withCString { ghostty_surface_complete_clipboard_request(surface(from: ud), $0, state, false) }
@@ -148,16 +188,38 @@ final class GhosttyCallbacks: @unchecked Sendable {
     /// dropped file inserts its path exactly like a pasted one.
     static func pasteboardText(_ pb: NSPasteboard) -> String? {
         if let urls = pb.readObjects(forClasses: [NSURL.self]) as? [URL] {
-            let parts = urls
-                .map { ShellEscape.path($0.isFileURL ? $0.path(percentEncoded: false) : $0.absoluteString) }
-                .filter { !$0.isEmpty }
+            let parts = urls.map(urlText).filter { !$0.isEmpty }
             if !parts.isEmpty { return parts.joined(separator: " ") }
         }
         return pb.string(forType: .string).flatMap { !$0.isEmpty ? $0 : nil }
     }
 
+    /// The text one pasteboard URL contributes to a paste: a shell-escaped path for a file URL (so a path
+    /// with spaces lands as one argument), else the escaped absolute string. The SINGLE definition shared by
+    /// `pasteboardText` and `hasPasteboardText`, so the reader and the menu gate cannot drift apart — an
+    /// invariant with no automated test (the file-URL case is not XCUITest-able; see the Control API rule).
+    private static func urlText(_ url: URL) -> String {
+        ShellEscape.path(url.isFileURL ? url.path(percentEncoded: false) : url.absoluteString)
+    }
+
     /// Pasted text from the general clipboard (the libghostty paste callback).
     static func readPasteboardText() -> String? { pasteboardText(.general) }
+
+    /// Whether `pasteboardText` would return something, without building the joined result. Menu validation
+    /// runs on every Edit-menu open and on every ⌘V key-equivalent lookup, so the Paste gate short-circuits on
+    /// the first usable URL instead of mapping, escaping and joining the whole clipboard.
+    ///
+    /// It must agree with `pasteboardText` in BOTH directions. A bare `canReadObject([NSURL])` probe does not:
+    /// that is a TYPE check, so a pasteboard merely DECLARING `public.file-url` with no usable value enables
+    /// Paste while the reader returns nil and the paste inserts nothing (verified against a named pasteboard).
+    /// Hence the same `urlText` + non-empty filter the reader applies.
+    static func hasPasteboardText(_ pb: NSPasteboard = .general) -> Bool {
+        if let urls = pb.readObjects(forClasses: [NSURL.self]) as? [URL],
+           urls.contains(where: { !urlText($0).isEmpty }) {
+            return true
+        }
+        return pb.string(forType: .string).map { !$0.isEmpty } ?? false
+    }
 
     func confirmReadClipboard(ud: UnsafeMutableRawPointer?, content: UnsafePointer<CChar>?, state: UnsafeMutableRawPointer?,
                               request: ghostty_clipboard_request_e) {

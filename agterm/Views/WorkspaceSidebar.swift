@@ -10,10 +10,10 @@ let sessionPasteboardType = NSPasteboard.PasteboardType("com.umputun.agterm.sess
 /// drags (within the outline) use this to identify the workspace being reordered.
 let workspacePasteboardType = NSPasteboard.PasteboardType("com.umputun.agterm.workspace")
 
-/// AppKit `NSOutlineView` sidebar (source-list style) hosted in SwiftUI via
-/// `NSViewRepresentable`. Replaces the SwiftUI `List` sidebar so cross-workspace
-/// drag-and-drop works natively: a session row can be dragged onto a different
-/// workspace and the model moves it (same `Session` instance preserved).
+/// AppKit `NSOutlineView` sidebar (`.plain` style + a custom row height and top/left content insets that
+/// match the terminal's ghostty padding) hosted in SwiftUI via `NSViewRepresentable`. Replaces the
+/// SwiftUI `List` sidebar so cross-workspace drag-and-drop works natively: a session row can be dragged
+/// onto a different workspace and the model moves it (same `Session` instance preserved).
 ///
 /// Two-level tree: workspaces (expandable parents, bold) → sessions (children).
 /// Only session rows are selectable detail targets. Inline rename via double-click
@@ -31,18 +31,29 @@ struct WorkspaceSidebar: NSViewRepresentable {
         outline.dataSource = context.coordinator
         outline.delegate = context.coordinator
         outline.headerView = nil
-        outline.rowSizeStyle = .default
+        // .plain style (not .sourceList) so there is no built-in ~10px top inset above the first row (the
+        // sidebar tree runs flush below the titlebar in every toolbar mode); a custom row height restores
+        // the roomy source-list-like row size that .plain's .default would otherwise shrink to ~17px.
+        outline.rowSizeStyle = .custom
+        outline.rowHeight = AppSettings.sidebarRowHeight(fontSize: GhosttyApp.shared.sidebarFontSize)
         outline.floatsGroupRows = false
         outline.indentationPerLevel = 14
         outline.autosaveExpandedItems = false
         outline.target = context.coordinator
         outline.action = #selector(Coordinator.handleSingleClick(_:))
         outline.doubleAction = #selector(Coordinator.handleDoubleClick(_:))
-        if #available(macOS 11.0, *) { outline.style = .sourceList }
+        if #available(macOS 11.0, *) { outline.style = .plain }
+        // .plain reverts the outline's backgroundColor to an OPAQUE controlBackgroundColor (unlike
+        // .sourceList's translucent source-list material), which would paint over the sidebar tint wash and
+        // the terminal-colored/translucent window backing. Clear it so the transparent column shows through,
+        // matching scroll.drawsBackground = false below.
+        outline.backgroundColor = .clear
         // disable AppKit's own selection drawing: it would paint a gray unemphasized capsule whenever
         // the sidebar isn't first responder (focus normally lives in the terminal). SidebarRowView
         // draws the themed selection pill itself in drawBackground for every state.
         outline.selectionHighlightStyle = .none
+        outline.allowsMultipleSelection = true
+        outline.allowsEmptySelection = true
 
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("main"))
         column.resizingMask = .autoresizingMask
@@ -58,6 +69,9 @@ struct WorkspaceSidebar: NSViewRepresentable {
 
         context.coordinator.outlineView = outline
         context.coordinator.renameController.outlineView = outline
+        // pin the outline appearance to the theme brightness up front so the disclosure triangle reads on
+        // launch (a light theme under macOS dark mode would otherwise draw an invisible light triangle).
+        context.coordinator.applyThemeAppearance()
         // seed the tracked expansion from the persisted per-workspace state BEFORE the reload, so
         // rebuildAndReload restores each workspace's saved open/collapsed state (a collapsed workspace
         // stays collapsed across relaunch) instead of force-expanding every row.
@@ -81,6 +95,8 @@ struct WorkspaceSidebar: NSViewRepresentable {
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
         context.coordinator.installEmptyState(in: scroll)
+        // inset the tree to match the terminal's ghostty padding so they line up in every toolbar mode.
+        context.coordinator.applySidebarContentInset(scroll)
         return scroll
     }
 
@@ -91,9 +107,10 @@ struct WorkspaceSidebar: NSViewRepresentable {
         // lets reconcile do a targeted per-row reload for a content change; a touch inside viewFor wouldn't
         // register it. agentIndicator feeds the status-icon reconcile (it renders on every session). the
         // badge-visibility toggle (GhosttyApp.notificationBadgeEnabled) is NOT observable, so it drives a
-        // re-reconcile via the .agtermAppearanceChanged notification (appearanceChanged), like compactToolbar.
+        // re-reconcile via the .agtermAppearanceChanged notification (appearanceChanged), like toolbarMode.
         _ = store.workspaces.map { ($0.id, $0.name, $0.unseenCount, $0.sessions.map { ($0.id, $0.displayName, $0.hasSplit, $0.unseenCount, $0.agentIndicator, $0.flagged) }) }
         _ = store.selectedSessionID
+        _ = store.sidebarSelectionIDs
         // sidebarMode flips the whole data source between the tree and the flat flagged list; reading it
         // here registers the observer so a mode change re-invokes updateNSView and reconcile rebuilds.
         _ = store.sidebarMode
@@ -165,6 +182,12 @@ struct WorkspaceSidebar: NSViewRepresentable {
         /// reconcile reloads only the rows whose content changed. An absent key ≠ any real content.
         private var lastRowContent: [UUID: RowContent] = [:]
 
+        /// The sidebar font size last applied to the outline (row height + row fonts). `.agtermAppearanceChanged`
+        /// fires for every settings change (theme, colors, toggles), but the font size isn't part of the
+        /// per-row content diff, so `appearanceChanged` compares against this and only rebuilds when it
+        /// actually changed — avoiding a full reload on every unrelated appearance change.
+        private var lastSidebarFontSize: CGFloat = CGFloat(AppSettings.defaultSidebarFontSize)
+
         /// Centered hint shown over the (empty) outline in flagged mode when nothing is flagged. Floats in
         /// the scroll view above the document, hidden otherwise.
         private weak var emptyStateLabel: NSTextField?
@@ -174,6 +197,9 @@ struct WorkspaceSidebar: NSViewRepresentable {
             self.actions = actions
             self.renameController = SidebarRenameController(store: store)
             super.init()
+            // seed from the live mirror (SettingsModel applied the persisted size at launch, before any
+            // window's sidebar is built) so the first appearanceChanged doesn't rebuild for no change.
+            lastSidebarFontSize = GhosttyApp.shared.sidebarFontSize
             renameController.onRenameEnded = { [weak self] in self?.focusActiveTerminal() }
             // the menu/palette can't reach the inline editor directly, so they post a
             // notification and this coordinator starts the edit on the selected row.
@@ -209,8 +235,31 @@ struct WorkspaceSidebar: NSViewRepresentable {
             outline.enumerateAvailableRowViews { rowView, _ in rowView.needsDisplay = true }
         }
 
+        /// Pin the outline's appearance to the terminal theme's brightness so AppKit-drawn chrome — the
+        /// disclosure triangle — tracks the theme, not the macOS system light/dark setting. Without this a
+        /// light theme under macOS dark mode draws a light-gray triangle that's invisible on the light
+        /// sidebar (the row text/icons stay visible only because they're set explicitly to the theme color).
+        func applyThemeAppearance() {
+            outlineView?.appearance = NSAppearance(named: GhosttyApp.shared.terminalThemeIsDark ? .darkAqua : .aqua)
+        }
+
+        /// Inset the sidebar tree to line up with the terminal's DEFAULT ghostty padding (agterm/Resources/ghostty-defaults.conf;
+        /// a user window-padding override in ghostty.conf is not tracked here): window-padding-x = 8 matches
+        /// the terminal's left margin, plus a small 2px top nudge so the first
+        /// row's text sits on the terminal's first line. Most of the ~window-padding-y = 6 gap above the text
+        /// comes from the row centering its content (`centerYAnchor`) in a ~28px row; the 2px fine-tunes it (a
+        /// full 6px top inset would double it). The `.plain` outline style adds no insets of its own, so we own
+        /// them (auto-adjust off). Mode-independent — same offset in every toolbar mode.
+        func applySidebarContentInset(_ scroll: NSScrollView?) {
+            guard let scroll else { return }
+            scroll.automaticallyAdjustsContentInsets = false
+            scroll.contentInsets = NSEdgeInsets(top: 2, left: 8, bottom: 0, right: 0)
+        }
+
         @objc private func appearanceChanged() {
+            applySidebarFontSizeIfChanged()
             refreshSelectionAppearance()
+            applyThemeAppearance()
             // a settings change may have flipped the badge-visibility toggle; reconcile so the gated
             // unseen count (0 when off, the real count when on) reloads the affected badge rows.
             reconcile()
@@ -218,6 +267,22 @@ struct WorkspaceSidebar: NSViewRepresentable {
             // color change — re-apply every visible glyph so a Settings color edit takes effect live.
             reapplyStatusGlyphs()
             updateEmptyState()
+            // re-apply the sidebar content inset in case a settings change requires recomputing it (the
+            // inset itself is mode-independent, so this is a cheap re-assert, not a per-mode recalculation).
+            applySidebarContentInset(outlineView?.enclosingScrollView)
+        }
+
+        /// Re-apply the sidebar row height + fonts when the sidebar font-size setting changed. The font size
+        /// isn't part of the per-row content diff `reconcile` uses, so a change needs an explicit row-height
+        /// update and a full `rebuildAndReload` (which re-runs the cell builder, re-setting each row's font).
+        /// Guarded on the tracked value so an unrelated appearance change (theme/color/toggle) doesn't force
+        /// a needless full reload.
+        private func applySidebarFontSizeIfChanged() {
+            let size = GhosttyApp.shared.sidebarFontSize
+            guard size != lastSidebarFontSize else { return }
+            lastSidebarFontSize = size
+            outlineView?.rowHeight = AppSettings.sidebarRowHeight(fontSize: size)
+            rebuildAndReload()
         }
 
         /// Re-apply the status glyph on every visible session row so a global agent-status color change
@@ -262,7 +327,7 @@ struct WorkspaceSidebar: NSViewRepresentable {
         /// mean no add/remove/move/reorder, so a row's content change (name/icon/badge) is handled by a
         /// targeted per-row reload instead of a full rebuild. Row TEXT is deliberately NOT here: a
         /// cwd-driven `displayName` change must not trigger a full `reloadData` + re-expand (which
-        /// re-lays-out every source-list row and jitters their labels horizontally).
+        /// re-lays-out every sidebar row and jitters their labels horizontally).
         private struct TreeShape: Equatable {
             let workspaceID: UUID
             let sessionIDs: [UUID]
@@ -572,10 +637,18 @@ struct WorkspaceSidebar: NSViewRepresentable {
                 outline.expandItem(owner)
                 suppressExpansionPersist = false
             }
+            var rows = IndexSet()
+            let selectedIDs = store.sidebarSelectionIDs.isEmpty ? [selectedID] : store.sidebarSelectionIDs
+            for id in selectedIDs {
+                guard let selectedNode = nodeCache[id], selectedNode.kind == .session else { continue }
+                let selectedRow = outline.row(forItem: selectedNode)
+                if selectedRow >= 0 { rows.insert(selectedRow) }
+            }
             let row = outline.row(forItem: node)
             guard row >= 0 else { return }
-            if outline.selectedRow != row {
-                outline.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            if rows.isEmpty { rows.insert(row) }
+            if outline.selectedRowIndexes != rows {
+                outline.selectRowIndexes(rows, byExtendingSelection: false)
             }
             if selectionChanged {
                 outline.scrollRowToVisible(row)
@@ -594,15 +667,27 @@ struct WorkspaceSidebar: NSViewRepresentable {
             // style AppKit won't redraw rows on its own).
             refreshSelectionAppearance()
             guard !applyingSelection, let outline = outlineView else { return }
-            let row = outline.selectedRow
-            guard row >= 0, let node = outline.item(atRow: row) as? SidebarNode, node.kind == .session else {
+            let selectedIDs = outline.selectedRowIndexes.compactMap { row -> UUID? in
+                guard let node = outline.item(atRow: row) as? SidebarNode, node.kind == .session else { return nil }
+                return node.id
+            }
+            let clickedRow = outline.clickedRow
+            let clickedID = (clickedRow >= 0 ? outline.item(atRow: clickedRow) as? SidebarNode : nil).flatMap { node -> UUID? in
+                node.kind == .session ? node.id : nil
+            }
+            let activeID = clickedID.flatMap { id in
+                clickedRow >= 0 && outline.selectedRowIndexes.contains(clickedRow) ? id : nil
+            } ?? store.selectedSessionID.flatMap { id in selectedIDs.contains(id) ? id : nil }
+                ?? selectedIDs.last
+            guard let activeID else {
+                store.setSidebarSelection(selectedIDs)
                 return
             }
             // a genuine user row click (the applyingSelection guard above skips programmatic sync, so
             // auto-follow's own jump never reaches here) counts as activity: it buys the full idle grace
             // before auto-follow can pull the selection back.
             store.noteUserActivity()
-            store.selectSession(node.id)
+            store.selectSession(activeID, sidebarSelection: selectedIDs)
             // land on the selected session's blocked pane when it carries a pane-tagged block (a no-op
             // otherwise), async so it runs after the selection + the sidebar's own focus-restore settle.
             DispatchQueue.main.async { [weak self] in self?.actions.revealActiveBlockedPane() }
@@ -614,12 +699,17 @@ struct WorkspaceSidebar: NSViewRepresentable {
         /// attached to the window yet (a just-selected session's view is still
         /// materializing), so retry on the run loop until it is, with a bounded cap.
         /// Skipped while a rename field is the first responder or an edit is in progress.
+        ///
+        /// Targets `topmostSurface` (overlay, else scratch, else the active pane) rather than the main
+        /// `surface`: while a cover is up it owns the keyboard, so focusing a pane instead would starve the
+        /// overlay/scratch program of input — and a full overlay or scratch also hides the pane, so the
+        /// keystrokes would land on a surface the user cannot see.
         func focusActiveTerminal(attempt: Int = 0) {
             // never steal focus from an in-progress rename.
             if renameController.isEditing { return }
             let window = outlineView?.window
             if let window, window.firstResponder is NSText { return }
-            if let window, let surface = store.activeSession?.surface as? GhosttySurfaceView, surface.window === window {
+            if let window, let surface = store.activeSession?.topmostSurface as? GhosttySurfaceView, surface.window === window {
                 window.makeFirstResponder(surface)
                 return
             }
@@ -695,8 +785,12 @@ final class SidebarOutlineView: NSOutlineView {
     override func menu(for event: NSEvent) -> NSMenu? {
         let point = convert(event.locationInWindow, from: nil)
         let row = self.row(at: point)
-        // select the right-clicked row so the menu's context matches
-        if row >= 0 { selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false) }
+        // Keep a multi-selection when right-clicking one of its selected rows; narrow to the clicked
+        // session when right-clicking outside the selection, matching standard Mac list behavior.
+        if row >= 0, let node = item(atRow: row) as? SidebarNode, node.kind == .session,
+           !selectedRowIndexes.contains(row) {
+            selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        }
         return (delegate as? WorkspaceSidebar.Coordinator)?.menu(forRow: row)
     }
 

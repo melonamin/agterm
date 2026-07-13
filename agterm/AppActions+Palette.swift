@@ -28,7 +28,9 @@ extension AppActions {
             sidebarShowsFlaggedOnly: activeStore?.sidebarMode == .flagged,
             activeSessionFlagged: activeStore?.activeSession?.flagged == true,
             hasFocusedWorkspace: activeStore?.focusedWorkspaceID != nil,
-            activeSessionHasSplit: activeStore?.activeSession?.hasSplit == true
+            activeSessionHasSplit: activeStore?.activeSession?.hasSplit == true,
+            hasPendingClose: activeStore?.pendingCloseSummary != nil,
+            hasRecentClosed: !library.recentClosedItems.isEmpty
         )
     }
 
@@ -40,6 +42,7 @@ extension AppActions {
     }
 
     private func runPaletteCommand(_ command: PaletteCommand) {
+        guard uiActionsEnabled || command == .toggleTerminalZoom else { return }
         switch command {
         case .newSession: newSession()
         case .newWorkspace: newWorkspace()
@@ -47,6 +50,8 @@ extension AppActions {
         case .renameSession: renameActiveSession()
         case .renameWorkspace: renameActiveWorkspace()
         case .closeSession: closeActiveSession()
+        case .reopenRecent: openLatestRecentClosed()
+        case .undoClose: undoClose()
         case .clearStatus: clearActiveSessionStatus()
         case .previousSession: selectPreviousSession()
         case .nextSession: selectNextSession()
@@ -57,11 +62,13 @@ extension AppActions {
         case .showAttention: openAttentionPalette()
         case .toggleSplit: toggleSplit()
         case .toggleScratch: toggleScratch()
+        case .toggleTerminalZoom: toggleTerminalZoom()
         case .toggleSidebar: toggleSidebar()
         case .toggleFlag: toggleFlagActiveSession()
         case .focusWorkspace: focusActiveWorkspace()
         case .find: toggleSearch()
         case .quickTerminal: toggleQuickTerminal()
+        case .toggleFullscreen: toggleFullscreen()
         case .increaseFontSize: increaseFontSize()
         case .decreaseFontSize: decreaseFontSize()
         case .resetFontSize: resetFontSize()
@@ -124,6 +131,7 @@ extension AppActions {
             PaletteItem(id: "custom-\(command.id)", title: command.name,
                         shortcut: command.shortcut.isEmpty ? nil : command.shortcut,
                         badge: badge) { [weak self] in
+                guard self?.uiActionsEnabled == true else { return }
                 self?.customCommandRunner?.run(command)
             }
         }
@@ -167,6 +175,7 @@ extension AppActions {
         let subtitle = "\(workspaceName) · \(session.subtitleDetail)"
         return PaletteItem(id: id.uuidString, title: session.displayName, subtitle: subtitle,
                            status: status, statusColor: statusColor) { [weak self] in
+            guard self?.uiActionsEnabled == true else { return }
             // picking a session from the ⌃P / attention palette is a user-initiated selection: note activity
             // so it buys the full idle grace before auto-follow can pull the selection back.
             store.noteUserActivity()
@@ -182,7 +191,25 @@ extension AppActions {
     /// icon — none of these route through the action palette's `runItem`, so a synchronous toggle is
     /// correct. The ⌃⇧P launcher uses `openAttentionPalette()` instead (it must reopen async).
     func toggleAttentionPalette() {
+        guard !terminalZoomActive else { return }
         palette?.toggle(.attention)
+    }
+
+    /// Menu/keymap palette launchers route through actions, not direct `palette.toggle`, so terminal zoom's
+    /// modal UI guard is applied consistently to the keyboard shortcut and menu paths.
+    func toggleSessionPalette() {
+        guard !terminalZoomActive else { return }
+        palette?.toggle(.sessions)
+    }
+
+    func toggleActionPalette() {
+        guard !terminalZoomActive else { return }
+        palette?.toggle(.actions)
+    }
+
+    func toggleCustomCommandPalette() {
+        guard !terminalZoomActive else { return }
+        palette?.toggle(.customCommands)
     }
 
     /// Open the `.attention` command palette from the action-palette "Show Attention" launcher. Opened on
@@ -191,7 +218,11 @@ extension AppActions {
     /// `toggle` would be undone by that close. The async `open` lets `.attention` reopen a tick later as a
     /// fresh view that survives the close.
     func openAttentionPalette() {
-        DispatchQueue.main.async { [weak self] in self?.palette?.open(.attention) }
+        guard !terminalZoomActive else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.terminalZoomActive else { return }
+            self.palette?.open(.attention)
+        }
     }
 
     // MARK: - Theme picker
@@ -202,13 +233,17 @@ extension AppActions {
     /// this returns, so reopening async lets `.themes` survive the close (the rename actions reopen the
     /// same way).
     func openThemePalette() {
-        DispatchQueue.main.async { [weak self] in self?.palette?.open(.themes) }
+        guard !terminalZoomActive else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.terminalZoomActive else { return }
+            self.palette?.open(.themes)
+        }
     }
 
     /// Theme rows for the `.themes` palette: a leading "Default" entry plus one per bundled theme,
     /// the current one badged. Navigating a row previews it live (`onSelect`); Enter/click commits it.
     func paletteThemes() -> [PaletteItem] {
-        let current = settingsModel?.settings.theme
+        let current = effectiveTheme
         func item(_ entry: ThemeCatalog.Entry) -> PaletteItem {
             let name = entry.name
             return PaletteItem(id: entry.id, title: entry.title, badge: name == current ? "current" : nil,
@@ -219,18 +254,30 @@ extension AppActions {
                         })
         }
         // the nil row is ghostty's built-in default (no theme file); the app's own default is the
-        // bundled "agterm" theme, which appears in the named list like any other.
-        return ThemeCatalog(names: SettingsCatalog.themeNames()).entries.map(item)
+        // bundled "agterm" theme, which appears in the named list like any other. While following the
+        // system appearance the nil row is OMITTED (mirroring the Settings picker): a dual conditional
+        // needs two NAMED themes, so previewing nil would blank a slot and wedge the following state.
+        let entries = ThemeCatalog(names: SettingsCatalog.themeNames()).entries
+        return (followsSystemAppearance ? entries.filter { !$0.isDefault } : entries).map(item)
     }
 
     /// The palette-item id of the currently-applied theme, so the picker opens with that row selected
     /// (and previews it — a no-op — rather than jumping to "Default").
-    var currentThemeID: String { ThemeCatalog.id(for: settingsModel?.settings.theme) }
+    var currentThemeID: String { ThemeCatalog.id(for: effectiveTheme) }
 
-    /// Capture the live theme so Esc/cancel can restore it. Idempotent while a preview is active.
+    /// The theme currently ON SCREEN: the dark slot while following in dark mode, else `theme`. The
+    /// palette badges/opens on this and previews/commits target the same slot, so the open-row preview
+    /// matches what is rendering.
+    private var effectiveTheme: String? {
+        settingsModel?.settings.activeTheme(isDark: GhosttyApp.currentIsDark())
+    }
+
+    /// Capture BOTH theme slots so Esc/cancel can restore the pre-preview pair. Snapshotting the whole
+    /// pair (not just the on-screen slot) keeps the revert correct even if macOS flips appearance
+    /// mid-preview — see `cancelThemePreview`. Idempotent while a preview is active.
     func beginThemePreview() {
         guard let settingsModel, !themePreviewActive else { return }
-        themePreviewOriginal = settingsModel.settings.theme
+        themePreviewOriginal = (settingsModel.settings.theme, settingsModel.settings.darkTheme)
         themePreviewActive = true
     }
 
@@ -240,34 +287,57 @@ extension AppActions {
         settingsModel?.previewTheme(name)
     }
 
-    /// Persist the previewed theme (Enter/click). Ends the preview so the subsequent palette close
-    /// can't revert it.
+    /// Persist the previewed theme (Enter/click). Ends the preview so the subsequent palette close can't
+    /// revert it. The preview already wrote the current-appearance slot (dark slot while following in
+    /// dark mode, else `theme`), so only that slot commits — the captured pair is passed back so the
+    /// OTHER slot is restored to its pre-preview value, otherwise a value browsed into it during a
+    /// mid-preview appearance flip would leak in on commit (the flip-safe twin of `cancelThemePreview`).
     func commitThemePreview() {
         guard themePreviewActive else { return }
-        settingsModel?.commitTheme()
+        if let original = themePreviewOriginal {
+            settingsModel?.commitTheme(nonActiveOriginal: original)
+        }
         themePreviewActive = false
         themePreviewOriginal = nil
     }
 
-    /// Re-apply the captured original theme and end the preview (Esc / scrim / mode switch / unmount
-    /// without a commit). No-op when no preview is active (e.g. right after a commit). Routes through
-    /// the IMMEDIATE (non-debounced) revert so Esc restores the original theme instantly — the
-    /// navigation preview is debounced, so calling `previewTheme` here would lag or leave the last
-    /// previewed theme stuck applied.
+    /// Restore BOTH captured slots and end the preview (Esc / scrim / mode switch / unmount without a
+    /// commit). No-op when no preview is active (e.g. right after a commit). Routes through the IMMEDIATE
+    /// (non-debounced) revert so Esc restores the original pair instantly — the navigation preview is
+    /// debounced, so calling `previewTheme` here would lag or leave the last previewed theme stuck
+    /// applied. Reverting the WHOLE pair (not the on-screen slot) is flip-safe: an appearance flip
+    /// mid-preview can't strand a previewed value in the wrong slot.
     func cancelThemePreview() {
         guard themePreviewActive else { return }
-        settingsModel?.previewThemeImmediate(themePreviewOriginal)
+        if let original = themePreviewOriginal {
+            settingsModel?.revertThemePreview(theme: original.theme, darkTheme: original.dark)
+        }
         themePreviewActive = false
         themePreviewOriginal = nil
     }
-
-    /// Set + persist a theme by name — the control channel's `theme.set` (no live preview; it's the
-    /// same persist+apply path as the Settings picker). A nil/empty name selects the default theme.
-    func setTheme(_ name: String?) { settingsModel?.setTheme(name) }
 
     /// The bundled theme names, for the control channel's `theme.list` and its name validation.
     func availableThemes() -> [String] { SettingsCatalog.themeNames() }
 
-    /// The currently-applied theme (nil = default), for the control channel's `theme.list`.
-    var currentTheme: String? { settingsModel?.settings.theme }
+    /// The plain single theme (nil = ghostty default), for `theme.set`/`theme.list`'s `result.theme`.
+    /// nil while following — the sync state rides `sync`/`light`/`dark` instead of the single theme.
+    var currentTheme: String? {
+        guard settingsModel?.settings.followSystemAppearance != true else { return nil }
+        return settingsModel?.settings.theme
+    }
+
+    /// macOS light/dark appearance-sync state, for `theme.set`/`theme.list`.
+    var followsSystemAppearance: Bool { settingsModel?.settings.followSystemAppearance == true }
+    var currentLightTheme: String? { followsSystemAppearance ? settingsModel?.settings.theme : nil }
+    var currentDarkTheme: String? { followsSystemAppearance ? settingsModel?.settings.darkTheme : nil }
+
+    /// Set the light/single slot, keeping a dark side if present — the control channel's
+    /// `theme.set <name>` (the persist+apply path, no live preview). nil clears everything.
+    func setLightTheme(_ name: String?) { settingsModel?.setLightTheme(name) }
+
+    /// Set (or with nil, clear) the dark slot — the control channel's `theme.set --dark`.
+    func setDarkTheme(_ name: String?) { settingsModel?.setDarkTheme(name) }
+
+    /// Set both sides at once — the control channel's `theme.set --light --dark`.
+    func setSystemThemes(light: String, dark: String) { settingsModel?.setSystemThemes(light: light, dark: dark) }
 }

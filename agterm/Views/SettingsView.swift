@@ -33,7 +33,7 @@ struct SettingsView: View {
                 .tabItem { Label("Key Mapping", systemImage: "keyboard") }
                 .tag(Tab.keyMapping)
         }
-        .frame(width: 480, height: 550)
+        .frame(width: 480, height: 590)
         // keep macOS from saving/restoring the Settings window across launches. Otherwise a
         // process-launch reopen (see agtermApp's FB11763863 workaround) resurrects a stale Settings
         // window on whatever tab it was last on, which steals key focus from the real launch window.
@@ -114,6 +114,8 @@ private struct GeneralSettingsView: View {
                     .accessibilityIdentifier("settings-restore-running-command")
                 Toggle("Confirm before closing a session", isOn: confirmCloseSession)
                     .accessibilityIdentifier("settings-confirm-close-session")
+                Toggle("Allow undo after closing sessions and workspaces", isOn: closeGraceUndoEnabled)
+                    .accessibilityIdentifier("settings-close-grace-undo")
             }
 
             Section("Ghostty Config") {
@@ -138,6 +140,12 @@ private struct GeneralSettingsView: View {
     private var confirmCloseSession: Binding<Bool> {
         Binding(get: { model.settings.confirmCloseSession ?? false },
                 set: { model.setConfirmCloseSession($0 ? true : nil) })
+    }
+
+    /// nil (the default) reads as ON; turning it off stores false and makes GUI closes immediate.
+    private var closeGraceUndoEnabled: Binding<Bool> {
+        Binding(get: { model.settings.closeGraceUndoEnabled ?? true },
+                set: { model.setCloseGraceUndoEnabled($0 ? nil : false) })
     }
 
     /// 1:1 with the toggle; nil (the default) reads as OFF, so on → true / off → nil keeps settings.json
@@ -190,9 +198,9 @@ private struct GeneralSettingsView: View {
     }
 }
 
-/// Appearance tab: a Terminal section (font family, default font size, theme), a Window section
-/// (compact toolbar, background opacity + blur, sidebar tint), and a Panes section (inactive-pane
-/// dimming). Each control persists and live-applies through `SettingsModel`.
+/// Appearance tab: a Terminal section (font family, default font size, theme) and a Window section
+/// (toolbar mode — Normal/Compact/Hidden, background opacity + blur, sidebar tint, sidebar font size,
+/// inactive-pane dimming). Each control persists and live-applies through `SettingsModel`.
 private struct AppearanceSettingsView: View {
     let model: SettingsModel
     private let themes = SettingsCatalog.themeNames()
@@ -212,16 +220,36 @@ private struct AppearanceSettingsView: View {
                 }
                 .accessibilityIdentifier("settings-font-size")
 
-                Picker("Theme", selection: theme) {
-                    Text("default ghostty").tag(String?.none)
+                // the theme for the CURRENT appearance. While following, this edits the on-screen side
+                // (dark in dark mode, light in light mode); the "default ghostty" row is offered only
+                // when NOT following, since a dual conditional needs two named themes.
+                Picker("Theme", selection: themeForCurrentAppearance) {
+                    if !following { Text("default ghostty").tag(String?.none) }
                     ForEach(themes, id: \.self) { Text($0).tag(String?.some($0)) }
                 }
                 .accessibilityIdentifier("settings-theme")
+
+                Toggle("Follow system appearance", isOn: followSystemAppearance)
+                    .accessibilityIdentifier("settings-follow-appearance")
+
+                // revealed only when following: the theme for the OTHER appearance. ghostty resolves the
+                // active side at runtime, so no config rewrite happens on a light/dark flip.
+                if following {
+                    Picker(GhosttyApp.currentIsDark() ? "Light theme" : "Dark theme", selection: alternateTheme) {
+                        ForEach(themes, id: \.self) { Text($0).tag(String?.some($0)) }
+                    }
+                    .accessibilityIdentifier("settings-theme-dark")
+                    SettingHint("Used when macOS is in \(GhosttyApp.currentIsDark() ? "light" : "dark") mode.")
+                }
             }
 
             Section("Window") {
-                Toggle("Compact toolbar", isOn: compactToolbar)
-                    .accessibilityIdentifier("settings-compact-toolbar")
+                Picker("Toolbar", selection: toolbarMode) {
+                    Text("Normal").tag(ToolbarMode.normal)
+                    Text("Compact").tag(ToolbarMode.compact)
+                    Text("Hidden").tag(ToolbarMode.hidden)
+                }
+                .accessibilityIdentifier("settings-toolbar-mode")
 
                 HStack {
                     Text("Background Opacity")
@@ -253,9 +281,12 @@ private struct AppearanceSettingsView: View {
                         .monospacedDigit()
                         .frame(width: 64, alignment: .trailing)
                 }
-            }
 
-            Section("Panes") {
+                Stepper(value: sidebarFontSize, in: AppSettings.sidebarFontSizeRange, step: 1) {
+                    Text("Sidebar font size: \(Int(model.settings.sidebarFontSize ?? AppSettings.defaultSidebarFontSize))")
+                }
+                .accessibilityIdentifier("settings-sidebar-font-size")
+
                 HStack {
                     Text("Inactive pane mute")
                     Slider(value: inactivePaneMuteStrength, in: 0 ... 10, step: 1)
@@ -278,8 +309,34 @@ private struct AppearanceSettingsView: View {
         Binding(get: { model.settings.fontSize ?? 13 }, set: { model.setFontSize($0) })
     }
 
-    private var theme: Binding<String?> {
-        Binding(get: { model.settings.theme }, set: { model.setTheme($0) })
+    /// The sidebar row-text size; the default maps back to nil so `settings.json` stays minimal.
+    private var sidebarFontSize: Binding<Double> {
+        Binding(get: { model.settings.sidebarFontSize ?? AppSettings.defaultSidebarFontSize },
+                set: { model.setSidebarFontSize($0 == AppSettings.defaultSidebarFontSize ? nil : $0) })
+    }
+
+    /// Whether the terminal follows the macOS appearance — reveals the alternate picker.
+    private var following: Bool { model.settings.followSystemAppearance == true }
+
+    /// Picker 1: the theme for the CURRENT appearance (dark slot while following in dark mode, else
+    /// `theme`). Drives `SettingsModel.setThemeForCurrentAppearance`.
+    private var themeForCurrentAppearance: Binding<String?> {
+        Binding(get: { model.settings.activeTheme(isDark: GhosttyApp.currentIsDark()) },
+                set: { model.setThemeForCurrentAppearance($0) })
+    }
+
+    /// Picker 2 (shown only while following): the OTHER appearance's theme — the light slot in dark mode,
+    /// the dark slot in light mode. Drives `SettingsModel.setAlternateTheme`.
+    private var alternateTheme: Binding<String?> {
+        Binding(get: { GhosttyApp.currentIsDark() ? model.settings.theme : model.settings.darkTheme },
+                set: { model.setAlternateTheme($0) })
+    }
+
+    /// The "Follow system appearance" toggle — seeds/collapses the two slots via
+    /// `SettingsModel.setFollowSystemAppearance`.
+    private var followSystemAppearance: Binding<Bool> {
+        Binding(get: { model.settings.followSystemAppearance == true },
+                set: { model.setFollowSystemAppearance($0) })
     }
 
     /// 1.0 maps to nil (the opaque default) so settings.json stays minimal and the "unset = default"
@@ -315,11 +372,11 @@ private struct AppearanceSettingsView: View {
         return offset < 0 ? "Lighter \(-offset)" : "Darker \(offset)"
     }
 
-    /// on (the default = compact) maps to nil so settings.json stays minimal, matching the other
-    /// appearance controls' "unset = default" convention; off writes an explicit false.
-    private var compactToolbar: Binding<Bool> {
-        Binding(get: { model.settings.compactToolbar ?? true },
-                set: { model.setCompactToolbar($0 ? nil : false) })
+    /// `.compact` (the default) maps back to nil so settings.json stays minimal, matching the other
+    /// appearance controls' "unset = default" convention; `.normal`/`.hidden` write an explicit mode.
+    private var toolbarMode: Binding<ToolbarMode> {
+        Binding(get: { model.settings.effectiveToolbarMode },
+                set: { model.setToolbarMode($0 == .compact ? nil : $0) })
     }
 
     /// nil (the default) reads as `defaultInactivePaneMuteStrength`; sliding back to it stores nil so

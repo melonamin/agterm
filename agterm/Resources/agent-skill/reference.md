@@ -9,12 +9,14 @@ Full detail for every `agtermctl` command. See `SKILL.md` for the model and addr
   bound; agtermctl resolves the same rendezvous: `<AGTERM_STATE_DIR>/agterm.sock`, else
   `<$HOME>/Library/Application Support/agterm/agterm.sock`. Passing `--socket "$AGTERM_SOCKET"` is the
   safe explicit form.
-- **`--json`**: prints the raw response object. Without it, mutations print `ok` and `tree`/`window
-  list` print a human listing. Use `--json` when you need to read ids or values back.
+- **`--json`**: prints the raw response object. Without it, ordinary mutations print `ok`, batch
+  close/move prints the affected session count, and `tree`/`window list` print a human listing. Use
+  `--json` when you need to read ids or values back.
 - **Response shape**: `{"ok": true, "result": {…}}` or `{"ok": false, "error": "<message>"}`.
   `result` carries one of: `id` (affected/new session/workspace/window), `text` (session copy/text),
-  `exitCode` (overlay result), `count` (keymap diagnostics), `tree` (the tree), `windows` (window
-  list). The process exit code is non-zero when `ok` is false.
+  `exitCode` (overlay result), `count` (diagnostics/search), `affected` (sessions actually changed by a
+  batch close/move), `tree` (the tree), `windows` (window list). The process exit code is non-zero when
+  `ok` is false.
 - **Options go after the subcommand**: `agtermctl session type "ls" --target active`, never before it.
 
 ## Addressing
@@ -39,21 +41,59 @@ Full detail for every `agtermctl` command. See `SKILL.md` for the model and addr
 `agtermctl tree [--json] [--window W]` — the workspace/session tree. Each session node:
 `id`, `name`, `cwd`, `title` (the raw OSC terminal title — e.g. a remote host over SSH — omitted
 when none reported; distinct from `name`, the derived sidebar label), `active` (selected),
-`split` (split shown), `overlay` (overlay shown), `scratch` (scratch shown), `flagged` (in the
+`split` (split shown), `splitRatio` (the left-pane fraction 0.05–0.95 of a session that HAS a split —
+shown or hidden; omitted when there's no split or the ratio was never explicitly set (divider at the
+default 0.5) — the read side
+of `session resize`, record it to restore the exact divider position),
+`splitFocused` (which pane holds focus in a session that HAS a split — `true` = the split/right pane,
+`false` = the main/left pane; omitted when there's no split; the read side of `session focus`, record it
+to restore focus via `session focus --pane left|right`), `overlay` (overlay shown),
+`overlaySizePercent` (an open overlay's size — the
+floating panel's percent of the pane, 1–100; omitted = a full-pane overlay or no overlay, so gate on
+`overlay` first; the read side of `session overlay resize`, e.g. record it before switching to `--full`
+to restore the exact size), `scratch` (scratch shown), `flagged` (in the
 flagged working-set), `status` (the agent-status — `active`|`completed`|`blocked` — omitted when
 idle), `statusPane` (which pane set that status — `left` (main) | `right` (split) | `scratch` — the
 `--pane` value from `session status`, omitted when unset or idle; gated on the same non-idle condition
-as `status`, so it is never reported without a `status`), `foreground`/`splitForeground` (the live argv of each pane's foreground
-process — what it is running — omitted when the pane sits at its shell prompt), and `background` (the
+as `status`, so it is never reported without a `status`), `statusBlink` (`true` when the status glyph is
+set to blink — the `--blink` value; omitted when idle or not blinking) and `statusColor` (the `#rrggbb`
+glyph-tint override — the `--color` value; omitted when idle or using the default color),
+`foreground`/`splitForeground` (the live argv of each pane's foreground
+process — what it is running — omitted when the pane sits at its shell prompt), `background` (the
 background spec set via `session background` — a `{kind, text?, imagePath?, colorHex?, opacity?, fit?,
-position?, repeats?}` object; `kind` is `image`/`text`/`color` — omitted when none is set). Workspace nodes carry
-`id`, `name`, `active`, `sessions`.
+position?, repeats?}` object; `kind` is `image`/`text`/`color` — omitted when none is set), `unseen`
+(the unseen-notification badge count — raised by `notify`/OSC 9/777, cleared by `session seen` — omitted
+when zero), `fontSize`/`splitFontSize`/`scratchFontSize` (the LIVE font size in points of each pane —
+the read side of `font --pane`; each omitted when that pane isn't realized. `fontSize` tracks the
+default/left target (the main pane, or the promoted split survivor once the primary exits — the same pane
+`font --pane left` writes); only the main pane's size survives a relaunch, so the split/scratch sizes and a
+promoted survivor are live-only — read them back here rather than from the snapshot), and `surfaces` (array
+of `{id, kind, active, visible}` where `kind` is `left`|`right`|`scratch`|`overlay`).
+The surface `id` is the address for `surface zoom`; hidden-but-alive split/scratch surfaces are included
+so a script can zoom them without changing split/scratch visibility first. Caveat: `active`/`visible`
+derive from the session's own flags, not from zoom — and `visible` reads false for a pane behind a
+FLOATING overlay even though it is visually on screen; address by `id`/`kind`, and read the zoom state
+from the top-level `zoomedSurface`. Workspace nodes carry
+`id`, `name`, `active`, `sessions`, and `focused` (whether the sidebar
+tree is collapsed to this workspace — the read side of `workspace focus`, distinct from `active` the
+SELECTED workspace; omitted unless this is the focused one, and absent entirely when nothing is focused).
 
-The tree object itself carries two top-level read-only fields: `idleMs` (milliseconds since the last
-user input in the window, omitted before any activity) and `autoFollowMs` (the window's Auto-follow
-timeout in milliseconds, omitted when the setting is Disabled). `idleMs` is live and grows while the
-window is idle, so it is on `tree` only, never `window.list`. Both are read-only projections of GUI
-state; there is no control command to set them.
+The tree object itself carries six top-level read-only fields: `idleMs` (milliseconds since the last
+user input in the window, omitted before any activity), `autoFollowMs` (the window's Auto-follow
+timeout in milliseconds, omitted when the setting is Disabled), `sidebarVisible` (whether the
+window's sidebar is currently shown — the read side of the write-only `sidebar` command, so a script
+can restore it, e.g. a tmux-style zoom that hides the sidebar and must re-show it only when it was
+visible before), `sidebarMode` (`tree` or `flagged` — the sidebar view mode, the read side of
+`sidebar mode`), `quickVisible` (whether the window's quick terminal is currently shown — the read
+side of the write-only `quick` command, so a script can make the toggle idempotent), and
+`zoomedSurface` (the control id of the surface terminal zoom currently fills the window with —
+`surface:<session-id>:<kind>` or `quick`; omitted when nothing is zoomed — the read side of the
+write-only `surface zoom` command, so a script can check "is it already zoomed" and
+record-then-restore). `idleMs` is live
+and grows while the window is idle, so it is on `tree` only, never `window.list`; `sidebarVisible` is on
+both; `sidebarMode`, `quickVisible`, and `zoomedSurface` are `tree`-only (a GUI toggle would leave a
+cached copy stale).
+All six are read-only projections of GUI state.
 
 ## workspace
 
@@ -99,7 +139,9 @@ state; there is no control command to set them.
   therefore mutually exclusive with each other and with `--workspace`/`--workspace-name` (the anchor
   already picks the workspace). `agtermctl session new --after active` is the headline case: create
   right after the current session in one round-trip.
-- `session close [--target] [--window W]`.
+- `session close [--target T ...] [--window W]` — close one session, or repeat `--target` to close
+  several sessions in the same window/store. Batch close honors the GUI grace-undo setting: one grouped
+  undo/reopen record when enabled, immediate close when disabled. Returns `result.affected`.
 - `session select [--target] [--window W]`.
 - `session rename <name> [--target] [--window W]`.
 - `session go --to next|prev|first|last|next-attention|prev-attention [--window W]` — move the
@@ -116,6 +158,10 @@ state; there is no control command to set them.
   placement falls out for free. Exactly one placement intent is required among {positional workspace,
   `--to`, `--after`/`--before`}; `--after`/`--before` are mutually exclusive with each other, with `--to`,
   and with a destination workspace (the anchor already names the workspace).
+  Repeat `--target` for a batch move with the workspace and after/before placement forms; the sessions
+  move as one ordered block after all sources are removed. Repeated `--target` is rejected with
+  `--to up|down|top|bottom` because relative reorder is per-session. Batch moves return `result.affected`,
+  counting only sessions whose position/workspace changed.
 - `session type <text> [--stdin] [--select] [--pane left|right|scratch] [--target] [--window W]` — inject text
   as real keystrokes (printable runs plus Return for each newline; no bracketed-paste markers).
   `--stdin` reads the text from stdin instead of the argument. `--select` selects (and realizes) a
@@ -128,6 +174,13 @@ state; there is no control command to set them.
 - `session copy [--target] [--window W]` — returns `result.text` with the session's current selection.
   Does NOT touch the system clipboard (pipe the returned text into another `session type`). No/empty
   selection → `no selection` error. Selection is readable on any realized session regardless of focus.
+- `session paste [--target] [--window W]` — paste the system clipboard (`NSPasteboard.general`) into the
+  session's main pane, the socket analogue of ⌘V / Edit ▸ Paste. Runs libghostty's `paste_from_clipboard`
+  (bracketed paste, no prompt), so the text lands at the prompt without auto-submitting. Read it back with
+  `session text`. A never-shown session → `session not realized`.
+- `session select-all [--target] [--window W]` — select the session's entire terminal buffer (main pane),
+  the socket analogue of ⌘A / Edit ▸ Select All (libghostty `select_all`). Read the resulting selection
+  back with `session copy`. A never-shown session → `session not realized`.
 - `session text [--all] [--lines N] [--pane left|right|scratch] [--target] [--window W]` — returns `result.text`
   with the session's terminal buffer as PLAIN TEXT (no ANSI/color). By default it reads the VISIBLE
   SCREEN of the on-screen pane. `--all` reads the whole buffer including scrollback; `--lines N` reads the
@@ -201,6 +254,12 @@ state; there is no control command to set them.
   `active`) and are idempotent; `clear` ignores the target and unflags every session in the window.
   Pair with `sidebar mode flagged` to see just the flagged sessions as a flat `session : workspace`
   list. Unknown mode errors. The tree's `flagged` flag tracks membership.
+- `session seen [--target] [--window W]` — clear the session's unseen-notification badge without changing
+  the selection, focus, or agent status. It is the focus-free counterpart to `notify`: `notify` (and a
+  terminal's own OSC 9/777) raise the red badge, and until now the only way to clear it was visiting the
+  session. Idempotent — a no-op when the badge is already zero. Read the current count from the tree node's
+  `unseen` field. This lets an orchestrator acknowledge a driven session's notifications over the socket
+  while keeping the badge a real attention signal on the sessions a human tends.
 - `session background image <path> [--opacity F] [--fit contain|cover|stretch|none] [--position P] [--repeat] [--target] [--window W]`
   — composite the image at `path` (PNG or JPEG only) behind the terminal as a watermark. libghostty
   auto-fits it to the surface and re-fits on every window resize. `--opacity` is 0.0–1.0 (default 1.0);
@@ -242,6 +301,12 @@ state; there is no control command to set them.
   own output file, not the control channel. Returns the overlay's session id. `--target` defaults to
   `active`, so an automated caller should pass `--target "$AGTERM_SESSION_ID"` — otherwise a (usually
   blocking, full-pane) overlay lands on whatever session is currently active, not the calling one.
+- `session overlay resize (--size-percent N | --full) [--target] [--window W]` — resize an ALREADY-OPEN
+  overlay in place. Exactly one of `--size-percent N` (1–100, makes it a floating framed panel) or
+  `--full` (switches it back to the full-pane overlay that hides the session) is required; passing both
+  or neither, or a percent outside 1–100, is an error. The overlay program keeps running across the
+  resize — it is a layout re-flow, never a re-spawn. Errors `no overlay` when none is open. Returns the
+  session id.
 - `session overlay close [--target] [--window W]` — close (destroy) the overlay.
 - `session overlay result [--target] [--window W]` — returns `result.exitCode` once the overlay has
   closed. Errors `still running` while up, `no result` if none ran.
@@ -259,11 +324,19 @@ shell (no controlling terminal — `/dev/tty` errors). See examples.md for usage
 ## window
 
 - `window new [name]` — create and open a window; returns its id.
-- `window list` — `result.windows`, each with `id`, `name`, `open`, `active`, and `autoFollowMs` (the
-  window's Auto-follow timeout in milliseconds, omitted when the setting is Disabled). The `autoFollowMs`
-  here is served from a cache and reflects the value as of the last refresh, so a just-changed setting may
-  lag until the next command. Unlike `tree`, `window.list` does NOT carry `idleMs` — the live idle metric
-  would freeze in that cache.
+- `window list` — `result.windows`, each with `id`, `name`, `open`, `active`, `autoFollowMs` (the
+  window's Auto-follow timeout in milliseconds, omitted when the setting is Disabled), and
+  `sidebarVisible` (whether that window's sidebar is shown, read from the open window's store — omitted
+  for a closed window with no live store), and `geometry` (the open window's live frame `{x, y, width,
+  height, display}` in the SAME units `window move`/`window resize` take — `x`/`y` top-left relative to
+  `display`, y down — omitted for a closed window; the read side of `window move`/`window resize`, so
+  record it, move/resize, then restore the exact frame), plus `fullscreen` and `zoomed` (whether the
+  window is in native full screen / zoomed-to-screen — the read side of `window fullscreen` / `window
+  zoom`, so a script can make those toggles idempotent; both omitted for a closed window). The
+  `geometry`/`fullscreen`/`zoomed` fields stay current — the cache is refreshed when a window
+  moves/resizes/zooms/enters or exits full screen, so a hand-drag or GUI toggle is reflected without needing
+  another command. (`autoFollowMs` still reflects the last cache refresh, since a settings change is rare;
+  and unlike `tree`, `window.list` does NOT carry `idleMs` — the live idle metric would freeze in the cache.)
 - `window select <id>` — raise it if open, else open it.
 - `window close <id>` — close the on-screen window (the bundle is kept; reopen with select).
 - `window rename <id> <name>`.
@@ -276,16 +349,60 @@ shell (no controlling terminal — `/dev/tty` errors). See examples.md for usage
   origin is clamped so an off-screen request keeps a grabbable strip of the window on the target display.
 - `window zoom <id>` — toggle the window between its normal frame and a maximized (fill-screen, NOT
   native fullscreen) frame, via the standard `NSWindow.zoom`. A second call restores the prior frame.
-  The window must be open. This is the control half of the double-click-on-header gesture (and the green
-  zoom button); `resize`/`move` are control-native, but `zoom` mirrors a GUI action.
+  The window must be open. This is the control half of the double-click-on-header gesture (a plain green-button
+  click does native full screen, not zoom — Option-click the green button to zoom); `resize`/`move` are
+  control-native, but `zoom` mirrors a GUI action.
+- `window fullscreen <id>` — toggle NATIVE macOS full screen (a separate Space, auto-hidden menu bar),
+  via `NSWindow.toggleFullScreen`. A second call exits. The window must be open. This is the control half
+  of the View ▸ Toggle Full Screen menu item (⌃⌘F, rebindable as `toggle_fullscreen`) and the green
+  traffic-light button — distinct from `zoom`, which only maximizes the frame in the same Space.
 
 `window resize`/`move` are control-native (no GUI equivalent — the title bar already drags-to-resize).
+
+## surface
+
+`agtermctl surface zoom [show|hide|toggle] [--target SURFACE_ID|active|quick] [--window W]` — zoom one
+terminal surface to fill the window, hiding the sidebar (a slim title-bar strip with the traffic
+lights and an exit button remains). `SURFACE_ID` comes from
+`agtermctl tree --json` at `.result.tree.workspaces[].sessions[].surfaces[].id`, for example
+`surface:<session-id>:right`. Omit `--target` (or pass `active`) to act on the active surface in the
+frontmost or `--window` window; `quick` addresses a quick-terminal zoom (the id the command itself
+returns when the quick terminal is the zoom target).
+
+`show` is idempotent; `hide` exits zoom and is idempotent too (when an explicit id is provided, it
+only clears that same zoom target, and succeeds as a no-op even if that surface has since vanished);
+`toggle` enters when unzoomed and exits when that surface is already zoomed. Read the current zoom
+back from the tree's top-level `zoomedSurface` (the zoomed surface's control id, omitted when nothing
+is zoomed). This is NOT
+`window zoom`: it does not change the macOS window frame and it must not mutate split ratios, focus,
+sidebar state, or split/scratch visibility. Entering zoom does close the window's transient chrome —
+an open command palette, an active in-terminal search, and (for a session-surface zoom) a visible
+quick terminal. While zoomed, the hidden deck keeps running: `session.split`/`session.scratch`/overlay
+opens on the zoomed session still spawn their shells behind the zoom layer. A notification-banner
+click exits zoom before revealing its session. Use `surface zoom` when the user/agent needs a pane
+fullscreen inside agterm; use `window zoom` only to maximize the whole window on screen.
 
 ## quick
 
 `agtermctl quick [show|hide|toggle]` — the frontmost window's quick terminal (a single scratch
 terminal at 90% of the window, not in the tree; its shell stays alive across hides). Errors with
-`no open window` when none is open.
+`no open window` when none is open. Read its visibility back from the tree's top-level `quickVisible`.
+While terminal zoom is active, `show` errors with `terminal zoom active`; `hide` always succeeds (a
+zoomed quick terminal exits its zoom first), so cleanup scripts can dismiss it unconditionally.
+
+`agtermctl quick type TEXT` (or `--stdin`) — inject `TEXT` as literal keystrokes into the frontmost
+window's quick terminal, the quick-terminal twin of `session type`. There is no `--target`/`--window`
+(always the frontmost window's quick terminal) and no `--pane` (a single surface). It polls briefly for
+the surface to come up, so `quick show; quick type` back-to-back is reliable (the overlay mounts a beat
+after `quick show` flips visibility). Errors with `quick terminal not open` when the overlay has never
+been shown, `quick terminal not realized` if a shown surface never comes up in time, `no open window`
+when none is open. Typing into a shown-then-hidden quick terminal still works (its shell stays alive).
+
+`agtermctl quick text [--all] [--lines N]` — print the frontmost window's quick-terminal buffer as
+plain text (the read-back for `quick type`; does not touch the system clipboard). `--all` reads the
+full screen + scrollback, `--lines N` keeps only the last N (mutually exclusive). Polls for the surface
+like `quick type`. Errors with `quick terminal not open` (never shown), `failed to read surface buffer`
+(shown surface never realized in time), `no open window`.
 
 ## sidebar
 
@@ -332,8 +449,14 @@ attention list, the title-bar bell, and attention navigation (`session go --to n
 
 ## font
 
-`agtermctl font inc|dec|reset [--target] [--window W]` — increase / decrease / reset the font size on
-the focused surface.
+`agtermctl font inc|dec|reset [--pane left|right|scratch] [--target] [--window W]` — increase / decrease /
+reset the font size of a session pane. `--pane` picks which surface's font to change, like `session type`
+and `session text`: omitted or `left` is the main pane, `right` the split pane (errors with `session has
+no split pane` when the session has no split), `scratch` the session's scratch terminal (settable even
+while hidden). No `other` value. Only the MAIN pane's size is persisted across relaunch; a split/scratch
+pane's font change is live-only, matching a GUI cmd +/- on those panes. Read the resulting size back from
+`tree` — `fontSize` (main), `splitFontSize`, `scratchFontSize`, each in points and omitted when that pane
+isn't realized.
 
 ## keymap
 
@@ -352,9 +475,11 @@ Key Mapping). Two verbs, line-based; blank lines and `#` comments ignored:
   sequence (chords joined by `>`, e.g. `ctrl+a>g`). No chord → palette-only.
 
 A **chord** is modifier words joined by `+` then a base key: modifiers `ctrl`, `cmd`, `opt`, `shift`;
-base key is a single character or `tab`/`space`/`return`/`delete`. Arrows, `+`, and `>` are not
-expressible as a parsed chord. Some chords are reserved (the Ctrl-Tab switcher, Ctrl-1/2 pane focus)
-and cannot be bound.
+base key is a single character or `tab`/`space`/`return`/`delete`. A key typed with Shift is written
+`shift+<base>` (`shift+/` = `?`, `shift+=` = `+`, `shift+5` = `%`) — the base key, not the shifted glyph.
+Arrows aren't expressible, and `+`/`>` can't be a bare key token (they are the separators), though those
+keys are bindable via `shift+=`/`shift+.`. Some chords are reserved (the Ctrl-Tab switcher, Ctrl-1/2 pane
+focus) and cannot be bound.
 
 Custom-command tokens (expanded into the `/bin/sh -c` line, raw — prefer the quoted `$AGT_*` env form
 for untrusted content). A remote host can set the session title (OSC) and working directory (OSC 7),
@@ -369,7 +494,7 @@ so `{AGT_SESSION_NAME}` and `{AGT_SESSION_PWD}` are as untrusted as `{AGT_SELECT
 - Plus the other `$AGT_*` context vars the runner exports.
 
 Built-in action names for `map` include: `new_window`, `new_workspace`, `new_session`,
-`open_directory`, `rename_session`, `close_session`, `clear_status`, `increase_font_size`,
+`open_directory`, `rename_session`, `close_session`, `reopen_recent`, `undo_close`, `clear_status`, `increase_font_size`,
 `decrease_font_size`, `reset_font_size`, `toggle_split`, `toggle_scratch`, `toggle_sidebar`, `quick_terminal`,
 `session_palette`, `command_palette`, `custom_command_palette`, and the navigation actions (`previous_session`, `next_session`,
 `first_session`, `last_session`, `previous_attention_session`, `next_attention_session`,
@@ -402,16 +527,28 @@ a terminal: open `ghostty.conf` in `$EDITOR`, then `agtermctl config reload`.
 The app's out-of-the-box default theme is the bundled **agterm** theme (a fresh install opens on it).
 A separate **default ghostty** entry means "no theme" — ghostty's own built-in colors (`theme` absent).
 
-`agtermctl theme list` — list the bundled theme names; returns `result.themes` (the names) and
-`result.theme` (the current one, absent = ghostty's built-in / "default ghostty"). Human output prints
-one name per line with a leading "default ghostty" row, the current one marked `* `.
+`agtermctl theme list` — list the bundled theme names; returns `result.themes` (the names),
+`result.theme` (the current plain theme, absent = ghostty's built-in / "default ghostty"), and
+`result.sync` with `result.light`/`result.dark` (the per-appearance themes). While syncing,
+`result.theme` is absent — the state rides the three sync fields. Human output prints one name per
+line with a leading "default ghostty" row, the active one(s) marked `* `; when syncing, a header notes
+the light/dark pair and both sides are marked.
 
 `agtermctl theme set [name]` — set and persist the terminal theme app-wide (the same change as Settings
-▸ Appearance ▸ Theme). Pass a bundled name (e.g. `agterm`); omit the name for ghostty's built-in
-default ("default ghostty"). An unknown name returns `unknown theme: <name>`. Returns `result.theme`
-= the applied name (absent = ghostty built-in); human output prints `ok`. App-global (no `--window`).
-The GUI's live-preview picker (View ▸ Select Theme…) is keyboard-only; over the socket `theme set` is
-the commit, with no preview.
+▸ Appearance), per slot:
+- `theme set <name>` sets the light/single theme; a dark theme, if set, is KEPT (syncing stays on).
+  Omit the name for ghostty's built-in default ("default ghostty") — with a dark theme set, that
+  clears BOTH (an unnamed side can't be part of a pair).
+- `theme set --dark <name>` sets the dark theme — the terminal then tracks the macOS Light/Dark
+  appearance, applying the matching side automatically as the OS switches (the light side seeds from
+  the current theme, else `Builtin Light`). `--light <name>` is an alias for the positional name.
+- `theme set --dark none` clears the dark theme — tracking stops, the light theme stays as the single
+  theme.
+The response always echoes the full state (`result.theme`/`sync`/`light`/`dark`). An unknown name
+returns `unknown theme: <name>`; a positional name combined with `--light` is a usage error. Human
+output prints `ok`. App-global (no `--window`). The GUI's live-preview picker (View ▸ Select Theme…)
+is keyboard-only — committing it replaces the CURRENT appearance's side when syncing (the pair is
+kept); over the socket `theme set` is the commit, with no preview.
 
 ## restore
 
@@ -435,7 +572,8 @@ user-edited file read at launch — there is no control command for it.
 `invalid fit` / `invalid position` / `invalid opacity` / `invalid color` / `text too long` /
 `unsupported image (PNG or JPEG only)` / `no such image file` / `image path must not contain control characters` / `invalid background mode` (session background),
 `invalid sidebar mode` (sidebar), `invalid focus mode` (workspace focus),
-`no open window` (quick/sidebar), `window not open`
+`no open window` (quick/sidebar), `quick terminal not open` / `quick terminal not realized` (quick type) /
+`failed to read surface buffer` (quick text / session text), `window not open`
 (resize/move/`--window`), `unknown theme: <name>` (theme set), `unknown sound: <name>` (session status --sound),
 `invalid color (expected #rrggbb)` (session status --color),
 `--pane must be left, right, or scratch` (the `--pane` value check — the `agtermctl` CLI rejects a bad pane

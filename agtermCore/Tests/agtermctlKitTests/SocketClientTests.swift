@@ -209,6 +209,12 @@ struct SocketClientTests {
         #expect(SocketClient.formatResponse(response, json: false) == "3 diagnostic(s)")
     }
 
+    @Test(arguments: [(1, "1 session"), (2, "2 sessions"), (0, "0 sessions")])
+    func formatResponseAffectedSessions(_ affected: Int, _ expected: String) {
+        let response = ControlResponse(ok: true, result: ControlResult(affected: affected))
+        #expect(SocketClient.formatResponse(response, json: false) == expected)
+    }
+
     @Test func formatResponseError() {
         #expect(SocketClient.formatResponse(ControlResponse(ok: false, error: "boom"), json: false) == "error: boom")
     }
@@ -308,6 +314,19 @@ struct SocketClientTests {
         // theme.set returns only `theme` (no `themes` array), so it prints `ok` like other mutations.
         let response = ControlResponse(ok: true, result: ControlResult(theme: "Dracula"))
         #expect(SocketClient.formatResponse(response, json: false) == "ok")
+    }
+
+    @Test func formatResponseThemesMarksBothSyncedSides() {
+        // when syncing, both the light and dark themes are marked and a header notes the pair.
+        let response = ControlResponse(ok: true, result: ControlResult(
+            theme: nil, themes: ["agterm", "Builtin Light", "Nord"], sync: true, light: "Builtin Light", dark: "agterm"))
+        let out = SocketClient.formatResponse(response, json: false)
+        let lines = out.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        #expect(lines.first == "syncing with macOS appearance — light: Builtin Light, dark: agterm")
+        #expect(lines.contains("* agterm"))
+        #expect(lines.contains("* Builtin Light"))
+        #expect(lines.contains("  Nord"))
+        #expect(lines.contains("  default ghostty")) // unmarked while syncing
     }
 }
 

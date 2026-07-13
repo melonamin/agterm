@@ -74,6 +74,178 @@ final class WindowLibraryTests {
         #expect(library.totalUnseenCount == 2)
     }
 
+    @Test func closingSessionRecordsAndReopensRecentItem() {
+        let library = WindowLibrary(directory: directory)
+        let store = try! #require(library.activeStore)
+        let originalWorkspace = store.addWorkspace(name: "project")
+        let first = try! #require(store.addSession(toWorkspace: originalWorkspace.id, cwd: "/first", name: "first"))
+        let session = try! #require(store.addSession(toWorkspace: originalWorkspace.id, cwd: "/project", name: "api"))
+        let last = try! #require(store.addSession(toWorkspace: originalWorkspace.id, cwd: "/last", name: "last"))
+        _ = store.addWorkspace(name: "other")
+
+        store.closeSession(session.id)
+
+        let recent = try! #require(library.recentClosedItems.first)
+        #expect(recent.kind == .session)
+        #expect(recent.title == "api")
+        #expect(recent.subtitle == originalWorkspace.name)
+        #expect(store.session(withID: session.id) == nil)
+
+        #expect(library.reopenRecentClosed(recent.id))
+        let restored = try! #require(store.session(withID: session.id))
+        #expect(restored.initialCwd == "/project")
+        #expect(restored.customName == "api")
+        let restoredWorkspace = try! #require(store.workspaces.first { $0.id == originalWorkspace.id })
+        #expect(restoredWorkspace.sessions.map(\.id) == [first.id, session.id, last.id])
+        #expect(store.selectedSessionID == session.id)
+        #expect(library.recentClosedItems.isEmpty)
+    }
+
+    @Test func reopeningRecentSessionRecreatesMissingOriginalWorkspace() {
+        let library = WindowLibrary(directory: directory)
+        let store = try! #require(library.activeStore)
+        let originalWorkspace = store.addWorkspace(name: "project")
+        let session = try! #require(store.addSession(toWorkspace: originalWorkspace.id, cwd: "/project", name: "api"))
+
+        store.closeSession(session.id)
+        let recent = try! #require(library.recentClosedItems.first)
+        store.removeWorkspace(originalWorkspace.id)
+
+        #expect(library.reopenRecentClosed(recent.id))
+        let restoredWorkspace = try! #require(store.workspaces.first { $0.id == originalWorkspace.id })
+        #expect(restoredWorkspace.name == "project")
+        #expect(restoredWorkspace.sessions.map(\.id) == [session.id])
+        #expect(store.selectedSessionID == session.id)
+    }
+
+    @Test func reopeningStaleRecentSessionSelectsExistingSessionInsteadOfDuplicatingID() {
+        let library = WindowLibrary(directory: directory)
+        let store = try! #require(library.activeStore)
+        let workspace = store.addWorkspace(name: "project")
+        let session = try! #require(store.addSession(toWorkspace: workspace.id, cwd: "/project", name: "api"))
+
+        store.closeSession(session.id)
+        let recent = try! #require(library.recentClosedItems.first)
+        #expect(store.restoreRecentClosed(recent))
+        #expect(store.restoreRecentClosed(recent))
+
+        let matching = store.workspaces.flatMap(\.sessions).filter { $0.id == session.id }
+        #expect(matching.count == 1)
+        #expect(store.selectedSessionID == session.id)
+    }
+
+    @Test func closingWorkspaceRecordsAndReopensRecentItem() {
+        let library = WindowLibrary(directory: directory)
+        let store = try! #require(library.activeStore)
+        let workspace = store.addWorkspace(name: "project")
+        let session = try! #require(store.addSession(toWorkspace: workspace.id, cwd: "/project", name: "api"))
+
+        store.removeWorkspace(workspace.id)
+
+        let recent = try! #require(library.recentClosedItems.first)
+        #expect(recent.kind == .workspace)
+        #expect(recent.title == "project")
+        #expect(recent.subtitle == "1 session")
+        #expect(store.workspaces.contains { $0.id == workspace.id } == false)
+
+        #expect(library.reopenRecentClosed(recent.id))
+        let restoredWorkspace = try! #require(store.workspaces.first { $0.id == workspace.id })
+        #expect(restoredWorkspace.name == "project")
+        #expect(restoredWorkspace.sessions.map(\.id) == [session.id])
+        #expect(store.selectedSessionID == session.id)
+        #expect(library.recentClosedItems.isEmpty)
+    }
+
+    @Test func reopeningStaleRecentWorkspaceSelectsExistingWorkspaceInsteadOfDuplicatingIDs() {
+        let library = WindowLibrary(directory: directory)
+        let store = try! #require(library.activeStore)
+        let workspace = store.addWorkspace(name: "project")
+        let session = try! #require(store.addSession(toWorkspace: workspace.id, cwd: "/project", name: "api"))
+
+        store.removeWorkspace(workspace.id)
+        let recent = try! #require(library.recentClosedItems.first)
+        #expect(store.restoreRecentClosed(recent))
+        #expect(store.restoreRecentClosed(recent))
+
+        let matchingWorkspaces = store.workspaces.filter { $0.id == workspace.id }
+        let matchingSessions = store.workspaces.flatMap(\.sessions).filter { $0.id == session.id }
+        #expect(matchingWorkspaces.count == 1)
+        #expect(matchingSessions.count == 1)
+        #expect(store.selectedSessionID == session.id)
+    }
+
+    @Test func reopeningRecentDuringGraceRestoresPendingSessionWithoutRebuildingSnapshot() {
+        let library = WindowLibrary(directory: directory)
+        let store = try! #require(library.activeStore)
+        let workspace = store.workspaces[0]
+        let session = try! #require(store.addSession(toWorkspace: workspace.id, cwd: "/grace", name: "grace"))
+        let surface = SpySurface()
+        session.surface = surface
+
+        #expect(store.softCloseSession(session.id, grace: 60))
+        let recent = try! #require(library.recentClosedItems.first)
+        #expect(library.reopenRecentClosed(recent.id))
+
+        let restored = try! #require(store.session(withID: session.id))
+        #expect(restored === session)
+        #expect(surface.teardownCount == 0)
+        #expect(library.recentClosedItems.isEmpty)
+    }
+
+    @Test func graceUndoRecordsRecentAndUndoRemovesIt() {
+        let library = WindowLibrary(directory: directory)
+        let store = try! #require(library.activeStore)
+        let workspace = store.workspaces[0]
+        let undone = try! #require(store.addSession(toWorkspace: workspace.id, cwd: "/undo", name: "undo"))
+        #expect(store.softCloseSession(undone.id, grace: 60))
+        #expect(library.recentClosedItems.map(\.title) == ["undo"])
+        #expect(store.undoPendingClose())
+        #expect(library.recentClosedItems.isEmpty)
+
+        let finalized = try! #require(store.addSession(toWorkspace: workspace.id, cwd: "/final", name: "final"))
+        #expect(store.softCloseSession(finalized.id, grace: 60))
+        store.finalizeAllPendingCloses()
+
+        let recent = try! #require(library.recentClosedItems.first)
+        #expect(recent.kind == .session)
+        #expect(recent.title == "final")
+    }
+
+    @Test func groupedGraceUndoRestoresAllSessionsAndRemovesRecentEntries() {
+        let library = WindowLibrary(directory: directory)
+        let store = try! #require(library.activeStore)
+        let workspace = store.workspaces[0]
+        let first = try! #require(store.addSession(toWorkspace: workspace.id, cwd: "/one", name: "one"))
+        let second = try! #require(store.addSession(toWorkspace: workspace.id, cwd: "/two", name: "two"))
+
+        #expect(store.softCloseSessions([first.id, second.id], grace: 60))
+        #expect(Set(library.recentClosedItems.map(\.title)) == ["one", "two"])
+
+        #expect(store.undoPendingClose())
+
+        #expect(store.session(withID: first.id) === first)
+        #expect(store.session(withID: second.id) === second)
+        #expect(library.recentClosedItems.isEmpty)
+    }
+
+    @Test func reopeningGroupedGraceSessionSelectsTheChosenRecentItem() {
+        let library = WindowLibrary(directory: directory)
+        let store = try! #require(library.activeStore)
+        let workspace = store.workspaces[0]
+        let first = try! #require(store.addSession(toWorkspace: workspace.id, cwd: "/one", name: "one"))
+        let second = try! #require(store.addSession(toWorkspace: workspace.id, cwd: "/two", name: "two"))
+        store.selectSession(first.id)
+        #expect(store.softCloseSessions([first.id, second.id], grace: 60))
+        let chosen = try! #require(library.recentClosedItems.first { $0.session?.snapshot.id == second.id })
+
+        #expect(library.reopenRecentClosed(chosen.id))
+
+        #expect(store.session(withID: first.id) === first)
+        #expect(store.session(withID: second.id) === second)
+        #expect(store.selectedSessionID == second.id)
+        #expect(library.recentClosedItems.isEmpty)
+    }
+
     @Test func defaultWindowNameCountsUp() {
         let library = WindowLibrary(directory: directory)
         #expect(library.defaultWindowName == "window 2")
@@ -122,14 +294,46 @@ final class WindowLibraryTests {
         let first = library.windows[0]
         let second = library.newWindow(name: "work")
 
-        // the second window has auto-follow enabled (30s); the first leaves it off (nil autoFollowMs).
+        // the second window has auto-follow enabled (30s) and its sidebar hidden; the first leaves
+        // auto-follow off (nil autoFollowMs) with the sidebar visible (the default).
         library.store(for: second.id)?.autoFollowTimeout = 30
+        library.store(for: second.id)?.setSidebarVisible(false)
 
         #expect(library.controlWindowNodes() == [
-            ControlWindowNode(id: first.id.uuidString, name: first.name, open: true, active: false),
+            ControlWindowNode(id: first.id.uuidString, name: first.name, open: true, active: false,
+                              sidebarVisible: true),
             ControlWindowNode(id: second.id.uuidString, name: "work", open: true, active: true,
-                              autoFollowMs: 30_000),
+                              autoFollowMs: 30_000, sidebarVisible: false),
         ])
+    }
+
+    @Test func controlWindowNodesIncludeGeometryFromClosure() {
+        let library = WindowLibrary(directory: directory)
+        let first = library.windows[0]
+        let second = library.newWindow(name: "work")
+        // the app-side closure supplies each window's live frame; here a fake maps only the second window.
+        let frame = ControlWindowFrame(x: 10, y: 20, width: 800, height: 600, display: 0)
+        let nodes = library.controlWindowNodes(geometry: { $0 == second.id ? frame : nil })
+        #expect(nodes[0].id == first.id.uuidString)
+        #expect(nodes[0].geometry == nil)   // no frame supplied for the first window
+        #expect(nodes[1].geometry == frame) // the closure's frame rides the second node
+        // the default (no closure) omits geometry entirely — the host-free / non-AppKit path.
+        #expect(library.controlWindowNodes().allSatisfy { $0.geometry == nil })
+    }
+
+    @Test func controlWindowNodesIncludeFullscreenZoomFromClosure() {
+        let library = WindowLibrary(directory: directory)
+        let first = library.windows[0]
+        let second = library.newWindow(name: "work")
+        // the app-side flags closure supplies each window's live fullscreen/zoom state.
+        let nodes = library.controlWindowNodes(flags: { $0 == second.id ? (fullscreen: true, zoomed: false) : nil })
+        #expect(nodes[0].id == first.id.uuidString)
+        #expect(nodes[0].fullscreen == nil) // no flags supplied for the first window
+        #expect(nodes[0].zoomed == nil)
+        #expect(nodes[1].fullscreen == true) // the closure's flags ride the second node
+        #expect(nodes[1].zoomed == false)
+        // the default (no closure) omits both — the host-free / non-AppKit path.
+        #expect(library.controlWindowNodes().allSatisfy { $0.fullscreen == nil && $0.zoomed == nil })
     }
 
     @Test func controlWindowNodesUseActiveWindowFallback() {
@@ -140,8 +344,10 @@ final class WindowLibraryTests {
         library.closeWindow(second.id)
         library.frontmostWindowID = second.id
 
+        // the open window reports its live sidebar visibility; the closed one has no store, so nil (omitted).
         #expect(library.controlWindowNodes() == [
-            ControlWindowNode(id: first.id.uuidString, name: first.name, open: true, active: true),
+            ControlWindowNode(id: first.id.uuidString, name: first.name, open: true, active: true,
+                              sidebarVisible: true),
             ControlWindowNode(id: second.id.uuidString, name: "work", open: false, active: false),
         ])
     }

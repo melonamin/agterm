@@ -43,6 +43,23 @@ paths:
   transient non-persisted state), drive it through an observable side effect:
   e.g. the split test types `tty > <file>` into the focused pane and compares the written tty to verify
   which shell received the keystrokes and that focus follows.
+- **Simulating a macOS light/dark flip: the `debug.appearance` control seam.**
+  macOS XCUITest has no API to change the system appearance, so `AppearanceFlipUITests` drives the
+  UI-test-only `debug.appearance` command (`light`|`dark`), which sets `NSApp.appearance` AND posts
+  `.agtermSystemAppearanceChanged` directly, driving the REAL flip path (scheme sync → debounced
+  zoom-preserving reload) end to end.
+  Production follows the appearance via an app-level KVO observer on `NSApplication.effectiveAppearance`
+  (`SystemAppearanceObserver`); the seam posts the notification itself so the test does not depend on
+  whether KVO fires on an explicit `NSApp.appearance` set.
+  The arm is refused outside an XCUITest launch and is keep-in-sync EXEMPT (see [[control-api]]).
+  Set an explicit STARTING side first so the test is independent of the machine's appearance,
+  assert the response's echoed side to prove the flip reached the app,
+  and poll the seam's BARE (read) form — it reports the last-applied side — to prove the flip actually
+  drove the reload (a suppressed flip leaves it on the old side).
+  Gotcha: on the current libghostty pin `update_config` does NOT reset the runtime font zoom,
+  so a wrongly-routed zoom-clearing flip only BLIPS the persisted `fontSize` nil for ~0.4 s before the
+  surface's CELL_SIZE report re-persists it — assert zoom preservation by SAMPLING the snapshot
+  continuously, never by one settled read (it would pass on the broken path).
 - **Driving an OSC terminal title in a test (and reading it back).**
   `Session.oscTitle`/`subtitleDetail` are ephemeral (never persisted) and the second line renders as
   a SwiftUI `Text`, so test through observable side effects, not the snapshot.
@@ -107,6 +124,26 @@ paths:
   focused for self-contained changes; full only for foundational/cross-concern work (app launch,
   signing/bundle, the eager deck, window/scene wiring, shared chrome).
   Don't burn minutes re-running the whole suite when the change is self-contained.
+- **After editing a TEST file, rebuild the test bundle with `build-for-testing` — `test-without-building`
+  runs the STALE bundle.**
+  `xcodebuild build` (or `make build`) builds only the APP target, NOT the `agtermUITests` bundle.
+  So `xcodebuild build` then `test-without-building` runs the OLD compiled test against the NEW app —
+  the source edit is silently ignored.
+  The symptom is confusing: the run reports `Executed 0 tests` with a crash/`Restarting after unexpected
+  exit` line and the named test under "Failing tests", which looks like an app launch crash — but the
+  xcresult `Failure Message` is an ordinary `XCTAssertTrue failed` from the OLD assertion (e.g. it still
+  looks for a control the new UI renamed).
+  Fix: run `xcodebuild build-for-testing …` (builds app + test bundle) before `test-without-building`, or
+  just `xcodebuild test …` (builds then tests).
+  Read the real reason from the xcresult (`xcrun xcresulttool get test-results tests --path <xcresult>`,
+  find the `Failure Message` node) rather than trusting the "0 tests / crash" summary.
+- **Driving a Picker in XCUITest depends on its style.**
+  A `.segmented` Picker exposes each option as a hittable descendant by label — match
+  `picker.descendants(matching: .any).matching(label == "X").firstMatch` and `.click()` it directly.
+  A default/menu Picker (macOS Form dropdown, e.g. Font/Theme/Toolbar) does NOT — `picker.click()` to
+  open the popup, then click `app.menuItems["X"]` (see `SettingsUITests.testNewSessionDirectoryPickerPersists`
+  / `testToolbarModePickerPersists`).
+  Changing a Picker's style therefore requires updating its test's interaction, not just the label.
 - **A screen-occluding overlay app (HazeOver) makes `app.typeText`/`typeKey` fail with `Failed to synthesize event: Timed out while synthesizing event`**
   — a ~90 s hang that ends the test with NO `XCTAssert` failure (the keyboard event never reaches the
   covered window; the run log shows `Synthesize event` → `Failed: Timed out` ~64 s apart).

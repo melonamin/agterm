@@ -59,6 +59,27 @@ paths:
   NOT add fresh validation/response logic inline in the `ControlServer` switch.
   (This is the control-channel case of the root `CLAUDE.md` "hoist host-free logic down into `agtermCore`"
   module-boundary rule.)
+- **The four-point audit is the WRITE path; a state-mutating command also owes a READ-BACK field.**
+  Whenever a command SETS or MUTATES per-session state, surface that state on `ControlSessionNode` (or
+  the tree top-level) so a script can query the value it just wrote: record-then-restore, read-modify-write,
+  and idempotency all depend on reading back what a `set`/`resize`/`toggle` changed.
+  The read field is populated in `AppStore.controlTree` and, like the other optionals, omitted from the
+  JSON when nil.
+  Existing pairs to mirror: `session.background`/`background`, `notify`+`session.seen`/`unseen`,
+  `session.status`/`status`+`statusPane` (+`statusBlink`/`statusColor` for `--blink`/`--color`),
+  `session.flag`/`flagged`, `session.focus`/`splitFocused`, `session.resize`/`splitRatio`,
+  `session.overlay.resize`/`overlaySizePercent`, `sidebar`/`sidebarVisible` (top-level),
+  `sidebar.mode`/`sidebarMode`, `workspace.focus`/`focused` (workspace node), `quick`/`quickVisible` (top-level),
+  `font.*`/`fontSize`+`splitFontSize`+`scratchFontSize` (the per-pane LIVE font size — the split/scratch
+  panes' fonts are otherwise unobservable, being live-only; supplied to `controlTree` by app-side closures
+  reading `GhosttySurfaceView.currentFontSize()`, since the host-free tree can't read a surface),
+  `window.move`+`window.resize`/`geometry`, `window.fullscreen`+`window.zoom`/`fullscreen`+`zoomed`
+  (the last three on `window.list`).
+  This is a SEPARATE obligation from the four-point audit (Command + arg + CLI + tests) and easy to forget:
+  `session.overlay.resize` shipped write-only and `overlaySizePercent` was added only later, when a
+  tmux-zoom script needed to restore an overlay's exact size.
+  When adding a state-mutating command, add its read-back field in the SAME change and cover it with a
+  `treeSessionNodeRoundTrips…`/`…OmitsWhenNil` round-trip test plus a `controlTree` populate test.
 - **Bundling + install.**
   The `agterm` target's `Bundle agtermctl CLI` postBuildScript (`project.yml`) runs `swift build -c release --product agtermctl`,
   copies it to `agterm.app/Contents/MacOS/agtermctl`, ad-hoc signs the helper,
@@ -102,7 +123,7 @@ paths:
   The skill is a REFERENCE/knowledge skill (both user-invocable via `/agterm` and model-triggered,
   `allowed-tools: Bash(agtermctl *)`; the agent-neutral `description` carries the trigger nouns since
   Codex may ignore the extra `when_to_use` field — unknown frontmatter is harmless),
-  authored at `agterm/Resources/agent-skill/` (`SKILL.md` overview + model + addressing + 50-command
+  authored at `agterm/Resources/agent-skill/` (`SKILL.md` overview + model + addressing + 58-command
   summary + the image-display helper + a troubleshooting/reporting pointer;
   `reference.md` full per-command detail + keymap format; `examples.md` agtermctl recipes;
   `troubleshooting.md` diagnosing the common problems (keymap editor, custom actions,
@@ -167,27 +188,66 @@ paths:
   via `RequestCommand.echoesResultID`) where the new id isn't known yet;
   every other mutation prints `ok` (the id you already named is noise).
   The id is always present under `--json`.
+  Batch session mutations return the number of sessions actually changed in `result.affected`; human
+  output is `1 session` / `N sessions`. `result.count` remains reserved for diagnostics and search.
 - **Addressing.**
   UUID is canonical, with sugar: `active` (the selected session / current workspace),
   exact `uuidString` (case-insensitive), or a git-style unique prefix.
   Zero prefix hits → `notFound` error, ≥2 → `ambiguous` error listing the candidates.
   `--target` defaults to `active`, so scripts rarely type an id and never for "the current one".
-- **Command catalog (50 commands):**
+  Batch-capable session commands (`session.close`, and `session.move` with workspace/after/before placement)
+  accept repeated `--target` flags in the CLI; on the wire these are `args.targets: [String]`. The batch is
+  scoped to one window/store: the first target resolves by the normal `--window`/frontmost/cross-window
+  rules, then remaining targets resolve inside that same store so one command never mutates multiple windows.
+  The top-level `target` also carries the first explicit batch target so a new CLI talking to a still-running
+  pre-batch server degrades to a named session instead of accidentally acting on `active`.
+- **Command catalog (58 commands):**
   - `tree`
   - `workspace.new`/`workspace.rename`/`workspace.delete`/`workspace.select`/`workspace.move`/`workspace.focus`
-  - `session.new`/`session.close`/`session.select`/`session.rename`/`session.move`/`session.type`/`session.split`/`session.scratch`/`session.focus`/`session.resize`/`session.go`/`session.copy`/`session.text`/`session.search`/`session.status`/`session.flag`/`session.background`/`session.overlay.open`/`session.overlay.close`/`session.overlay.result`
-  - `quick`
+  - `session.new`/`session.close`/`session.select`/`session.rename`/`session.move`/`session.type`/`session.split`/`session.scratch`/`session.focus`/`session.resize`/`session.go`/`session.copy`/`session.paste`/`session.selectall`/`session.text`/`session.search`/`session.status`/`session.flag`/`session.seen`/`session.background`/`session.overlay.open`/`session.overlay.close`/`session.overlay.resize`/`session.overlay.result`
+  - `surface.zoom`
+  - `quick`/`quick.type`/`quick.text`
   - `sidebar`/`sidebar.mode`/`sidebar.expand`/`sidebar.collapse`
   - `notify`
   - `font.inc`/`font.dec`/`font.reset`
-  - `window.new`/`window.list`/`window.select`/`window.close`/`window.rename`/`window.delete`/`window.resize`/`window.move`/`window.zoom` (see the Windows section)
+  - `window.new`/`window.list`/`window.select`/`window.close`/`window.rename`/`window.delete`/`window.resize`/`window.move`/`window.zoom`/`window.fullscreen` (see the Windows section)
   - `keymap.reload` (see the Keymap section)
   - `config.reload` (see the Settings section)
   - `theme.set`/`theme.list` (see the Theme picker section)
   - `restore.clear` (see the Settings section)
 
+  One extra `Command` case is deliberately NOT part of the catalog: `debug.appearance` (`light`|`dark`
+  via `args.name`) is a UI-TEST-ONLY seam that sets `NSApp.appearance` so an XCUITest can simulate a
+  macOS light/dark flip (macOS XCUITest has no API for it); the arm ALSO posts
+  `.agtermSystemAppearanceChanged` directly so the flip pipeline runs deterministically without depending
+  on whether KVO fires on an explicit `NSApp.appearance` set (production follows the appearance via an
+  app-level KVO observer on `NSApplication.effectiveAppearance` — see the theme-picker/libghostty rules).
+  The `ControlServer` arm refuses it outside an XCUITest launch (`ContentView.isUITestLaunch`), it gets
+  NO `agtermctl` subcommand, and it stays out of the agent skill — a documented keep-in-sync EXEMPTION
+  (test scaffolding, not a control surface).
+  Setting echoes the resulting effective side in `result.text`; the BARE form (no name) reads the side
+  the last config feed applied (`SettingsModel.lastAppliedIsDark`), which the test polls to prove the
+  flip actually drove the reload.
+  `AppearanceFlipUITests` is its only consumer; the public command count stays 58.
+
   `workspace.delete` honors keep-at-least-one and returns an error instead of the GUI confirm alert (nothing
   blocks on a modal).
+  `session.close` has a legacy single-target control path and a batch path. Single-target control close
+  continues to call `AppStore.closeSession` (hard close; backward-compatible with the original control
+  behavior). Repeated `--target` / `args.targets` is the GUI-equivalent batch close: it resolves all targets
+  in one store and honors `closeGraceUndoEnabled`. When enabled it calls `AppStore.softCloseSessions`,
+  producing one grace timer and one grouped undo/reopen record; when disabled it immediately hard-closes
+  each resolved session like the GUI. Both return the number actually closed in `result.affected`
+  (`ok` with the count — never an error for an empty result, matching the batch `session.move` shape).
+  Batch target resolution (`resolveBatchSessions`) is all-or-nothing and deduplicating: any unknown or
+  ambiguous target fails the WHOLE request before anything mutates
+  (`ControlAPIUITests.testSessionCloseBatchIsAllOrNothing`), and a batch that deduplicates to a single
+  session (e.g. `--target a --target a`) takes the single-target path — for close that is the legacy
+  HARD close (no grace window), consistent with the one-element `session.move` routing.
+  During the grace window, reopening any member restores the whole group but selects the specific Recent
+  item the user chose, matching workspace close grouping without losing selection intent. Keep-in-sync: `ControlArgs.targets`, the
+  `.sessionClose` dispatcher batch arm, `ControlActions.closeSessions`, `agtermctl session close --target`
+  repeat support, round-trip/dispatcher/CLI tests, and `ControlAPIUITests.testSessionCloseMultipleTargets`.
   `session.move` is MODE-BEARING with THREE exclusive placement intents:
   `args.to` (`up`|`down`|`top`|`bottom`) REORDERS the session within its own workspace (parses `ReorderDirection`,
   drives `AppStore.reorderSession` → the existing `moveSession(at:)` primitive, returns the session id);
@@ -205,11 +265,32 @@ paths:
   after/before + a workspace is an error (`"session.move takes --after/--before or a workspace, not both"`
   — the anchor already names the workspace), both `--to`+workspace and neither are errors,
   and an invalid direction is an error.
+  Repeated `--target` / `args.targets` makes `session.move` a batch move for workspace relocation and
+  after/before placement. It uses the same host-free block semantics as sidebar multi-drag:
+  all moved sessions are resolved in visual tree order, removed first, then inserted as one block via
+  `SidebarDrop.resolveSessions`/`AppStore.moveSessions`. Batch `--to up|down|top|bottom` is deliberately
+  rejected (`"session.move --target can be repeated only with a workspace or --after/--before"`) because
+  relative one-step reorder is inherently per-session and order-dependent.
+  The response reports only sessions actually moved in `result.affected`; members already in a workspace
+  destination remain in place and are not counted. A one-element `args.targets` array is equivalent to the
+  singular form (the dispatcher routes it through `moveSession`), including the `result.id` response and
+  moving an existing destination member to the end.
   Keep-in-sync: `ControlArgs.after`/`before` + `ControlSessionMove.place` in `ControlProtocol.swift`/`ControlModes.swift`,
   the `.sessionMove` place-mode routing + guards in `ControlDispatcher`, the app-side `moveSession` place
   case (`ControlServer+SessionActions.swift`, resolving both target + anchor locations and calling
   `resolveRelative`), the `session move --after/--before` CLI, and round-trip / dispatcher / e2e
   (`testSessionMovePlaceWithinWorkspace`, `testSessionMovePlaceCrossWorkspace`, the reject-* guards) tests.
+  Batch keep-in-sync additionally includes `ControlArgs.targets`, `ControlActions.moveSessions`,
+  `agtermctl session move --target` repeat support, and `ControlAPIUITests.testSessionMoveMultipleTargetsWithinWorkspaceBeforeAnchor`.
+  Keep-in-sync exemptions for sidebar batch actions: Flag/Unflag is loop-equivalent to repeated
+  `session.flag on|off --target <id>` (the plural store API only saves once).
+  The GUI's multi-select toggle is NOT a `toggle` loop: `AppActions.toggleFlags` computes ONE uniform
+  value for the whole set (`allSatisfy(\.flagged)` — flag all unless every target is already flagged)
+  and applies it, so on a mixed selection a per-row `session.flag toggle` loop diverges from the GUI.
+  A script wanting the GUI semantics reads `flagged` off `tree`, computes the uniform value, and loops
+  `on`/`off`.
+  Clear Status is loop-equivalent to repeated `session.status idle --target <id>` and intentionally adds
+  no batch command.
   `workspace.move` is the workspace REORDER (control-native, no separate verb):
   `args.to` (`up`|`down`|`top`|`bottom`) resolves the workspace target via the shared `resolveWorkspace`
   (honoring the global `--window` selector like other workspace commands),
@@ -236,9 +317,9 @@ paths:
   never a teardown), recreated fresh after its shell's own `exit`.
   NOT persisted (absent from `SessionSnapshot`, like the overlay) — `Session.scratchActive`/`scratchSurface`,
   `AppStore.toggleScratch`/`closeScratch` (the latter only on `exit` + session/workspace/window teardown).
-  Full-overlay rendering only (never floating) so it's a structural clone of the proven `if fullOverlay`
-  ZStack sibling at `.zIndex(1)`, BELOW the ephemeral overlay (`.zIndex(2)` — a normal overlay launched
-  over the scratch sits on top); the panes' opacity/hit-testing gate is `hideForOverlay = fullOverlay || scratchActive`
+  Full-overlay rendering only (never floating): a conditional `sessionDetail` ZStack sibling at `.zIndex(1)`
+  (the structural pattern the now-removed `if fullOverlay` sibling used), BELOW the ephemeral `overlayPanel`
+  (`.zIndex(3)` — a normal overlay launched over the scratch sits on top); the panes' opacity/hit-testing gate is `hideForOverlay = fullOverlay || scratchActive`
   (still false for a FLOATING overlay, preserving the NSSplitView-overrun invariant).
   GUI half: ⌘J (`BuiltinAction.toggleScratch`), title-bar `scratch-toggle` button,
   View ▸ Show/Hide Scratch, the ⌃⇧P palette "Toggle Scratch" — all through `AppActions.toggleScratch()`.
@@ -255,6 +336,8 @@ paths:
   shown side-by-side or hidden — when hidden, focusing a pane swaps which one shows maximized),
   drives `AppActions.setSplitFocus(_:of:)`, and is the control half of the ⌘⌥←/→ keyboard nav + the "Focus
   Left/Right Pane" menu/palette items.
+  Its READ side is `ControlSessionNode.splitFocused` (`true`=split/right, `false`=main/left, nil=no split;
+  see the `tree` read-side fields below), so a script can record the focused pane and restore it.
   `session.resize` moves the split DIVIDER — it is control-NATIVE (the divider is otherwise mouse-drag
   only; NO GUI/menu/keymap action, so a key is bound by mapping a `command "agtermctl session resize …"`
   custom action).
@@ -371,6 +454,89 @@ paths:
   — it does NOT touch the system clipboard (automation pipes the returned text into another `session.type`);
   selection is surface state independent of focus, so any realized session can be read,
   and no/empty selection is a `no selection` error.
+  `session.paste` pastes the SYSTEM clipboard (`NSPasteboard.general`) into the target session's MAIN
+  surface — the socket analogue of ⌘V / Edit ▸ Paste.
+  `session.selectall` selects the target's ENTIRE terminal buffer (main surface) — the analogue of ⌘A /
+  Edit ▸ Select All.
+  Both run a libghostty binding action on the resolved surface — `paste_from_clipboard` /
+  `select_all` — through the shared `ControlServer+SurfaceIO.surfaceBindingAction` helper
+  (resolve session → guard the surface is realized, `session not realized` otherwise → `performBindingAction`
+  → return the id), so paste takes the normal libghostty paste path (bracketed paste, PASTE requests are
+  ungated so no OSC-52 prompt) and select_all covers the whole grid.
+  They are the control half of the GUI Edit menu: agterm keeps the STANDARD SwiftUI Edit menu and
+  implements `copy:`/`paste:`/`selectAll:` + `validateMenuItem:` on `GhosttySurfaceView` (`+Input.swift`,
+  conforming to `NSMenuItemValidation`) so AppKit's automatic menu enabling routes Copy/Paste/Select All
+  to the terminal when it holds first responder — Copy enabled on `ghostty_surface_has_selection`, Paste
+  on `GhosttyCallbacks.hasPasteboardText()`, Select All on a realized surface (all three also require
+  the surface, since `performBindingAction` no-ops without one) — while a focused text field (rename/palette/Settings)
+  keeps its own editing (its field editor wins the responder chain), and Cut stays disabled for the terminal
+  (deliberately NOT implemented) yet works in text fields.
+  **Cut cannot be dropped on its own** — SwiftUI puts Cut/Copy/Paste/Delete/Select All in ONE `.pasteboard`
+  `CommandGroup`, and replacing that group is what would take ⌘C/⌘V/⌘A away from the rename/palette/Settings
+  fields.
+  **Undo/Redo ARE dropped** (`CommandGroup(replacing: .undoRedo) {}` in `agtermApp+Menus.swift`): they are
+  their own group, agterm registers no `NSUndoManager`, and their advertised ⌘Z is already owned by File ▸
+  Reopen Closed Item (`BuiltinAction.undoClose`), whose menu precedes Edit and wins the key-equivalent search —
+  so Edit ▸ Undo could only ever be CLICKED, never invoked by its own shortcut.
+  AppKit did enable it for the sidebar's inline rename field (whose field editor supplies an undo manager),
+  but a permanently-greyed item that duplicates another menu's shortcut for one narrow case is worse than no
+  item; `EditMenuUITests.testEditMenuHasNoUndoOrRedoItems` asserts NON-EXISTENCE (an `isEnabled == false`
+  check would pass vacuously on a missing element).
+  **Paste MUST validate with the same branches the paste path reads**, and must agree with it in BOTH
+  directions.
+  Two ways to get this wrong, both found in review:
+  a `canReadObject([NSString])` probe greys the item out for a Finder file copy (a file URL with NO string
+  representation, which `pasteboardText` turns into a shell-escaped path) while ⌘V pastes the path anyway;
+  and a `canReadObject([NSURL])` probe is a TYPE check, so a pasteboard merely DECLARING `public.file-url`
+  with no usable value enables Paste while the reader returns nil and the paste inserts nothing.
+  Either direction reintroduces the menu-vs-keyboard divergence these responders exist to remove.
+  So `hasPasteboardText` runs the reader's own URL branch, short-circuiting on the first usable URL
+  (`contains(where:)`) instead of mapping/escaping/joining the whole clipboard — validation fires on every
+  menu open and every ⌘V key-equivalent lookup, so it must not materialize a Finder copy of thousands of files.
+  Both share the single `urlText` helper so they cannot drift.
+  **Keep the predicate and the reader in step; this invariant has NO automated test** (verified instead with a
+  named-pasteboard probe across the empty / plain-text / empty-string / whitespace / file-url / web-url /
+  multi-url / declared-without-data shapes).
+  The file-URL case is NOT XCUITest-able: the runner is sandboxed (`com.apple.security.app-sandbox`), so a file
+  URL it writes to `NSPasteboard.general` never becomes visible to the app — instrumenting `hasPasteboardText`
+  showed the app reading `types=[]` for a full 8 s poll while the runner's own `canReadObject([NSURL])` returned
+  true from its in-process cache.
+  Such a test exercises the sandbox, not `validateMenuItem`, so it was removed rather than left red (verified
+  instead with a cross-process probe outside the runner).
+  Do not re-add it without an app-target `bundle.unit-test` (the project has only `bundle.ui-testing` today),
+  which could exercise `hasPasteboardText` against a NAMED pasteboard in-process.
+  A `NSPasteboard.general` read in the app also LAGS a writer process's `changeCount`, so any UI test that seeds
+  the clipboard must POLL rather than read once.
+  ⌘C/⌘V/⌘A therefore route through the Edit menu (fixed standard shortcuts, NOT rebindable — the maintainer's
+  call); the `ghostty-defaults.conf` `super+key_c`/`super+key_v`/`super+key_a` binds stay as a non-Latin-layout
+  backup.
+  The mechanism is that AppKit matches a menu key equivalent against the character the layout PRODUCES: on a
+  Cyrillic layout ⌘C yields `с`, no equivalent matches, the event reaches `keyDown` and the keycode-triggered
+  `super+key_c` fires. (A DISABLED item likewise doesn't consume its equivalent, so ⌘C with no selection also
+  falls through.) There is no AppKit "Latin fallback" doing this — the binds are load-bearing, not dead code.
+  **`super+key_a=select_all` is one of them**: without it ⌘A silently does nothing on a Cyrillic/Greek layout,
+  since libghostty's built-in `super+a` is character-matched too (found in review — the fallback set must cover
+  every shortcut the Edit menu owns, not just copy/paste).
+  **The session-scoped surface arms resolve `Session.addressableSurface`, not `Session.surface`.**
+  `session.copy`/`session.paste`/`session.selectall` act on "the session" rather than a named `--pane`
+  (and so does `font.*`'s omitted/`left` default — its `right`/`scratch` panes resolve `splitSurface`/`scratchSurface`
+  instead, via its own pane switch rather than `surfaceBindingAction`),
+  and `addressableSurface` is `surface ?? splitSurface`: identical to `surface` for every ordinary or split
+  session, but falling back to a PROMOTED SPLIT SURVIVOR whose primary shell exited (`closePrimaryPane` nils
+  `surface` and keeps the live shell in `splitSurface`, asserted by `AppStorePaneTests`).
+  Resolving through `surface` alone returned `session not realized` for a session the user was actively typing
+  in. It is deliberately NOT focus-aware (unlike `activeSurface`) — a shown split keeps addressing the main
+  pane, which is what keeps `session.selectall` and its `session.copy` read-back on the SAME surface.
+  READ-BACK: neither adds a `ControlSessionNode` field — `session.selectall`'s read-back is `session.copy`
+  (reads the resulting selection) and `session.paste`'s is `session.text` (reads the inserted buffer), the
+  sibling-command pattern (like `quick.type`↔`quick.text`).
+  Four-point keep-in-sync audit: (1) `case sessionPaste = "session.paste"` + `case sessionSelectAll = "session.selectall"`
+  in `ControlProtocol.swift` (no new args/fields), (2) the `.sessionPaste`/`.sessionSelectAll` arms in
+  `ControlDispatcher.dispatchSessionSurfaceCommand` → `ControlActions.pasteSession`/`selectAllSession`
+  (app-side `ControlServer+SurfaceIO`), (3) the `session paste` / `session select-all` subcommands in
+  `agtermctlKit`, (4) round-trip in `ControlProtocolTests` + dispatcher routing in `ControlDispatcherTests`
+  + CLI mapping in `CommandsTests` + the e2e `testSessionSelectAllThenCopyReturnsBuffer` /
+  `testSessionPasteInsertsClipboardText` in `ControlAPIUITests`.
   `session.text` reads the target surface's screen buffer as PLAIN TEXT (no ANSI) via `GhosttySurfaceView.readScreenText(all:lines:)`
   (a `ghostty_selection_s` spanning VIEWPORT top-left→bottom-right by default,
   SCREEN when `args.all || args.lines != nil`, `rectangle = false`;
@@ -437,39 +603,46 @@ paths:
   `onExit → closeOverlay`.
   Both variants render IN the per-session eager deck, so the overlay program runs regardless of which
   session is active — the only visible difference is geometry.
-  The FULL overlay is an in-deck ZStack sibling in `WindowContentView.sessionDetail` (`.zIndex(2)` above the
-  pane(s), gated on `fullOverlay`): it draws translucent + blurred (NO opaque backing) with the pane(s)
-  behind hidden at `.opacity(0)` + `.allowsHitTesting(false)` (kept MOUNTED,
-  shells alive like the deck's inactive sessions), so its transparency reveals the window backing (desktop,
-  tint + blur), not the session.
-  The FLOATING overlay (`overlaySizePercent` set) is `floatingOverlayPanel(session:isActive:)`, an
-  ALWAYS-PRESENT ZStack sibling in `sessionDetail` (`.zIndex(3)`).
-  It is a CONSTANT-SHAPE sibling: the panel content (opaque `terminalColor` backing + hairline frame +
-  shadow, quick-terminal styling; the overlay surface; the click-catcher) is gated INSIDE it, so the ZStack
-  child COUNT stays constant across open/close — the same SHAPE as no-overlay, which is what keeps the
-  AppKit `NSSplitView` from re-hosting and overrunning UP into the transparent titlebar.
+  The overlay is ONE always-present, CONSTANT-SHAPE ZStack sibling in `WindowContentView.sessionDetail`,
+  `overlayPanel(session:isActive:)` at `.zIndex(3)`, hosting BOTH variants from a single surface host (the
+  pre-unify split — a `fullOverlay`-gated `.zIndex(2)` sibling PLUS a separate `floatingOverlayPanel` at
+  `.zIndex(3)` — is GONE; `session.overlay.resize` below is why one host matters).
+  The panel content (the overlay surface; the opaque `terminalColor` backing + hairline frame + shadow; the
+  click-catcher) is gated INSIDE the always-present `GeometryReader` on `session.overlayActive`, so the
+  ZStack child COUNT stays constant across open/close/resize — the same SHAPE as no-overlay, which is what
+  keeps the AppKit `NSSplitView` from re-hosting and overrunning UP into the transparent titlebar.
   (The panel used to mount OUTSIDE `sessionDetail` as a `detailPane` `.overlay` for exactly this reason;
-  the always-present constant-shape sibling holds the same invariant IN-deck, which is what lets the
-  floating surface mount per-session and run in the background like the full overlay.)
-  Hit-testing stays gated on `.allowsHitTesting(!fullOverlay)` and must NOT flip when a floating overlay
-  opens: changing the panes' OWN `allowsHitTesting` on overlay-open (e.g. to `!session.overlayActive`)
-  ALSO triggers the NSSplitView titlebar-overrun — the SAME class of perturbation as changing the ZStack's
-  shape, even though it looks like a pure interaction change (Codex insisted hit-testing was layout-inert;
-  a review-loop regression proved otherwise).
-  So the floating panes stay hit-testable, and the overlay's focus is protected by a transparent
-  `Color.clear.contentShape(Rectangle())` catcher INSIDE `floatingOverlayPanel` that absorbs clicks AROUND
-  the panel so they can't reach the panes and steal the overlay program's first responder.
+  the always-present constant-shape sibling holds the same invariant IN-deck.)
+  FULL (`overlaySizePercent` nil): fraction 1.0, drawn translucent + blurred with NO opaque backing and NO
+  chrome (`Color.clear` backing, 0 corner radius, 0 shadow), and the pane(s) behind hidden at `.opacity(0)`
+  + `.allowsHitTesting(false)` via `hideForOverlay` (= `fullOverlay || scratchActive`; kept MOUNTED, shells
+  alive like the deck's inactive sessions), so its transparency reveals the window backing (desktop, tint +
+  blur), not the session.
+  FLOATING (`overlaySizePercent` set): fraction = `percent/100`, drawn as an opaque `terminalColor`-backed,
+  hairline-framed, shadowed panel centered in the detail area with the pane(s) VISIBLE around it.
+  The modifier CHAIN is IDENTICAL across both variants — only the parameter VALUES flip (backing color,
+  corner radius, shadow radius, frame fraction) — so `session.overlay.resize` switching full<->% is a
+  value-update, never a child add/remove or a re-parent of the overlay surface NSView (a re-parent would
+  blank its Metal drawable).
+  Hit-testing on the PANES stays gated on `.allowsHitTesting(!hideForOverlay)` and must NOT flip when a
+  FLOATING overlay opens: changing the panes' OWN `allowsHitTesting` on overlay-open (e.g. to
+  `!session.overlayActive`) ALSO triggers the NSSplitView titlebar-overrun — the SAME class of perturbation
+  as changing the ZStack's shape, even though it looks like a pure interaction change (Codex insisted
+  hit-testing was layout-inert; a review-loop regression proved otherwise).
+  So a floating overlay leaves the panes hit-testable, and the overlay's focus is protected by a transparent
+  `Color.clear.contentShape(Rectangle())` catcher INSIDE `overlayPanel` that absorbs clicks AROUND the panel
+  so they can't reach the panes and steal the overlay program's first responder.
   (Generalize the rule: ANYTHING in `sessionDetail`'s HSplitView-hosting subtree that CHANGES SHAPE when
   `overlayActive` flips — adding/removing a sibling, a flattened ZStack, or a toggled pane modifier —
-  overruns the split into the titlebar; keep the subtree's shape identical across open/close and gate the
-  panel content INSIDE the constant-shape sibling.)
+  overruns the split into the titlebar; keep the subtree's shape identical across open/close/resize and gate
+  the panel content INSIDE the constant-shape sibling.)
   This constant-shape invariant is load-bearing: a CONDITIONAL sibling inside `sessionDetail`'s ZStack (the
   HSplitView-hosting subtree) made SwiftUI re-host it and the `NSSplitView` overrun UP into the
   transparent titlebar, painting the split over the header (Codex-confirmed;
   the quick terminal renders at this level for the same reason and never hit it).
-  `floatingOverlayPanel`'s `GeometryReader` reports the detail area EXACTLY — no manual sidebar/titlebar
-  insets (computing those at the window level mis-centered the panel one line low) — so it sizes the opaque
-  framed panel to `sizePercent`% and centers it in the detail area, the pane(s) visible around it.
+  `overlayPanel`'s `GeometryReader` reports the detail area EXACTLY — no manual sidebar/titlebar insets
+  (computing those at the window level mis-centered the panel one line low) — so it sizes the floating panel
+  to `sizePercent`% and centers it in the detail area, the pane(s) visible around it.
   `isActive` gates the overlay surface's focus, so a background floating overlay RUNS but does not steal
   focus (mirrors the full overlay).
   Because both kinds mount in the eager deck, `ControlServer` does NOT select on open by default; it SELECTS
@@ -516,8 +689,99 @@ paths:
   at parse via `validate()`); the program's OUTPUT is its own concern — a TUI like revdiff renders in
   the overlay and writes results to its own `--output` file, which the caller reads (the control channel
   does NOT capture stdout).
+  `session.overlay.resize` (target = session) resizes an ALREADY-OPEN overlay IN PLACE between full and
+  floating — the way to change size without closing and re-running the program.
+  Exactly one of `sizePercent` (1...100 → floating) or `full: true` (→ the full-pane overlay) must be set;
+  both, neither, or a percent outside 1...100 is a dispatcher error (mirrored by the CLI `validate()`), and
+  `no overlay` when none is open.
+  It is a NEW `Command` case (unlike the `--follow` arg, which rode the existing `overlay.open`) because it
+  needs its own arg validation, and `full` is a NEW `ControlArgs` field added to distinguish "switch to
+  full" (nil `overlaySizePercent`) from "unset" on the wire.
+  The arm mutates the non-persisted `Session.overlaySizePercent` via `AppStore.resizeOverlay` (clamping
+  1...100, guarding `overlayActive`), and the detail pane re-flows the SAME surface host: the unified
+  `WindowContentView.overlayPanel` now renders BOTH variants (full = translucent, no chrome, panes hidden by
+  `hideForOverlay`; floating = opaque framed panel over visible panes), so a full<->% switch never re-parents
+  the overlay NSView (which would blank its Metal drawable) nor changes the ZStack shape — the old
+  `if fullOverlay` z2 sibling is gone, and the always-present `overlayPanel` at z3 is the single host.
+  Four-point keep-in-sync audit for `session.overlay.resize`: (1) `case sessionOverlayResize = "session.overlay.resize"`
+  + `ControlArgs.full` in `ControlProtocol.swift`, (2) the `.sessionOverlayResize` dispatcher arm (exactly-one
+  + range validation) → the app-side `resizeSessionOverlay` (→ `AppStore.resizeOverlay`) behind `ControlActions`,
+  (3) the `session overlay resize --size-percent|--full` subcommand (`Resize`, `validate()`-guarded) in
+  `agtermctlKit`, (4) round-trip in `ControlProtocolTests` + dispatcher routing/validation in `ControlDispatcherTests`
+  + `AppStorePaneTests` (resize clamp/switch/no-overlay) + CLI mapping in `CommandsTests` + the e2e
+  `testOverlayResizeSwitchesFloatingAndFull` in `ControlOverlaySplitUITests`.
+  The READ side is `ControlSessionNode.overlaySizePercent` on each `tree` node (see the `tree` read-side
+  fields below) — populated in `AppStore.controlTree`, round-tripped by `treeSessionNodeRoundTripsWithOverlaySizePercent`/`…OmitsOverlaySizePercentWhenNil`
+  and `AppStorePaneTests.controlTreeReportsOverlaySizePercent`, and mirrored in the agent-skill `reference.md`
+  tree schema — so a script can record an overlay's size before zooming to `--full` and restore it exactly.
+  `surface.zoom` (mode `show`|`hide`|`toggle`) fills the target window with ONE terminal surface,
+  hiding the sidebar and collapsing the title bar to a slim strip (traffic lights + an exit button;
+  the zoomed terminal is inset below `titlebarHeight`, NOT borderless) — the control half of
+  ⌘⇧Return / View ▸ Toggle Terminal Zoom (`BuiltinAction.toggleTerminalZoom`) and the title-bar exit button.
+  Targets: omitted/`active` resolves the active surface (quick terminal first, else the active session's
+  overlay > scratch > focused-split > primary via `TerminalZoomController.resolveTarget`, which derives the
+  precedence from `TerminalZoomSurface.isActive`); an explicit `surface:<session-id>:<left|right|scratch|overlay>`
+  id (from `tree`'s `surfaces` nodes) zooms that surface — hidden-but-alive splits/scratches included — and
+  `quick` addresses a quick-terminal zoom (the API accepts the id it emits).
+  State lives in the per-window, host-free `TerminalZoomController` (`agtermCore/TerminalZoom.swift`,
+  registered in `TerminalZoomRegistry`); the app-side arm (`setSurfaceZoom`/`setActiveSurfaceZoom`) only
+  resolves the target and shapes the response — ALL mode-vs-state semantics stay in `TerminalZoomController.set`,
+  shared with the GUI toggle, so the three callers can't drift.
+  Zoom is a VIEW mode with hard invariants: it must not mutate split ratios, focus, sidebar state, or
+  split/scratch visibility (the zoom host mounts with `reportsFocusChange: false` → `suppressFocusChange`
+  on ALL `onFocusChange` paths, incl. `clearUnseenOnRefocus`), and the zoomed session's deck entry stays
+  mounted with a CONSTANT shape — only the zoom-owned slot swaps to its `deckHostsSurface` placeholder —
+  so control-opened split/scratch/overlay surfaces still realize and run behind the zoom layer.
+  Entering zoom closes the window's transient chrome (the palette — frontmost window only, it is
+  app-global — an active ⌘F search, and, for a session zoom, a visible quick terminal); a
+  notification-banner reveal exits zoom first; ⌘W exits zoom (the topmost cover, stepwise like the
+  quick/overlay/scratch dismissal); font commands stay live (they act on the focused = zoomed surface).
+  While zoomed, `quick show` and `session.search` (except `close`) are rejected; `quick hide` stays
+  idempotent (a zoomed quick terminal un-zooms first, so a script can always dismiss it), and an
+  explicit-target `surface.zoom hide` skips the availability check so hide is idempotent even after
+  the surface vanished.
+  The READ side is `ControlTree.zoomedSurface` at the tree TOP level — the zoomed surface's control id
+  (`surface:<session-id>:<kind>` or `quick`), nil/omitted when nothing is zoomed — LIVE, resolved
+  app-side in `buildTree` from the projected window's `TerminalZoomController.target?.controlID` and
+  threaded as a `zoomedSurface: () -> String?` closure on `AppStore.controlTree` (the `quickVisible`
+  seam), `tree`-only for the same staleness reason; so a script can check "is it already zoomed" and
+  record-then-restore. The per-session `surfaces` nodes are the ADDRESSING list, not the state read-back:
+  `ControlSurfaceNode.active`/`visible` derive from session flags (overlay/scratch/splitFocused), are
+  identical zoomed or not, and `visible` reads false for a pane behind a FLOATING overlay even though
+  that pane is visually on screen — documented as a caveat on the node type and in the skill.
+  Four-point keep-in-sync audit: (1) `case surfaceZoom = "surface.zoom"` + `ControlSurfaceNode`/`ControlSessionNode.surfaces`
+  + `ControlTree.zoomedSurface` in `ControlProtocol.swift`, (2) the `.surfaceZoom` arm (`setSurfaceZoom`) in `ControlServer+SessionActions.swift`
+  + the `surfaces`/`zoomedSurface` population in `AppStore.controlTree`/`buildTree`, (3) the `surface zoom` subcommand in `agtermctlKit`,
+  (4) round-trip in `ControlProtocolTests` (incl. `treeRoundTripsWithZoomedSurface`/`…OmitsZoomedSurfaceWhenNil`)
+  + `TerminalZoomTests` + the e2e `ControlSurfaceZoomUITests` (incl. the tree read-back and the
+  `--window`-scoped error paths).
   Mode-bearing commands (`session.split`/`quick`) compute the delta against current state so `on`/`off`/`show`/`hide`
   are idempotent, and an unknown mode is an error.
+  `quick`'s visibility reads back on `ControlTree.quickVisible` at the tree TOP level — LIVE, resolved
+  app-side in `buildTree` from the projected window's `QuickTerminalController.isVisible` (the window id
+  found by store identity, `library.openIDs().first { library.store(for:) === store }`, since the quick
+  terminal is per-window); `tree`-only like `sidebarMode` (the GUI ⌃` toggle bypasses the command path, so
+  a cached `window.list` copy would go stale), so a script can make the `quick` toggle idempotent.
+  Threaded as a `quickVisible: () -> Bool?` closure on `AppStore.controlTree` (defaulting nil for host-free
+  tests), covered by `treeRoundTripsWithQuickVisible`/`treeOmitsQuickVisibleWhenNil` +
+  `AppStoreTests.controlTreeReportsQuickVisibleFromClosure`; the app-side `QuickTerminalRegistry` read is build-verified.
+  `quick.type`/`quick.text` are the input/read-back pair for the quick terminal, the twins of `session.type`/`session.text`
+  (the quick terminal is the one typing surface the socket couldn't reach before — issue #170).
+  Both are frontmost-window-only (no `--target`/`--window`/`--pane`; the quick terminal is a single per-window surface),
+  dispatcher-owned via `ControlActions.typeQuick(text:)` / `readQuickText(all:lines:)` (both `async`), and inject/read
+  through the same `GhosttySurfaceView.inject(text:)` / `readScreenText(all:lines:)` primitives the session commands use.
+  They are `async` because `quick show` flips `isVisible` before SwiftUI mounts + libghostty realizes the surface, so
+  a bounded main-actor poll (12×30 ms, the `session.type` realize-poll pattern) waits out the mount — `quick show; quick
+  type` back-to-back is reliable rather than racing.
+  Fast-fail when NOT racing: `quick terminal not open` when the overlay has never been shown (no surface AND not visible,
+  so the poll returns at once), `quick terminal not realized` / `failed to read surface buffer` if a shown surface never
+  comes up within the poll, `no open window` when there is no window.
+  A shown-then-hidden quick terminal keeps its surface alive, so it types/reads while hidden (like `session.type --pane
+  scratch`).
+  `quick.text` is the read-back for `quick.type` (there is no NEW tree-node field — you read via the sibling `text`
+  command, exactly as `session.text` reads back `session.type`).
+  Covered by the `quickType*`/`quickText*` `ControlDispatcherTests` + the e2e `testQuickTypeAndReadText`
+  (type a marker, read it back off the quick surface).
   `session.status` flags a per-session agent status on the sidebar row — `args.status` is `idle`|`active`|`completed`|`blocked`
   (`AgentStatus(rawValue:)` → an `invalid status` error on anything else),
   `args.blink` pulses the glyph, and `args.autoReset` (status-agnostic, caller-set,
@@ -571,7 +835,7 @@ paths:
   (nil/omitted is treated as `left` = the main pane).
   It drives two consumers.
   (1) Pane-scoped keystroke-clear: the main/split/scratch surface factories each wire `onUserInputClearsStatus`
-  to a closure that clears only when the host-free `AgentIndicator.clearedBy(pane:isEscape:)` says the keystroke's
+  to a closure that clears only when the host-free `AgentIndicator.clearedBy(pane:isInterrupt:)` says the keystroke's
   OWN pane owns the current status, so a `right`- or `scratch`-tagged block SURVIVES foreground typing in the
   main pane (see the Notifications rule).
   (2) Pane-aware attention navigation: auto-follow and the GUI attention-nav (⌃⌥↑/⌃⌥↓, menu, palette) reveal
@@ -583,8 +847,12 @@ paths:
   (see the Menu/actions rule).
   It reads back on each `tree` node as `ControlSessionNode.statusPane` (omitted when nil, gated on the SAME
   non-idle condition as `status` so an idle node reports neither).
+  The `--blink` flag and `--color` override read back the same way — `ControlSessionNode.statusBlink`
+  (`true` when blinking, omitted otherwise) and `statusColor` (the `#rrggbb`, omitted when using the default
+  color), both populated in the tree builder gated on the SAME non-idle condition — so a script can record
+  the FULL status (state + pane + blink + color) and restore it.
   Four-point keep-in-sync audit for `session.status --pane`: (1) the `StatusPane` enum + `AgentIndicator.statusPane`
-  + `AgentIndicator.clearedBy(pane:isEscape:)` + `ControlSessionStatusUpdate.pane` + `ControlSessionNode.statusPane`
+  + `AgentIndicator.clearedBy(pane:isInterrupt:)` + `ControlSessionStatusUpdate.pane` + `ControlSessionNode.statusPane`
   + `SurfaceEnvironment.session(pane:)` (injects `AGTERM_PANE`) in `agtermCore`, plus the dispatcher `StatusPane`
   parse/validation, (2) the `.sessionStatus` arm threading `update.pane` into the indicator + the per-factory
   `AGTERM_PANE` env + the pane-scoped keystroke-clear closures + the `revealActiveBlockedPane` nav step,
@@ -638,22 +906,29 @@ paths:
   (2) the `.sidebar` dispatch arm (`setSidebar`) in `ControlServer`, (3) the `sidebar` subcommand in
   `agtermctlKit`, (4) round-trip in `ControlProtocolTests` + the e2e `testSidebarShowHideToggle` (sidebar
   hide removes the `session-row`s from the AX tree) in `ControlSidebarStatusUITests`.
-  `theme.set` sets + persists a theme by name (`args.name`; nil/empty = ghostty's built-in / "default
-  ghostty", NOT the seeded `agterm` app default — see the Theme picker section) — the control half of
-  the Settings picker / the `.themes` palette commit, the SAME `SettingsModel.setTheme` persist+apply
-  path (NO live preview over the socket — preview is interactive-only).
+  `theme.set` sets + persists a theme (see the Theme picker section) PER SLOT, mirroring the two Settings pickers over the shared `SettingsModel.setLightTheme`/`setDarkTheme`/`setSystemThemes`.
+  `args.name` (alias `args.light`; both together is an error) sets the light/single `theme` slot,
+  KEEPING the `darkTheme` slot if one is set (they are separate fields, no recompose);
+  nil/empty = ghostty's built-in / "default ghostty" (NOT the seeded `agterm` app default),
+  and a bare `theme set` clears BOTH slots + turns syncing off.
+  `args.dark` sets the `darkTheme` slot alone and turns appearance syncing ON (`followSystemAppearance`,
+  the light side seeds from the current theme, else `Builtin Light`);
+  the reserved value `none` clears the dark slot (syncing off, the light side survives as the plain theme).
+  The `.themes` palette commit maps to the CURRENT appearance's slot (NO live preview over the socket — preview is interactive-only).
   An unknown name (not in `SettingsCatalog.themeNames()`) is an `unknown theme: X` error (a typo silently
-  doing nothing is worse than a fail); the applied name echoes in `result.theme` (nil = ghostty built-in).
-  `theme.list` returns `result.themes` = the bundled names + `result.theme` = the current one (nil =
-  ghostty built-in; absent on a fresh install means the seeded `agterm` is current);
+  doing nothing is worse than a fail); the response always echoes the full post-change state
+  (`result.theme`/`sync`/`light`/`dark`).
+  `theme.list` returns `result.themes` = the bundled names + `result.theme` = the plain current one (nil =
+  ghostty built-in; absent on a fresh install means the seeded `agterm` is current) + `result.sync`/`light`/`dark`;
+  while syncing `result.theme` is ABSENT — the state rides the three sync fields.
   `agtermctl theme list` prints one name per line with a leading "default ghostty" row,
-  the current marked `* `, and `theme.set` prints `ok` (non-create mutation).
+  the active marked `* ` (both sides + a header while syncing), and `theme.set` prints `ok` (non-create mutation).
   App-global like `keymap.reload` (one `SettingsModel`), so NO `--window` selector.
   Four-point keep-in-sync audit: (1) `case themeSet = "theme.set"` + `case themeList = "theme.list"`
   in `ControlProtocol.swift` (reuse `ControlArgs.name`; add `ControlResult.theme`/`themes`),
   (2) the `.themeSet` (`setTheme`, with name validation) + `.themeList` dispatch arms in `ControlServer`,
-  (3) the `theme set [name]` / `theme list` subcommands in `agtermctlKit` (+ `SocketClient.formatThemes`),
-  (4) round-trip in `ControlProtocolTests` + the e2e `testThemeListAndSet` in `ControlAPIUITests`.
+  (3) the `theme set [name] [--light] [--dark]` / `theme list` subcommands in `agtermctlKit` (+ `SocketClient.formatThemes`),
+  (4) round-trip in `ControlProtocolTests` + the e2e `testThemeListAndSet` in `ControlAPIUITests` and `testThemeSyncWithSystemAppearance` in `ControlAPIThemeUITests`.
   See the Theme picker section for the GUI/preview half.
   `session.flag` (target = session) flags/unflags a session for the flagged working-set view — `args.mode`
   is `on`|`off`|`toggle`|`clear` (`clear` IGNORES the target and unflags every session in the resolved
@@ -669,12 +944,36 @@ paths:
   arm (`setSessionFlag`) in `ControlServer`, (3) the `session flag on|off|toggle|clear` subcommand (`FlagCommand`)
   in `agtermctlKit`, (4) round-trip in `ControlProtocolTests` + the e2e `testSessionFlagAndSidebarModeFlagged`
   in `ControlSidebarStatusUITests`.
+  `session.seen` (target = session) clears a session's unseen-notification badge WITHOUT changing the
+  selection, focus, or agent status — the focus-free counterpart to `notify`, which raises the badge over
+  the socket while the only clear paths (`AppStore.selectSession`, a pane's `onFocusChange(true)`) are
+  both focus-coupled.
+  It drives the already-public `AppStore.clearUnseen(_:)` (the same primitive `selectSession` calls),
+  so it is idempotent (a no-op when already zero; the count is ephemeral, absent from `SessionSnapshot`,
+  so it triggers no save) and returns the session id; NO args beyond target/window (leaner than `session.flag`
+  — no mode).
+  It is control-NATIVE (no GUI/menu equivalent — visiting the session is the GUI's only "mark seen", and
+  it is inseparable from selecting) — the same footing as `notify`/`session.type`/`session.copy`.
+  The read side is the new `unseen` field on `ControlSessionNode` (the `session.unseenCount`, populated
+  in the `tree` builder, omitted when zero), so a script can query the count and clear it symmetrically.
+  Four-point keep-in-sync audit for `session.seen`: (1) `case sessionSeen = "session.seen"` +
+  `unseen: Int?` on `ControlSessionNode` in `ControlProtocol.swift` (no new `ControlArgs` field),
+  (2) the `.sessionSeen` dispatch arm (`markSessionSeen`) in `ControlDispatcher`/`ControlServer` + the
+  `unseen` population in `AppStore.controlTree`, (3) the `session seen` subcommand (`Seen`) in `agtermctlKit`,
+  (4) round-trip (`sessionSeenRoundTrips` + `treeSessionNodeRoundTripsWithUnseen`/`…OmitsUnseenWhenNil`)
+  in `ControlProtocolTests` + dispatcher routing in `ControlDispatcherTests` + `AppStoreTests`
+  (`controlTreeReportsUnseenCountWhenPositive`/`…OmitsUnseenCountWhenZero`) + CLI mapping in `CommandsTests`
+  + the e2e `testSessionSeenClearsBadgeWithoutFocus` in `ControlSidebarStatusUITests`.
   `sidebar.mode` (frontmost window) flips the sidebar VIEW between the workspace tree and the flat flagged
   working-set list — `args.mode` is `tree`|`flagged`|`toggle` (delta-computed against `AppStore.sidebarMode`
   so it's idempotent, unknown mode = error), drives `setSidebarViewMode` → `AppStore.setSidebarMode`.
   It is the control half of the bottom-bar `flagged-view-toggle` + the View-menu Show Flagged/Show All
   + `BuiltinAction.toggleFlaggedView`; the existing `sidebar [show|hide|toggle]` is now the default `sidebar visibility`
   subcommand alongside `sidebar mode`.
+  Its READ side is `ControlTree.sidebarMode` at the tree TOP level (`AppStore.sidebarMode.rawValue`,
+  `tree`|`flagged`), the read side of this write-only command so a script can record and restore the view
+  mode — the sibling of `sidebarVisible`, except `tree`-ONLY (not mirrored onto the cached `window.list`,
+  since the GUI `flagged-view-toggle` bypasses the command path and would leave a cached copy stale).
   Four-point keep-in-sync audit: (1) `case sidebarMode = "sidebar.mode"` in `ControlProtocol.swift` (reuses
   `ControlArgs.mode`), (2) the `.sidebarMode` dispatch arm (`setSidebarViewMode`) in `ControlServer`,
   (3) the `sidebar mode tree|flagged|toggle` subcommand (`Mode`, alongside the `Visibility` default)
@@ -714,6 +1013,9 @@ paths:
   selecting a session outside the focused workspace auto-unfocuses (see the Sidebar section).
   It is the control half of the workspace-row Focus/Unfocus + the `focus-pill` ✕ + `BuiltinAction.focusWorkspace`/`focusActiveWorkspace`
   + the Clear Focus menu/palette item.
+  Its READ side is `ControlWorkspaceNode.focused` on each `tree` workspace node (`workspace.id == focusedWorkspaceID ? true : nil`
+  in the tree builder — DISTINCT from `active`, the selected workspace), so a script can record which
+  workspace is focused and restore it; omitted on the non-focused ones and absent when nothing is focused.
   Four-point keep-in-sync audit: (1) `case workspaceFocus = "workspace.focus"` in `ControlProtocol.swift`
   (reuses `ControlArgs.mode`), (2) the `.workspaceFocus` dispatch arm (`focusWorkspace`) in `ControlServer`,
   (3) the `workspace focus on|off|toggle` subcommand (`Focus`) in `agtermctlKit`,
@@ -726,6 +1028,65 @@ paths:
   is each pane running".
   It ALSO surfaces `background` on each node — the `BackgroundWatermark` spec set via `session.background`
   (omitted when none), the read side of set/clear so a script can query the current watermark.
+  It ALSO surfaces `overlaySizePercent` on each node — an OPEN overlay's size (`session.overlayActive ? session.overlaySizePercent : nil`
+  in the tree builder): nil/omitted = the full-pane overlay OR no overlay (so gate on `overlay` first),
+  else the floating panel's percent (1...100).
+  It is the READ side of `session.overlay.resize` (which had only the write side), so a tmux-style zoom
+  script can record the current size before switching to `--full` and restore the EXACT original on un-zoom
+  (not a guessed default).
+  It ALSO surfaces `splitRatio` on each node — the left-pane divider fraction of a session that HAS a split
+  (`session.hasSplit ? session.splitRatio : nil` in the tree builder, so shown OR hidden splits report it),
+  nil/omitted when there is no split or the ratio was never explicitly set (divider then at the default 0.5).
+  It is the READ side of `session.resize` (whose applied ratio was echoed ONLY on the resize call's own
+  `ControlResult.ratio`), so a script can record the current ratio before maximizing a pane and restore the
+  exact divider even if the USER dragged it.
+  It ALSO surfaces `splitFocused` on each node — which pane holds focus in a session that HAS a split
+  (`session.hasSplit ? session.splitFocused : nil` in the tree builder, so shown OR hidden splits report it):
+  `true` = the split (right) pane, `false` = the main (left) pane, nil/omitted when there is no split.
+  It is the READ side of `session.focus` (write-only), so a script can record which pane was focused and
+  restore it via `session.focus --pane left|right` (a `false` is emitted, distinct from the nil no-split
+  case — the left pane being focused is real state).
+  `tree` ALSO carries, at the TOP level (alongside `idleMs`/`autoFollowMs`), `sidebarVisible` — the read
+  side of the write-only `sidebar` command (per-window sidebar visibility), populated LIVE from the
+  projected window's store in `AppStore.controlTree`.
+  The SAME field also rides each `ControlWindowNode` on `window.list` (read from `stores[id]?.sidebarVisible`,
+  omitted for a closed window), so a script can enumerate every window's sidebar state.
+  BUT `window.list` is served from the background-thread `cachedWindowNodes` cache
+  (refreshed after every dispatched command + on frontmost change), and a GUI-only ⌃⌘S toggle is neither —
+  so `AppStore.setSidebarVisible` posts `.agtermSidebarVisibilityChanged` (agtermCore) and `ControlServer`
+  observes it to `refreshWindowCache`, keeping the cached `sidebarVisible` honest.
+  A script that reads-then-acts (e.g. the tmux-style zoom that must restore the sidebar only if it was
+  visible) should still prefer `tree`'s LIVE `sidebarVisible` over the cached `window.list` one — the tree
+  is built on the main actor per request, so it can never lag.
+  Each `ControlWindowNode` ALSO carries `geometry` — the open window's live on-screen frame
+  (`ControlWindowFrame{x, y, width, height, display}`, omitted for a closed window with no NSWindow).
+  It is the READ side of the write-only `window.move`/`window.resize` (which set the frame but nothing
+  reported it), in the SAME coordinate system those accept: `x`/`y` are the top-left relative to `display`
+  (y down), `width`/`height` the frame size, so a read-back round-trips straight back through
+  `window.move`/`window.resize` (record → resize/move → restore the exact frame).
+  Because the frame lives in AppKit (`WindowLibrary` is host-free), `controlWindowNodes` takes an app-side
+  `geometry:` closure (default nil for tests) that `ControlServer.buildWindowList` fills from
+  `WindowRegistry.geometry(for:)` — the exact inverse of `move`'s forward math.
+  It rides the `cachedWindowNodes` cache (there is no LIVE tree copy — geometry is window-scoped, absent
+  from the session tree), and since a user drag/resize/zoom/fullscreen changes it with NO control command
+  AND a polling `window.list` is fast-path-served (so it never refreshes its own cache), `ControlServer`
+  observes the NSWindow `didMove`/`didResize`/`didEnterFullScreen`/`didExitFullScreen` notifications and
+  `refreshWindowCache`s on each (the fullscreen ones fire AFTER the async transition, so the settled
+  `styleMask` is captured) — mirroring the `.agtermSidebarVisibilityChanged` refresh for the GUI-only
+  sidebar toggle, so the read-back stays current.
+  The notification is IGNORED, not captured — a non-Sendable `Notification` can't cross into the
+  `MainActor.assumeIsolated` block under Swift 6 strict concurrency (the `sending 'note'` error), so the
+  refresh fires for ANY window rather than filtering to an agterm one; harmless, since a non-agterm panel
+  just rebuilds the same cheap agterm nodes.
+  The host-free plumbing (the closure + node field) is unit-tested (`controlWindowNodesIncludeGeometryFromClosure`,
+  the round-trips); the coordinate conversion + the NSWindow-notification cache refresh are app-side, build-verified.
+  Each `ControlWindowNode` ALSO carries `fullscreen`/`zoomed` — the read side of the write-only
+  `window.fullscreen`/`window.zoom` toggles (so a script can toggle idempotently), filled by a PARALLEL
+  app-side `flags:` closure on `controlWindowNodes` (kept separate from `geometry:` so each stays a clean
+  addition) that `buildWindowList` reads from `WindowRegistry.windowFlags(for:)`
+  (`styleMask.contains(.fullScreen)` / `NSWindow.isZoomed`); both nil/omitted for a closed window, on the
+  cache like `geometry`. The closure plumbing is unit-tested (`controlWindowNodesIncludeFullscreenZoomFromClosure`
+  + the round-trips); the NSWindow reads are app-side, build-verified.
   `restore.clear` clears every open session's saved CAPTURED foreground command (`Session.foregroundCommand`/`splitForegroundCommand`)
   and persists via `library.saveAllOpen()`, so the next restart restores plain shells for those panes instead
   of re-running the captured commands (also closing the force-quit re-fire: the restored command is consumed
@@ -796,5 +1157,4 @@ paths:
   (image/text/color set/clear + tree read-back).
   **Agent-skill mirror (HARD keep-in-sync, 4th surface):** all commands are documented in the bundled
   `agterm/Resources/agent-skill/` (SKILL.md summary, reference.md detail,
-  examples.md recipes) and the command count there is bumped to 50 to match.
-
+  examples.md recipes) and the command count there is bumped to 58 to match.

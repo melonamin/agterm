@@ -297,10 +297,22 @@ public final class Session: Identifiable {
         splitFocused && splitSurface != nil ? splitSurface : surface
     }
 
-    /// The surface currently on top and owning keyboard focus: a full overlay, else the scratch, else
-    /// the active pane. Both the overlay and the scratch are full-coverage layers (panes hidden beneath
-    /// them), and the overlay renders above the scratch — so every focus path routes through this to keep
-    /// first responder on the visible top surface and never on a covered pane/scratch.
+    /// The session's one addressable pane for the control arms that act on "the session" rather than on a
+    /// named `--pane`: `session.copy`, `session.paste`, `session.selectall`, and `font.*`. Normally the main
+    /// pane, and IDENTICAL to `surface` for every ordinary or split session. It differs only for a promoted
+    /// split survivor: when the primary pane's shell exits, `closePrimaryPane` tears that surface down and
+    /// nils `surface`, leaving the session's only live shell in `splitSurface`. Resolving through `surface`
+    /// alone reports `session not realized` for a session the user is actively typing in, so those arms fall
+    /// back to the survivor. Deliberately NOT focus-aware (unlike `activeSurface`): a shown split keeps
+    /// addressing the main pane, which is what keeps `session.selectall` and its `session.copy` read-back
+    /// pointed at the same surface.
+    public var addressableSurface: (any TerminalSurface)? { surface ?? splitSurface }
+
+    /// The surface currently on top and owning keyboard focus: an active overlay (full OR floating), else
+    /// the scratch, else the active pane. The overlay renders above the scratch, and a full overlay or the
+    /// scratch hides the pane(s) beneath it — so the session-focus helpers route through this to keep first
+    /// responder on the top surface and never on a covered pane/scratch. (`TerminalView.focusIfNeeded` is
+    /// the exception: it targets its own deck slot, which a cover already gates off via `isActive`.)
     public var topmostSurface: (any TerminalSurface)? {
         if overlayActive { return overlaySurface }
         if scratchActive { return scratchSurface }

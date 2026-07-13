@@ -9,6 +9,8 @@ public struct PaletteContext: Sendable, Equatable {
     public let activeSessionFlagged: Bool
     public let hasFocusedWorkspace: Bool
     public let activeSessionHasSplit: Bool
+    public let hasPendingClose: Bool
+    public let hasRecentClosed: Bool
 
     public init(canRemoveWorkspace: Bool = false,
                 hasFlaggedSessions: Bool = false,
@@ -16,7 +18,9 @@ public struct PaletteContext: Sendable, Equatable {
                 sidebarShowsFlaggedOnly: Bool = false,
                 activeSessionFlagged: Bool = false,
                 hasFocusedWorkspace: Bool = false,
-                activeSessionHasSplit: Bool = false) {
+                activeSessionHasSplit: Bool = false,
+                hasPendingClose: Bool = false,
+                hasRecentClosed: Bool = false) {
         self.canRemoveWorkspace = canRemoveWorkspace
         self.hasFlaggedSessions = hasFlaggedSessions
         self.sidebarShowsWorkspaceTree = sidebarShowsWorkspaceTree
@@ -24,17 +28,19 @@ public struct PaletteContext: Sendable, Equatable {
         self.activeSessionFlagged = activeSessionFlagged
         self.hasFocusedWorkspace = hasFocusedWorkspace
         self.activeSessionHasSplit = activeSessionHasSplit
+        self.hasPendingClose = hasPendingClose
+        self.hasRecentClosed = hasRecentClosed
     }
 }
 
 /// Static action-palette rows, in the same order the macOS palette presents them before dynamic rows.
 public enum PaletteCommand: String, CaseIterable, Sendable {
     case newSession, newWorkspace, openDirectory
-    case renameSession, renameWorkspace, closeSession, clearStatus
+    case renameSession, renameWorkspace, closeSession, reopenRecent, undoClose, clearStatus
     case previousSession, nextSession, previousAttentionSession, nextAttentionSession
     case firstSession, lastSession, showAttention
-    case toggleSplit, toggleScratch, toggleSidebar, toggleFlag, focusWorkspace
-    case find, quickTerminal
+    case toggleSplit, toggleScratch, toggleTerminalZoom, toggleSidebar, toggleFlag, focusWorkspace
+    case find, quickTerminal, toggleFullscreen
     case increaseFontSize, decreaseFontSize, resetFontSize, selectTheme
     case editKeymap, reloadKeymap, editGhosttyConfig, reloadConfig
     case deleteWorkspace, toggleFlaggedView, clearFlagged, clearFocus
@@ -54,6 +60,10 @@ public enum PaletteCommand: String, CaseIterable, Sendable {
             return context.sidebarShowsWorkspaceTree
         case .focusLeftPane, .focusRightPane:
             return context.activeSessionHasSplit
+        case .undoClose:
+            return context.hasPendingClose
+        case .reopenRecent:
+            return context.hasRecentClosed
         default:
             return true
         }
@@ -71,6 +81,8 @@ public enum PaletteCommand: String, CaseIterable, Sendable {
         case .renameSession: return "Rename Session"
         case .renameWorkspace: return "Rename Workspace"
         case .closeSession: return "Close Session"
+        case .reopenRecent: return "Reopen Last Closed Item"
+        case .undoClose: return "Reopen Closed Item"
         case .clearStatus: return "Clear Status"
         case .previousSession: return "Previous Session"
         case .nextSession: return "Next Session"
@@ -81,11 +93,13 @@ public enum PaletteCommand: String, CaseIterable, Sendable {
         case .showAttention: return "Show Attention"
         case .toggleSplit: return "Toggle Split"
         case .toggleScratch: return "Toggle Scratch"
+        case .toggleTerminalZoom: return "Toggle Terminal Zoom"
         case .toggleSidebar: return "Toggle Sidebar"
         case .toggleFlag: return context.activeSessionFlagged ? "Unflag Session" : "Flag Session"
         case .focusWorkspace: return "Focus Workspace"
         case .find: return "Find…"
         case .quickTerminal: return "Quick Terminal"
+        case .toggleFullscreen: return "Toggle Full Screen"
         case .increaseFontSize: return "Increase Font Size"
         case .decreaseFontSize: return "Decrease Font Size"
         case .resetFontSize: return "Actual Font Size"
@@ -113,6 +127,8 @@ public enum PaletteCommand: String, CaseIterable, Sendable {
         case .renameSession: return .renameSession
         case .renameWorkspace: return .renameWorkspace
         case .closeSession: return .closeSession
+        case .reopenRecent: return .reopenRecent
+        case .undoClose: return .undoClose
         case .clearStatus: return .clearStatus
         case .previousSession: return .previousSession
         case .nextSession: return .nextSession
@@ -123,11 +139,13 @@ public enum PaletteCommand: String, CaseIterable, Sendable {
         case .showAttention: return .showAttention
         case .toggleSplit: return .toggleSplit
         case .toggleScratch: return .toggleScratch
+        case .toggleTerminalZoom: return .toggleTerminalZoom
         case .toggleSidebar: return .toggleSidebar
         case .toggleFlag: return .toggleFlag
         case .focusWorkspace: return .focusWorkspace
         case .find: return .toggleSearch
         case .quickTerminal: return .quickTerminal
+        case .toggleFullscreen: return .toggleFullscreen
         case .increaseFontSize: return .increaseFontSize
         case .decreaseFontSize: return .decreaseFontSize
         case .resetFontSize: return .resetFontSize

@@ -24,6 +24,21 @@ struct AppStorePaneTests {
         #expect(session.splitFocused == true)
     }
 
+    @Test func toggleSplitReshowPreservesFocusedPane() {
+        let store = makeStore()
+        let ws = store.addWorkspace(name: "work")
+        let session = store.addSession(toWorkspace: ws.id, cwd: "/a")!
+        store.toggleSplit(session.id)           // open a NEW split -> focuses the new (right) pane
+        #expect(session.splitFocused == true)
+        session.splitFocused = false            // focus the left pane
+        store.toggleSplit(session.id)           // hide (zoom): left pane stays the maximized one
+        #expect(session.isSplit == false)
+        #expect(session.splitFocused == false)
+        store.toggleSplit(session.id)           // re-show (un-zoom): must keep the left pane focused
+        #expect(session.isSplit == true)
+        #expect(session.splitFocused == false)  // regression guard: no jerk back to the right pane
+    }
+
     @Test func closeSplitHidesAndTearsDownSurface() {
         let store = makeStore()
         let ws = store.addWorkspace(name: "work")
@@ -93,6 +108,33 @@ struct AppStorePaneTests {
         #expect(session.splitRatio == nil)                // promoted to single, so a later split opens even
         #expect(session.currentCwd == "/var/log")         // the survivor's cwd is promoted
         #expect(session.initialCommand == nil)            // the command pane is gone; a restart must NOT resurrect it
+        // the session-scoped control arms (session.copy/paste/selectall, font.*) must still reach the live
+        // shell: `surface` is nil here, so resolving through it alone would report "session not realized"
+        // for a session the user is actively typing in.
+        #expect(session.addressableSurface === split)
+    }
+
+    @Test func addressableSurfaceIsTheMainPaneUntilThePrimaryExits() {
+        let store = makeStore()
+        let ws = store.addWorkspace(name: "work")
+        let session = store.addSession(toWorkspace: ws.id, cwd: "/a")!
+        let primary = SpySurface(); session.surface = primary
+        #expect(session.addressableSurface === primary)   // plain session
+
+        let split = SpySurface(); session.splitSurface = split
+        session.isSplit = true
+        session.hasSplit = true
+        #expect(session.addressableSurface === primary)   // split shown, main pane still addressed
+
+        session.splitFocused = true
+        #expect(session.addressableSurface === primary)   // NOT focus-aware: selectall + copy stay paired
+    }
+
+    @Test func addressableSurfaceIsNilWhenNoPaneIsRealized() {
+        let store = makeStore()
+        let ws = store.addWorkspace(name: "work")
+        let session = store.addSession(toWorkspace: ws.id, cwd: "/a")!
+        #expect(session.addressableSurface == nil)        // never-shown session still errors "session not realized"
     }
 
     @Test func closePrimaryPaneWithoutSplitClosesSession() {
@@ -276,6 +318,160 @@ struct AppStorePaneTests {
         store.closeOverlay(session.id)
         store.openOverlay(session.id, command: "htop", sizePercent: 1)
         #expect(session.overlaySizePercent == 1)
+    }
+
+    @Test func resizeOverlaySwitchesFullAndFloatingAndClamps() {
+        let store = makeStore()
+        let ws = store.addWorkspace(name: "work")
+        let session = store.addSession(toWorkspace: ws.id, cwd: "/a")!
+        // no overlay open → no-op, leaves size untouched.
+        #expect(store.resizeOverlay(session.id, sizePercent: 50) == false)
+        #expect(session.overlaySizePercent == nil)
+        // open full, then resize it to a floating percent (nil → 60).
+        store.openOverlay(session.id, command: "htop")
+        #expect(session.overlaySizePercent == nil)
+        #expect(store.resizeOverlay(session.id, sizePercent: 60) == true)
+        #expect(session.overlaySizePercent == 60)
+        #expect(session.floatingOverlayActive)
+        // resize back to full (nil).
+        #expect(store.resizeOverlay(session.id, sizePercent: nil) == true)
+        #expect(session.overlaySizePercent == nil)
+        #expect(session.fullOverlayActive)
+        // out-of-range percents clamp to 1...100.
+        store.resizeOverlay(session.id, sizePercent: 250)
+        #expect(session.overlaySizePercent == 100)
+        store.resizeOverlay(session.id, sizePercent: 0)
+        #expect(session.overlaySizePercent == 1)
+        // the overlay program keeps running across every resize (no re-spawn).
+        #expect(session.overlayActive)
+    }
+
+    @Test func controlTreeReportsOverlaySizePercent() throws {
+        let store = makeStore()
+        let ws = store.addWorkspace(name: "work")
+        let session = store.addSession(toWorkspace: ws.id, cwd: "/a")!
+        // no overlay: the field is omitted (nil).
+        var node = try #require(store.controlTree().workspaces[0].sessions.first)
+        #expect(node.overlay == false)
+        #expect(node.overlaySizePercent == nil)
+        // floating overlay: the percent rides the node so a script can record it before zooming.
+        store.openOverlay(session.id, command: "htop", sizePercent: 95)
+        node = try #require(store.controlTree().workspaces[0].sessions.first)
+        #expect(node.overlay == true)
+        #expect(node.overlaySizePercent == 95)
+        // full-pane overlay: open but no size (nil = full).
+        store.resizeOverlay(session.id, sizePercent: nil)
+        node = try #require(store.controlTree().workspaces[0].sessions.first)
+        #expect(node.overlay == true)
+        #expect(node.overlaySizePercent == nil)
+    }
+
+    @Test func controlTreeReportsSplitRatio() throws {
+        let store = makeStore()
+        let ws = store.addWorkspace(name: "work")
+        let session = store.addSession(toWorkspace: ws.id, cwd: "/a")!
+        // no split: the field is omitted (nil).
+        var node = try #require(store.controlTree().workspaces[0].sessions.first)
+        #expect(node.split == false)
+        #expect(node.splitRatio == nil)
+        // a split with the divider still at the default (never moved): still nil.
+        store.toggleSplit(session.id)
+        node = try #require(store.controlTree().workspaces[0].sessions.first)
+        #expect(node.split == true)
+        #expect(node.splitRatio == nil)
+        // moving the divider surfaces the ratio so a script can record and restore it.
+        _ = store.applySplitRatio(0.3, forSession: session.id)
+        node = try #require(store.controlTree().workspaces[0].sessions.first)
+        #expect(node.splitRatio == 0.3)
+        // a hidden split keeps its ratio readable (gated on hasSplit, not isSplit).
+        store.toggleSplit(session.id)
+        node = try #require(store.controlTree().workspaces[0].sessions.first)
+        #expect(node.split == false)
+        #expect(node.splitRatio == 0.3)
+    }
+
+    @Test func controlTreeThreadsFontSizesFromClosures() throws {
+        let store = makeStore()
+        let ws = store.addWorkspace(name: "work")
+        _ = store.addSession(toWorkspace: ws.id, cwd: "/a")!
+        // default closures: the font-size fields are omitted (nil), like foreground.
+        var node = try #require(store.controlTree().workspaces[0].sessions.first)
+        #expect(node.fontSize == nil)
+        #expect(node.splitFontSize == nil)
+        #expect(node.scratchFontSize == nil)
+        // the host supplies live per-pane sizes via closures (the app reads them off the surfaces).
+        node = try #require(store.controlTree(fontSize: { _ in 13 }, splitFontSize: { _ in 9.5 },
+                                              scratchFontSize: { _ in 11 }).workspaces[0].sessions.first)
+        #expect(node.fontSize == 13)
+        #expect(node.splitFontSize == 9.5)
+        #expect(node.scratchFontSize == 11)
+    }
+
+    @Test func controlTreeFontSizeReadsPromotedSurvivorViaAddressableSurface() throws {
+        // regression: after the primary pane exits, the fontSize read-back must resolve through
+        // addressableSurface (the promoted split survivor) — the same surface the font default/left
+        // WRITE path targets — not bare `surface`, which is nil in that state. A closure over `surface`
+        // would report nothing for a session the user is actively typing in.
+        let store = makeStore()
+        let ws = store.addWorkspace(name: "work")
+        let session = store.addSession(toWorkspace: ws.id, cwd: "/a")!
+        session.surface = SpySurface()
+        session.splitSurface = SpySurface()
+        session.isSplit = true
+        session.hasSplit = true
+        store.closePrimaryPane(session.id)                 // primary exits -> surface nil, survivor promoted
+        #expect(session.surface == nil)
+        #expect(session.addressableSurface != nil)
+        // the app wires fontSize off addressableSurface: it reports the survivor's size here...
+        let viaAddressable = store.controlTree(fontSize: { $0.addressableSurface != nil ? 13 : nil })
+        #expect(viaAddressable.workspaces[0].sessions.first?.fontSize == 13)
+        // ...whereas the old wiring over the (now nil) `surface` would report nothing.
+        let viaSurface = store.controlTree(fontSize: { $0.surface != nil ? 13 : nil })
+        #expect(viaSurface.workspaces[0].sessions.first?.fontSize == nil)
+    }
+
+    @Test func controlTreeReportsSplitFocused() throws {
+        let store = makeStore()
+        let ws = store.addWorkspace(name: "work")
+        let session = store.addSession(toWorkspace: ws.id, cwd: "/a")!
+        // no split: the field is omitted (nil).
+        var node = try #require(store.controlTree().workspaces[0].sessions.first)
+        #expect(node.splitFocused == nil)
+        // opening a split focuses the new (right) pane.
+        store.toggleSplit(session.id)
+        node = try #require(store.controlTree().workspaces[0].sessions.first)
+        #expect(node.splitFocused == true)
+        // focusing the main (left) pane surfaces false — distinct from nil (= no split).
+        session.splitFocused = false
+        node = try #require(store.controlTree().workspaces[0].sessions.first)
+        #expect(node.splitFocused == false)
+        // a hidden split keeps the focus readable (gated on hasSplit, not isSplit).
+        store.toggleSplit(session.id)
+        node = try #require(store.controlTree().workspaces[0].sessions.first)
+        #expect(node.split == false)
+        #expect(node.splitFocused == false)
+    }
+
+    @Test func controlTreeReportsStatusModifiers() throws {
+        let store = makeStore()
+        let ws = store.addWorkspace(name: "work")
+        let session = store.addSession(toWorkspace: ws.id, cwd: "/a")!
+        // idle: no status, so blink/color are omitted.
+        var node = try #require(store.controlTree().workspaces[0].sessions.first)
+        #expect(node.statusBlink == nil)
+        #expect(node.statusColor == nil)
+        // a blocked status with blink + a color override surfaces both modifiers.
+        store.setAgentIndicator(AgentIndicator(status: .blocked, blink: true, color: "#ff8800"), forSession: session.id)
+        node = try #require(store.controlTree().workspaces[0].sessions.first)
+        #expect(node.status == "blocked")
+        #expect(node.statusBlink == true)
+        #expect(node.statusColor == "#ff8800")
+        // a status without blink omits statusBlink (false -> nil); without a color override omits statusColor.
+        store.setAgentIndicator(AgentIndicator(status: .active), forSession: session.id)
+        node = try #require(store.controlTree().workspaces[0].sessions.first)
+        #expect(node.status == "active")
+        #expect(node.statusBlink == nil)
+        #expect(node.statusColor == nil)
     }
 
     @Test func closeOverlayTearsDownAndClears() {

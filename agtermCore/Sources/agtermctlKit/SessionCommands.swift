@@ -2,11 +2,11 @@ import ArgumentParser
 import Foundation
 import agtermCore
 
-/// Shared `--pane` validation for the session commands that accept `left|right|scratch` (type, text, status).
-/// Rejects any other value with a clean usage error before the socket round-trip, matching the server-side
-/// switch (so the CLI and server can't drift, and a raw socket client still hits the same check server-side).
-/// These three commands intentionally reuse `StatusPane`'s `left|right|scratch` value set as the shared
-/// pane-addressing vocabulary — the enum is named for agent status but its cases are the pane names.
+/// Shared `--pane` validation for the commands that accept `left|right|scratch` (session type, text, status,
+/// and font). Rejects any other value with a clean usage error before the socket round-trip, matching the
+/// server-side switch (so the CLI and server can't drift, and a raw socket client still hits the same check
+/// server-side). These commands intentionally reuse `StatusPane`'s `left|right|scratch` value set as the
+/// shared pane-addressing vocabulary — the enum is named for agent status but its cases are the pane names.
 func validatePaneArgument(_ pane: String?) throws {
     if let pane, StatusPane(rawValue: pane) == nil {
         throw ValidationError("--pane must be left, right, or scratch")
@@ -19,8 +19,9 @@ struct Session: ParsableCommand {
     static let configuration = CommandConfiguration(
         abstract: "Session commands.",
         subcommands: [New.self, Close.self, Select.self, Go.self, Rename.self, Move.self, TypeText.self,
-                      Split.self, Scratch.self, Focus.self, Resize.self, Copy.self, Text.self, Status.self, FlagCommand.self,
-                      Search.self, Background.self, Overlay.self]
+                      Split.self, Scratch.self, Focus.self, Resize.self, Copy.self, Paste.self, SelectAll.self,
+                      Text.self, Status.self, FlagCommand.self,
+                      Seen.self, Search.self, Background.self, Overlay.self]
     )
 
     struct New: RequestCommand {
@@ -62,11 +63,13 @@ struct Session: ParsableCommand {
 
     struct Close: RequestCommand {
         static let configuration = CommandConfiguration(abstract: "Close a session.")
-        @OptionGroup var target: TargetOptions
+        @OptionGroup var target: BatchTargetOptions
         @OptionGroup var options: ClientOptions
 
         func makeRequest() throws -> ControlRequest {
-            ControlRequest(cmd: .sessionClose, target: target.target, args: options.withWindow())
+            let batchArgs = target.batchTargets.map { ControlArgs(targets: $0) }
+            let args = options.withWindow(batchArgs)
+            return ControlRequest(cmd: .sessionClose, target: target.targets.first ?? "active", args: args)
         }
     }
 
@@ -109,7 +112,7 @@ struct Session: ParsableCommand {
         @Option(name: .long, help: "Reorder within the workspace: up, down, top, or bottom.") var to: String?
         @Option(name: .long, help: "Place right AFTER this anchor session (id/prefix/active); the anchor carries its own workspace (relocates + positions in one shot).") var after: String?
         @Option(name: .long, help: "Place right BEFORE this anchor session (id/prefix/active); mirror of --after.") var before: String?
-        @OptionGroup var target: TargetOptions
+        @OptionGroup var target: BatchTargetOptions
         @OptionGroup var options: ClientOptions
 
         // exactly one placement intent among {workspace positional (relocate), --to (reorder),
@@ -129,6 +132,9 @@ struct Session: ParsableCommand {
                 }
                 return
             }
+            if target.targets.count > 1, to != nil {
+                throw ValidationError("session.move --target can be repeated only with a workspace or --after/--before")
+            }
             switch (workspace, to) {
             case (nil, nil): throw ValidationError("provide a destination workspace, --to, or --after/--before")
             case (.some, .some): throw ValidationError("provide a destination workspace or --to, not both")
@@ -147,7 +153,10 @@ struct Session: ParsableCommand {
             } else {
                 args = ControlArgs(to: to)
             }
-            return ControlRequest(cmd: .sessionMove, target: target.target, args: options.withWindow(args))
+            var withTargets = args
+            withTargets.targets = target.batchTargets
+            return ControlRequest(cmd: .sessionMove, target: target.targets.first ?? "active",
+                                  args: options.withWindow(withTargets))
         }
     }
 
@@ -259,6 +268,27 @@ struct Session: ParsableCommand {
         }
     }
 
+    struct Paste: RequestCommand {
+        static let configuration = CommandConfiguration(abstract: "Paste the system clipboard into a session (like ⌘V).")
+        @OptionGroup var target: TargetOptions
+        @OptionGroup var options: ClientOptions
+
+        func makeRequest() throws -> ControlRequest {
+            ControlRequest(cmd: .sessionPaste, target: target.target, args: options.withWindow())
+        }
+    }
+
+    struct SelectAll: RequestCommand {
+        static let configuration = CommandConfiguration(commandName: "select-all",
+                                                        abstract: "Select a session's entire terminal buffer (like ⌘A).")
+        @OptionGroup var target: TargetOptions
+        @OptionGroup var options: ClientOptions
+
+        func makeRequest() throws -> ControlRequest {
+            ControlRequest(cmd: .sessionSelectAll, target: target.target, args: options.withWindow())
+        }
+    }
+
     struct Text: RequestCommand {
         static let configuration = CommandConfiguration(abstract: "Print a session's terminal buffer as plain text (does not touch the system clipboard).")
         @Flag(name: .long, help: "Read the full screen + scrollback instead of just the visible screen.") var all = false
@@ -331,6 +361,16 @@ struct Session: ParsableCommand {
 
         func makeRequest() throws -> ControlRequest {
             ControlRequest(cmd: .sessionFlag, target: target.target, args: options.withWindow(ControlArgs(mode: mode)))
+        }
+    }
+
+    struct Seen: RequestCommand {
+        static let configuration = CommandConfiguration(abstract: "Clear a session's unseen-notification badge without changing the selection or focus (idempotent).")
+        @OptionGroup var target: TargetOptions
+        @OptionGroup var options: ClientOptions
+
+        func makeRequest() throws -> ControlRequest {
+            ControlRequest(cmd: .sessionSeen, target: target.target, args: options.withWindow())
         }
     }
 
@@ -464,8 +504,8 @@ struct Session: ParsableCommand {
 
     struct Overlay: ParsableCommand {
         static let configuration = CommandConfiguration(
-            abstract: "Open or close an ephemeral overlay terminal on a session.",
-            subcommands: [Open.self, Close.self, Result.self]
+            abstract: "Open, resize, or close an ephemeral overlay terminal on a session.",
+            subcommands: [Open.self, Close.self, Resize.self, Result.self]
         )
 
         struct Open: RequestCommand {
@@ -538,6 +578,29 @@ struct Session: ParsableCommand {
 
             func makeRequest() throws -> ControlRequest {
                 ControlRequest(cmd: .sessionOverlayClose, target: target.target, args: options.withWindow())
+            }
+        }
+
+        struct Resize: RequestCommand {
+            static let configuration = CommandConfiguration(abstract: "Resize an open overlay: floating at a percent, or back to full-pane.")
+            @Option(name: .long, help: "Resize to a floating, framed panel at PERCENT (1-100) of the pane.") var sizePercent: Int?
+            @Flag(name: .long, help: "Resize to full-pane (translucent, hides the session).") var full = false
+            @OptionGroup var target: TargetOptions
+            @OptionGroup var options: ClientOptions
+
+            // require exactly one of --size-percent / --full at parse time (before any connection), so it is a
+            // clean usage error and unit-testable without a socket; the dispatcher re-checks the same rules.
+            func validate() throws {
+                if full && sizePercent != nil { throw ValidationError("--full cannot be combined with --size-percent") }
+                if !full && sizePercent == nil { throw ValidationError("provide --size-percent PERCENT or --full") }
+                if let sizePercent, !(1...100).contains(sizePercent) {
+                    throw ValidationError("--size-percent must be between 1 and 100")
+                }
+            }
+
+            func makeRequest() throws -> ControlRequest {
+                ControlRequest(cmd: .sessionOverlayResize, target: target.target,
+                               args: options.withWindow(ControlArgs(sizePercent: sizePercent, full: full ? true : nil)))
             }
         }
 

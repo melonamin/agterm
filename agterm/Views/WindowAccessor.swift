@@ -127,7 +127,7 @@ struct WindowAccessor: NSViewRepresentable {
             let frontmostNames: Set<NSNotification.Name> = [NSWindow.didBecomeKeyNotification, NSWindow.didBecomeMainNotification]
             for name in [NSWindow.didBecomeKeyNotification, NSWindow.didBecomeMainNotification,
                          NSWindow.didResignKeyNotification, NSWindow.didResignMainNotification,
-                         NSWindow.didExitFullScreenNotification] {
+                         NSWindow.didEnterFullScreenNotification, NSWindow.didExitFullScreenNotification] {
                 // the observer block is @Sendable, so it must not touch main-actor state
                 // directly; hop through DispatchQueue.main like the re-applies above.
                 let token = NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [windowID] notification in
@@ -151,6 +151,7 @@ struct WindowAccessor: NSViewRepresentable {
                         UserDefaults.standard.set(NSStringFromRect(window.frame), forKey: TitleProbeView.frameKey(windowID))
                     }
                     WindowRegistry.shared.unregister(windowID)
+                    store.finalizeAllPendingCloses()
                     // flush cwd drift since the last structural mutation before dropping the store —
                     // AppStore doesn't save on a live `cd`, so a closed-then-reopened window would
                     // otherwise load a stale snapshot. Skip it when the window is no longer open in the
@@ -230,7 +231,23 @@ struct WindowAccessor: NSViewRepresentable {
             guard let saved = UserDefaults.standard.string(forKey: Self.frameKey(windowID)) else { return }
             let frame = NSRectFromString(saved)
             guard frame.width > 0, frame.height > 0 else { return }
-            window.setFrame(frame, display: true)
+            window.setFrame(Self.constrainedRestoredFrame(frame, for: window), display: true)
+        }
+
+        /// Normalize a persisted frame before restore. A saved `NSRect` may come from a display that is
+        /// no longer attached; applying it directly can put the relaunched window entirely off-screen.
+        /// Keep the saved size/position when possible, but fully contain it on a current screen.
+        private static func constrainedRestoredFrame(_ frame: NSRect, for window: NSWindow) -> NSRect {
+            let screens = NSScreen.screens
+            guard !screens.isEmpty, let fallback = window.screen ?? NSScreen.main ?? screens.first else { return frame }
+            let displayFrames = screens.map { WindowGeometry.Rect($0.frame) }
+            let fallbackIndex = screens.firstIndex(of: fallback) ?? 0
+            let displayIndex = WindowGeometry.bestDisplayIndex(for: WindowGeometry.Rect(frame), among: displayFrames) ?? fallbackIndex
+            let displayFrame = WindowGeometry.Rect(screens[displayIndex].visibleFrame)
+            let constrained = WindowGeometry.constrain(frame: WindowGeometry.Rect(frame),
+                                                       min: WindowGeometry.Size(window.minSize),
+                                                       displayFrame: displayFrame)
+            return constrained.nsRect
         }
 
         /// Installs (or re-asserts) the confirm-before-close proxy as the window's delegate, chaining to
@@ -282,8 +299,27 @@ struct WindowAccessor: NSViewRepresentable {
                 ?? NSColor(srgbRed: 0.157, green: 0.173, blue: 0.204, alpha: 1)
             WindowAppearance.sync(window: window, background: background,
                                   chrome: .init(opacity: GhosttyApp.shared.windowOpacity,
-                                                blurRadius: GhosttyApp.shared.windowBlurRadius))
+                                                blurRadius: GhosttyApp.shared.windowBlurRadius,
+                                                toolbarMode: GhosttyApp.shared.toolbarMode))
         }
+    }
+}
+
+// CoreGraphics <-> host-free WindowGeometry conversions for restore-frame clamping. The arithmetic lives
+// in agtermCore so display-selection and off-screen restore edge cases stay unit-testable.
+private extension WindowGeometry.Size {
+    init(_ cg: CGSize) { self.init(width: Double(cg.width), height: Double(cg.height)) }
+}
+
+private extension WindowGeometry.Rect {
+    init(_ cg: CGRect) {
+        self.init(origin: WindowGeometry.Point(x: Double(cg.origin.x), y: Double(cg.origin.y)),
+                  size: WindowGeometry.Size(cg.size))
+    }
+
+    var nsRect: NSRect {
+        NSRect(x: CGFloat(origin.x), y: CGFloat(origin.y),
+               width: CGFloat(size.width), height: CGFloat(size.height))
     }
 }
 

@@ -9,12 +9,15 @@ extension AppStore {
     public func toggleSplit(_ sessionID: UUID) {
         guard let session = session(withID: sessionID) else { return }
         session.isSplit.toggle()
-        // opening marks the session as having a split and moves focus to the new (right) pane; hiding
-        // (toggling off) leaves `hasSplit` and `splitFocused` set so the split indicators persist and
-        // the focused pane is the one shown maximized. Only `closeSplit` clears them.
+        // opening a NEW split marks the session as having one and moves focus to the new (right) pane;
+        // RE-showing a hidden split preserves whichever pane was focused before it was hidden (so a
+        // hide/show round-trip, e.g. the tmux-style zoom script, doesn't jerk focus to the right pane).
+        // hiding (toggling off) leaves `hasSplit` and `splitFocused` set so the split indicators persist
+        // and the focused pane is the one shown maximized. Only `closeSplit` clears them.
         if session.isSplit {
+            let isNewSplit = !session.hasSplit
             session.hasSplit = true
-            session.splitFocused = true
+            if isNewSplit { session.splitFocused = true }
         }
         save()
     }
@@ -130,6 +133,17 @@ extension AppStore {
         session.overlaySizePercent = sizePercent.map { min(100, max(1, $0)) }
         session.overlayBackgroundColor = backgroundColor
         session.overlayActive = true
+        return true
+    }
+
+    /// Resizes an already-open overlay in place. `sizePercent` (clamped to 1...100) switches it to a
+    /// *floating* opaque framed panel at that percent of the pane with the session visible behind it;
+    /// nil switches it to the full-pane overlay that hides the session and draws translucent. The overlay
+    /// surface stays mounted (the detail pane hosts both variants in one place), so this only re-flows the
+    /// layout — the program keeps running, never re-spawns. No-op (returns false) with no overlay open.
+    @discardableResult public func resizeOverlay(_ sessionID: UUID, sizePercent: Int?) -> Bool {
+        guard let session = session(withID: sessionID), session.overlayActive else { return false }
+        session.overlaySizePercent = sizePercent.map { min(100, max(1, $0)) }
         return true
     }
 

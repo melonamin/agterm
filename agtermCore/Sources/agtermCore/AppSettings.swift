@@ -1,5 +1,17 @@
 import Foundation
 
+/// The window's custom titlebar row state: `normal` stacks the session name over the cwd subtitle,
+/// `compact` is a single short row, `hidden` drops the row and the traffic lights for a full-bleed
+/// terminal. Stored raw so an unknown future value decodes tolerantly (via `effectiveToolbarMode`)
+/// rather than failing the whole decode.
+///
+/// Top-level (unlike the nested sibling mode enums) because the app target references it as a bare `ToolbarMode`.
+public enum ToolbarMode: String, Codable, Sendable, CaseIterable {
+    case normal
+    case compact
+    case hidden
+}
+
 /// User-facing appearance settings, persisted independently of the workspace tree.
 ///
 /// Every field is optional: nil means "use the ghostty default", and a settings file written
@@ -65,12 +77,30 @@ public struct AppSettings: Codable, Equatable, Sendable {
     /// background); below 5 lightens it, above 5 darkens it.
     public static let defaultSidebarBackgroundShift = 5
 
+    /// The out-of-the-box sidebar row-text point size, used when `sidebarFontSize` is nil. Matches the
+    /// macOS `.body` text style (13pt) the sidebar rows used before the size became configurable, so a
+    /// fresh install renders exactly as it always did.
+    public static let defaultSidebarFontSize: Double = 13
+
+    /// The allowed sidebar row-text point-size range (the Settings stepper bounds). Kept modest so the
+    /// fixed-size row icons and status glyphs stay visually balanced against the text at either end.
+    public static let sidebarFontSizeRange: ClosedRange<Double> = 9 ... 20
+
     /// Terminal font family name (e.g. `SF Mono`), or nil for the ghostty default.
     public var fontFamily: String?
     /// Default terminal font size in points, or nil for the ghostty default.
     public var fontSize: Double?
-    /// ghostty theme name (e.g. `Adwaita Dark`), or nil for the ghostty default.
+    /// The ghostty `theme` value: a plain bundled name (e.g. `Adwaita Dark`), or nil for the ghostty
+    /// default. When `followSystemAppearance` is on this is the LIGHT-appearance slot; otherwise it is
+    /// the single theme, applied in both appearances.
     public var theme: String?
+    /// The DARK-appearance theme, used only when `followSystemAppearance` is on. nil = unset. Together
+    /// with `theme` it is emitted as ghostty's dual `theme = light:NAME,dark:NAME` conditional, which
+    /// libghostty resolves at runtime on a color-scheme change (agterm no longer picks the side).
+    public var darkTheme: String?
+    /// Whether the terminal follows the macOS Light/Dark appearance. nil/false = off (the default): a
+    /// single `theme` is emitted. On: `theme`/`darkTheme` are emitted as the raw dual conditional.
+    public var followSystemAppearance: Bool?
     /// Window background opacity in 0...1 (1 = fully opaque), or nil for opaque. Composited at the
     /// AppKit window level, NOT by the ghostty renderer: when < 1, `ghosttyConfigLines()` pins the
     /// renderer fully transparent so the window's tinted background is the single translucent layer
@@ -88,10 +118,15 @@ public struct AppSettings: Codable, Equatable, Sendable {
     /// unseen count keeps tracking, so turning it back on instantly shows the current counts.
     /// Distinct from `notificationsEnabled`, which gates the OS banner.
     public var notificationBadgeEnabled: Bool?
-    /// Whether the window uses the compact title bar (a single short row with smaller icons) instead
-    /// of the tall default that stacks the session name over the working-directory subtitle. nil
-    /// means the default (off). Applied at the AppKit window level, NOT a ghostty key; in compact
-    /// mode the cwd subtitle is dropped so the bar is a single line.
+    /// The custom titlebar row state, stored as a `ToolbarMode` RAW STRING (`normal`/`compact`/`hidden`) so an
+    /// unknown future value decodes tolerantly to the default (the AppSettings forward-compat rule) instead
+    /// of failing the whole decode and discarding every other setting; nil means the default (compact).
+    /// Resolved through `effectiveToolbarMode`, which also maps a legacy `compactToolbar`. Applied at the
+    /// AppKit window level, NOT a ghostty key. Writing a mode nils `compactToolbar`, so the legacy key evaporates.
+    public var toolbarMode: String?
+    /// Legacy decode shim for the pre-`toolbarMode` two-state toggle: false = the normal bar, true/nil = the
+    /// compact bar. Read only by `effectiveToolbarMode` when `toolbarMode` is unset; nilled on the next
+    /// mode write. Applied at the AppKit window level, NOT a ghostty key.
     public var compactToolbar: Bool?
     /// Hex colors (`#RRGGBB`) for the agent-status glyph's three states; nil for each means the system
     /// default (active = blue, blocked = amber, completed = green). Applied at the AppKit level when the
@@ -162,6 +197,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
     /// app-level behavior flag read on demand by `AppActions`, NOT a ghostty key — it never appears in
     /// `ghosttyConfigLines()`; the control channel's `session.close` closes without a prompt.
     public var confirmCloseSession: Bool?
+    /// Whether GUI closes keep a short undo grace period before final teardown. nil means the default
+    /// (on). When off, GUI closes are immediate but still enter File > Open Recent.
+    public var closeGraceUndoEnabled: Bool?
     /// The user-idle timeout that auto-follows the window's selection to the oldest blocked session, as an
     /// `AutoFollowAttention` raw value; nil means the default (`off` — disabled). An app-level per-window
     /// behavior value driving `AppStore`'s idle controller, NOT a ghostty key — it never appears in
@@ -171,10 +209,16 @@ public struct AppSettings: Codable, Equatable, Sendable {
     /// blocked one. nil/false means the default (off — auto-follow always pulls to blocked). Only meaningful
     /// when `autoFollowAttention` is set. An app-level flag, NOT a ghostty key.
     public var autoFollowStayOnActive: Bool?
+    /// The sidebar row-text point size, or nil for the default (`defaultSidebarFontSize`). The row height
+    /// scales with it (`sidebarRowHeight(fontSize:)`); the row icons and status glyphs keep their fixed
+    /// sizes. Applied at the AppKit level when the sidebar draws, NOT a ghostty key — it never appears in
+    /// `ghosttyConfigLines()`.
+    public var sidebarFontSize: Double?
 
     public init(fontFamily: String? = nil, fontSize: Double? = nil, theme: String? = nil,
+                darkTheme: String? = nil, followSystemAppearance: Bool? = nil,
                 backgroundOpacity: Double? = nil, backgroundBlur: Int? = nil, notificationsEnabled: Bool? = nil,
-                compactToolbar: Bool? = nil, notificationBadgeEnabled: Bool? = nil,
+                toolbarMode: String? = nil, compactToolbar: Bool? = nil, notificationBadgeEnabled: Bool? = nil,
                 activeStatusColorHex: String? = nil, blockedStatusColorHex: String? = nil,
                 completedStatusColorHex: String? = nil, configDirectory: String? = nil,
                 mouseScrollMultiplier: Double? = nil, inactivePaneMuteStrength: Int? = nil,
@@ -182,14 +226,18 @@ public struct AppSettings: Codable, Equatable, Sendable {
                 inheritGlobalGhosttyConfig: Bool? = nil, attentionButtonEnabled: Bool? = nil,
                 blockedStatusSoundName: String? = nil, rightClickPaste: Bool? = nil,
                 newSessionDirectory: String? = nil, newSessionCustomDirectory: String? = nil,
-                confirmCloseSession: Bool? = nil, autoFollowAttention: String? = nil,
-                autoFollowStayOnActive: Bool? = nil) {
+                confirmCloseSession: Bool? = nil, closeGraceUndoEnabled: Bool? = nil,
+                autoFollowAttention: String? = nil,
+                autoFollowStayOnActive: Bool? = nil, sidebarFontSize: Double? = nil) {
         self.fontFamily = fontFamily
         self.fontSize = fontSize
         self.theme = theme
+        self.darkTheme = darkTheme
+        self.followSystemAppearance = followSystemAppearance
         self.backgroundOpacity = backgroundOpacity
         self.backgroundBlur = backgroundBlur
         self.notificationsEnabled = notificationsEnabled
+        self.toolbarMode = toolbarMode
         self.compactToolbar = compactToolbar
         self.notificationBadgeEnabled = notificationBadgeEnabled
         self.activeStatusColorHex = activeStatusColorHex
@@ -207,8 +255,18 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.newSessionDirectory = newSessionDirectory
         self.newSessionCustomDirectory = newSessionCustomDirectory
         self.confirmCloseSession = confirmCloseSession
+        self.closeGraceUndoEnabled = closeGraceUndoEnabled
         self.autoFollowAttention = autoFollowAttention
         self.autoFollowStayOnActive = autoFollowStayOnActive
+        self.sidebarFontSize = sidebarFontSize
+    }
+
+    /// The resolved titlebar row state: the explicit `toolbarMode` when set to a KNOWN raw value, else the
+    /// legacy `compactToolbar` mapping (`false` = `.normal`, `true`/nil = `.compact`). An unknown/nil raw value
+    /// falls through to that default the same way, so a future-written mode never fails the read. The single
+    /// read point the app target uses, so callers never touch the raw shim.
+    public var effectiveToolbarMode: ToolbarMode {
+        toolbarMode.flatMap(ToolbarMode.init(rawValue:)) ?? (compactToolbar == false ? .normal : .compact)
     }
 
     /// The working directory a new session should open in, resolving the `newSessionDirectory` mode
@@ -246,6 +304,27 @@ public struct AppSettings: Codable, Equatable, Sendable {
         Double(min(10, max(0, strength)) - 5) * 0.06
     }
 
+    /// The clamped sidebar row-text point size for a raw value: bounded to `sidebarFontSizeRange` so a
+    /// stray persisted or out-of-range value can't produce a degenerate row.
+    public static func clampSidebarFontSize(_ size: Double) -> Double {
+        min(sidebarFontSizeRange.upperBound, max(sidebarFontSizeRange.lowerBound, size))
+    }
+
+    /// The outline row height for a given sidebar font size: the clamped point size plus a fixed 15pt of
+    /// vertical padding, so the default 13pt maps to the historical 28pt row and larger text gets a
+    /// proportionally taller row. The row icon and status glyph keep their fixed sizes.
+    public static func sidebarRowHeight(fontSize: Double) -> Double {
+        clampSidebarFontSize(fontSize).rounded() + 15
+    }
+
+    /// The theme name that renders for the given appearance: when following, the dark slot in dark mode
+    /// (falling back to `theme`) and `theme` in light mode; otherwise the plain `theme`. Used only by the
+    /// theme-palette badge/selection (emission composes the raw dual and lets ghostty pick the side).
+    public func activeTheme(isDark: Bool) -> String? {
+        guard followSystemAppearance == true else { return theme }
+        return isDark ? (darkTheme ?? theme) : theme
+    }
+
     /// The ghostty config lines for the set fields, one `key = value` per line, suitable for a
     /// file loaded via `ghostty_config_load_file`. Unset (or blank) fields are omitted. Values are
     /// written raw — ghostty takes the whole line remainder as the value, so names with spaces
@@ -254,7 +333,17 @@ public struct AppSettings: Codable, Equatable, Sendable {
         var lines: [String] = []
         if let fontFamily, !fontFamily.isEmpty { lines.append("font-family = \(fontFamily)") }
         if let fontSize { lines.append("font-size = \(Self.format(fontSize))") }
-        if let theme, !theme.isEmpty { lines.append("theme = \(theme)") }
+        // theme: when following the macOS appearance, emit ghostty's dual conditional RAW and let
+        // libghostty resolve the active side on a color-scheme change (it records the new state and asks
+        // the host to re-feed the config, which the reload path does). Otherwise emit the single theme.
+        // No appearance input here — ghostty owns the switch.
+        let light = theme.flatMap { $0.isEmpty ? nil : $0 }
+        let dark = darkTheme.flatMap { $0.isEmpty ? nil : $0 }
+        if followSystemAppearance == true, let light, let dark {
+            lines.append("theme = light:\(light),dark:\(dark)")
+        } else if let single = light ?? dark {
+            lines.append("theme = \(single)")
+        }
         // a translucent window composites its tint at the AppKit level, so the renderer must draw a
         // fully transparent terminal — else the surface and the window stack two tints. At full
         // opacity (or unset) ghostty paints its own background as usual and these are omitted.

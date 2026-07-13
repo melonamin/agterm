@@ -13,6 +13,11 @@ struct WindowGeometryTests {
         #expect(point.y == y)
     }
 
+    private func expectRect(_ rect: WindowGeometry.Rect, _ x: Double, _ y: Double, _ width: Double, _ height: Double) {
+        expectPoint(rect.origin, x, y)
+        expectSize(rect.size, width, height)
+    }
+
     private func display() -> WindowGeometry.Rect {
         WindowGeometry.Rect(origin: WindowGeometry.Point(x: 0, y: 0),
                             size: WindowGeometry.Size(width: 1920, height: 1080))
@@ -79,5 +84,65 @@ struct WindowGeometryTests {
                                                 displayFrame: display())
         // maxY = 1080 - margin; x stays in range and is unchanged.
         expectPoint(result, 100, 1080 - WindowGeometry.visibleMargin)
+    }
+
+    @Test func bestDisplayIndexChoosesLargestOverlapAcrossDisplays() {
+        let displays = [
+            WindowGeometry.Rect(origin: WindowGeometry.Point(x: 0, y: 0),
+                                size: WindowGeometry.Size(width: 1920, height: 1080)),
+            WindowGeometry.Rect(origin: WindowGeometry.Point(x: 1920, y: 0),
+                                size: WindowGeometry.Size(width: 1920, height: 1080))
+        ]
+        let frame = WindowGeometry.Rect(origin: WindowGeometry.Point(x: 1800, y: 100),
+                                        size: WindowGeometry.Size(width: 400, height: 500))
+
+        #expect(WindowGeometry.bestDisplayIndex(for: frame, among: displays) == 1)
+    }
+
+    @Test func bestDisplayIndexReturnsNilWhenFrameOverlapsNoDisplay() {
+        let frame = WindowGeometry.Rect(origin: WindowGeometry.Point(x: 5000, y: 100),
+                                        size: WindowGeometry.Size(width: 800, height: 600))
+
+        #expect(WindowGeometry.bestDisplayIndex(for: frame, among: [display()]) == nil)
+    }
+
+    @Test func constrainShrinksOversizedFrameToDisplay() {
+        let frame = WindowGeometry.Rect(origin: WindowGeometry.Point(x: 100, y: 100),
+                                        size: WindowGeometry.Size(width: 5000, height: 4000))
+        let result = WindowGeometry.constrain(frame: frame,
+                                              min: WindowGeometry.Size(width: 640, height: 400),
+                                              displayFrame: display())
+
+        expectRect(result, 0, 0, 1920, 1080)
+    }
+
+    @Test func constrainFullyContainsOffScreenRightFrame() {
+        let frame = WindowGeometry.Rect(origin: WindowGeometry.Point(x: 5000, y: 100),
+                                        size: WindowGeometry.Size(width: 800, height: 600))
+        let result = WindowGeometry.constrain(frame: frame,
+                                              min: WindowGeometry.Size(width: 640, height: 400),
+                                              displayFrame: display())
+
+        expectRect(result, 1920 - 800, 100, 800, 600)
+    }
+
+    @Test func constrainFullyContainsFrameAboveDisplaySoTitlebarIsReachable() {
+        let frame = WindowGeometry.Rect(origin: WindowGeometry.Point(x: 100, y: 5000),
+                                        size: WindowGeometry.Size(width: 800, height: 600))
+        let result = WindowGeometry.constrain(frame: frame,
+                                              min: WindowGeometry.Size(width: 640, height: 400),
+                                              displayFrame: display())
+
+        expectRect(result, 100, 1080 - 600, 800, 600)
+    }
+
+    @Test func constrainClampsOriginAgainstShrunkOversizedFrame() {
+        let frame = WindowGeometry.Rect(origin: WindowGeometry.Point(x: 5000, y: 100),
+                                        size: WindowGeometry.Size(width: 5000, height: 4000))
+        let result = WindowGeometry.constrain(frame: frame,
+                                              min: WindowGeometry.Size(width: 640, height: 400),
+                                              displayFrame: display())
+
+        expectRect(result, 0, 0, 1920, 1080)
     }
 }

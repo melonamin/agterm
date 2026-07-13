@@ -60,14 +60,45 @@ shell's PATH, so a bare Homebrew or other non-default binary isn't found. Fix: g
 (`/opt/homebrew/bin/htop`) or wrap in a login shell (`zsh -lc 'htop'`). Any OTHER exit code just means
 the program ran and exited on its own — the overlay/session closes when its command finishes, by design.
 
-⌘C/⌘V copy/paste on any layout by default — agterm's bundled ghostty defaults bind them to the physical
-key POSITIONS (`super+key_c`/`super+key_v`), matched by keycode regardless of the character the layout
-prints. (ghostty's own `super+c`/`super+v` match the produced CHARACTER, so they miss on a Russian/Greek/
-etc. layout where the physical V key yields `м`.) To remap any shortcut: a physical key name (`key_c`,
-`key_v`, …) matches by position on any layout; a bare letter (`c`, `v`) matches the produced character.
-A Dvorak/Colemak user who wants ⌘C/⌘V at their own letter positions overrides in
-`~/.config/agterm/ghostty.conf` (`super+key_c=unbind` + `super+c=copy_to_clipboard`, same for `v`), then
-`agtermctl config reload`.
+⌘C/⌘V/⌘A copy/paste/select-all on any layout by default, via two layers.
+
+The **Edit menu** owns them first: its stock Copy/Paste/Select All items carry ⌘C/⌘V/⌘A as menu key
+equivalents, which AppKit matches against the character the layout produces. An enabled item consumes the
+key before the terminal sees it. The items enable only when the terminal can service them — Copy needs a
+selection, Paste needs something pasteable on the clipboard (text, or a file/web URL, which pastes as a
+shell-escaped path), Select All needs a live surface. Cut stays disabled for the terminal (it still works in
+a text field, such as the inline rename or a palette's search box). Undo and Redo are not in the menu at all:
+agterm has no undo, and ⌘Z belongs to File ▸ Reopen Closed Item. Because these are standard menu shortcuts,
+⌘C/⌘V/⌘A are NOT rebindable through `ghostty.conf`.
+
+agterm's bundled ghostty defaults are the **fallback**, binding all three to the physical key POSITIONS
+(`super+key_c`/`super+key_v`/`super+key_a`), matched by keycode regardless of the character the layout
+prints. They fire whenever the menu equivalent does not: on a Russian/Greek/etc. layout the physical C key
+yields `с`, so the menu's ⌘C never matches and the keycode bind runs instead; likewise a ⌘C with no
+selection leaves the menu item disabled, so the key falls through (and ghostty's `performable:` prefix makes
+it a no-op). This is why copy, paste, and select-all all keep working on a non-Latin layout. (ghostty's own
+`super+c`/`super+v`/`super+a` match the produced CHARACTER, so alone they would miss there — `super+key_a`
+in particular exists because without it ⌘A would silently do nothing on a Cyrillic layout.)
+
+To remap a shortcut ghostty still owns: a physical key name (`key_c`, `key_v`, …) matches by position on
+any layout; a bare letter (`c`, `v`) matches the produced character. Edit `~/.config/agterm/ghostty.conf`,
+then `agtermctl config reload`.
+
+### "The agent-status glyph updates the wrong session"
+
+One session's glyph blinks/changes while the work is happening in a DIFFERENT session — typically when
+the agents run inside tmux (or a tmux-backed session manager like agent-deck). Cause: the working
+process inherited another session's `AGTERM_SESSION_ID`, and the agent-status hook targets whatever id
+it finds in its environment. The usual carrier is a long-lived daemon started from inside an agterm
+session — a tmux server captures the spawning shell's `AGTERM_*` into its GLOBAL environment
+(`tmux show-environment -g | grep AGTERM`), and every pane created on that server inherits it, no
+matter which client attaches. Diagnose: find the agent's pid and check its real environment —
+`ps eww <pid> | tr ' ' '\n' | grep AGTERM_SESSION_ID` — if the id is not the session the process
+lives in, it leaked. Fix a poisoned tmux server without restarting it:
+`for v in AGTERM_ENABLED AGTERM_PANE AGTERM_SESSION_ID AGTERM_SOCKET AGTERM_WINDOW_ID AGTERM_WORKSPACE_ID; do tmux set-environment -g -r "$v"; done`,
+then restart the affected panes/processes (a respawn is enough; existing processes keep their
+inherited copy). Prevent it: start daemons and session managers with the variables scrubbed
+(`env -u AGTERM_SESSION_ID … <cmd>`, full list in SKILL.md), or from a shell outside agterm.
 
 ### "Claude Code's question/permission prompt is unresponsive after switching apps"
 

@@ -78,6 +78,10 @@ public final class WindowLibrary {
     /// The ordered window metadata, for the menu/palette.
     public private(set) var windows: [WindowInfo]
 
+    /// App-wide recent closed sessions/workspaces, newest first. Reopening inserts the saved item into
+    /// the active window; this list is independent of window reopen semantics.
+    public private(set) var recentClosedItems: [RecentClosedItem]
+
     /// The id of the frontmost on-screen window, mirrored into the index on change.
     public var frontmostWindowID: UUID?
 
@@ -88,6 +92,7 @@ public final class WindowLibrary {
     /// The state directory (AGTERM_STATE_DIR-aware); the index lives here and per-window files in
     /// the `windows/` subdirectory.
     @ObservationIgnored private let directory: URL
+    @ObservationIgnored private let recentClosedStore: RecentClosedStore
 
     /// Set once the launch reopen-all has run, so the scene `.task` (which fires per window) drives
     /// it exactly once. `@ObservationIgnored`: a launch-flow latch, not view state.
@@ -120,8 +125,10 @@ public final class WindowLibrary {
     /// window set is always valid and non-empty.
     public init(directory: URL = PersistenceStore.defaultDirectory) {
         self.directory = directory
+        self.recentClosedStore = RecentClosedStore(directory: directory)
         self.stores = [:]
         self.windows = []
+        self.recentClosedItems = recentClosedStore.load()
         self.frontmostWindowID = nil
         bootstrap()
     }
@@ -159,13 +166,23 @@ public final class WindowLibrary {
 
     /// The window set projected into the `window.list` control payload (id/name + open/active flags),
     /// in window order.
-    public func controlWindowNodes() -> [ControlWindowNode] {
+    /// The `geometry` closure supplies each open window's live on-screen frame; it is app-side (the NSWindow
+    /// handles live in `WindowRegistry`, not this host-free model), defaulting to nil so unit tests and any
+    /// non-AppKit caller get a geometry-free list.
+    public func controlWindowNodes(geometry: (WindowInfo.ID) -> ControlWindowFrame? = { _ in nil },
+                                   flags: (WindowInfo.ID) -> (fullscreen: Bool, zoomed: Bool)? = { _ in nil })
+        -> [ControlWindowNode] {
         let active = activeWindowID
         return windows.map {
-            // reach each open store for its auto-follow timeout (config, rarely changes — safe on the cached
-            // fast path); a closed window has no store and reports nil.
-            ControlWindowNode(id: $0.id.uuidString, name: $0.name, open: isOpen($0.id), active: $0.id == active,
-                              autoFollowMs: stores[$0.id]?.autoFollowMs)
+            // reach each open store for its auto-follow timeout + sidebar visibility (per-window state); a
+            // closed window has no store and reports nil for both. The frame + fullscreen/zoom flags come
+            // from the app-side closures (nil for a closed window with no NSWindow).
+            let live = flags($0.id)
+            return ControlWindowNode(id: $0.id.uuidString, name: $0.name, open: isOpen($0.id), active: $0.id == active,
+                                     autoFollowMs: stores[$0.id]?.autoFollowMs,
+                                     sidebarVisible: stores[$0.id]?.sidebarVisible,
+                                     geometry: geometry($0.id),
+                                     fullscreen: live?.fullscreen, zoomed: live?.zoomed)
         }
     }
 
@@ -299,7 +316,7 @@ public final class WindowLibrary {
     @discardableResult
     public func newWindow(name: String? = nil) -> WindowInfo {
         let info = WindowInfo(name: name?.trimmedOrNil ?? defaultWindowName)
-        let store = AppStore(persistence: persistenceStore(for: info.id))
+        let store = makeStore(persistence: persistenceStore(for: info.id))
         let workspace = store.addWorkspace(name: "workspace 1")
         store.addSession(toWorkspace: workspace.id, cwd: FileManager.default.homeDirectoryForCurrentUser.path)
         windows.append(info)
@@ -321,11 +338,35 @@ public final class WindowLibrary {
         guard windows.contains(where: { $0.id == id }) else { return nil }
         if let existing = stores[id] { return existing }
         let persistence = persistenceStore(for: id)
-        let store = AppStore(persistence: persistence)
+        let store = makeStore(persistence: persistence)
         store.restore(from: persistence.load())
         stores[id] = store
         saveIndex()
         return store
+    }
+
+    @discardableResult
+    public func reopenRecentClosed(_ itemID: UUID, into targetStore: AppStore? = nil) -> Bool {
+        refreshRecentClosedItems()
+        guard let item = recentClosedItems.first(where: { $0.id == itemID }),
+              let store = targetStore ?? activeStore,
+              store.restoreRecentClosed(item)
+        else { return false }
+        recentClosedStore.remove(itemID)
+        refreshRecentClosedItems()
+        return true
+    }
+
+    @discardableResult
+    public func reopenLatestRecentClosed(into targetStore: AppStore? = nil) -> Bool {
+        refreshRecentClosedItems()
+        guard let item = recentClosedItems.first else { return false }
+        return reopenRecentClosed(item.id, into: targetStore)
+    }
+
+    public func clearRecentClosedItems() {
+        recentClosedStore.clear()
+        refreshRecentClosedItems()
     }
 
     /// Closes a window: drops its store (marking it closed) and persists the index. The caller
@@ -426,6 +467,11 @@ public final class WindowLibrary {
         for store in stores.values { store.save() }
     }
 
+    /// Finalizes any grace-period session/workspace closes in open windows before a window/app teardown.
+    public func finalizeAllPendingCloses() {
+        for store in stores.values { store.finalizeAllPendingCloses() }
+    }
+
     /// Writes `windows.json`: the ordered window list (with each window's open flag) and the
     /// frontmost id. A write failure is logged and swallowed.
     public func saveIndex() {
@@ -523,7 +569,7 @@ public final class WindowLibrary {
         guard !snapshot.workspaces.isEmpty else { return false }
         // first window, so `defaultWindowName` yields "window 1" (windows is empty at this point).
         let info = WindowInfo(name: defaultWindowName)
-        let store = AppStore(persistence: persistenceStore(for: info.id))
+        let store = makeStore(persistence: persistenceStore(for: info.id))
         store.restore(from: snapshot)
         store.save()
         windows = [info]
@@ -543,6 +589,16 @@ public final class WindowLibrary {
     /// A `PersistenceStore` pointed at the window's `windows/<id>.json` file.
     private func persistenceStore(for id: UUID) -> PersistenceStore {
         PersistenceStore(directory: windowsDirectory, fileName: "\(id.uuidString).json")
+    }
+
+    private func makeStore(persistence: PersistenceStore) -> AppStore {
+        AppStore(persistence: persistence, recentClosedStore: recentClosedStore) { [weak self] in
+            self?.refreshRecentClosedItems()
+        }
+    }
+
+    private func refreshRecentClosedItems() {
+        recentClosedItems = recentClosedStore.load()
     }
 
     private func log(_ message: @autoclosure () -> String) {

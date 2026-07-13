@@ -6,7 +6,7 @@ Worked `agtermctl` examples. See `reference.md` for exact flags and return shape
 ## Inspect the current state
 
 ```bash
-agtermctl tree --json        # workspaces -> sessions, with active/split/overlay/scratch/flagged flags
+agtermctl tree --json        # workspaces -> sessions, active/split/overlay/scratch/flagged flags, surface ids
 agtermctl window list --json # windows, with open/active flags
 
 # what is each pane RUNNING right now (foreground argv; absent when at the shell prompt)
@@ -93,10 +93,18 @@ wherever the anchor lives, even in another workspace — in one shot, with no vi
 # move the current session to sit right after another (cross-workspace if the anchor is elsewhere)
 agtermctl session move --after 3f2a --target active
 agtermctl session move --before "$logs" --target "$server"
+
+# move several sessions together as one ordered block
+agtermctl session move "$ws" --target "$server" --target "$logs"
+agtermctl session move --after "$anchor" --target "$server" --target "$logs"
+
+# close several sessions with one grace-period undo
+agtermctl session close --target "$server" --target "$logs"
 ```
 
 `--after`/`--before` are mutually exclusive with each other, with `--to`, and with a destination
-workspace — the anchor already picks the workspace.
+workspace — the anchor already picks the workspace. Repeated `--target` is only for workspace and
+after/before placement, not `--to up|down|top|bottom`.
 
 ## Resize the split divider from a keybinding
 
@@ -138,6 +146,9 @@ agtermctl session overlay open "zsh -lc 'htop'" --target "$AGTERM_SESSION_ID" --
 agtermctl session overlay open "revdiff HEAD~3" --target "$AGTERM_SESSION_ID" --size-percent 80 --background-color "#2a1a3a"
 # switch the user to the target as it opens:
 agtermctl session overlay open "revdiff HEAD~3" --target "$AGTERM_SESSION_ID" --size-percent 80 --follow
+# resize the open overlay in place (the program keeps running): shrink to a floating panel, then back to full
+agtermctl session overlay resize --size-percent 60 --target "$AGTERM_SESSION_ID"
+agtermctl session overlay resize --full --target "$AGTERM_SESSION_ID"
 # ... later
 agtermctl session overlay close
 ```
@@ -211,6 +222,20 @@ agtermctl session scratch toggle
 agtermctl session scratch on --command "zsh -lc 'lazygit'"   # run a program instead of a shell (run-once); login-shell wrap so Homebrew's PATH is found (bare "lazygit" exits 127)
 ```
 
+## Drive the quick terminal
+
+The quick terminal is the window's throwaway overlay (not in the session tree). Show it, type into it,
+and read it back — the twins of `session type`/`session text`, but always the frontmost window's quick
+terminal (no `--target`/`--pane`).
+
+```bash
+agtermctl quick show                                 # drop the overlay over whatever is active
+agtermctl quick type 'ls -la'$'\n'                   # inject keystrokes (\n runs it)
+echo "some payload" | agtermctl quick type --stdin   # pipe stdin in (e.g. a paste helper)
+agtermctl quick text --all                           # read its screen + scrollback back
+agtermctl tree | jq .quickVisible                    # is it open right now?
+```
+
 ## Flag a working set and view just the flagged sessions
 
 Flag a few sessions across workspaces, then flip the sidebar to the flat flagged list (each row labeled
@@ -223,6 +248,19 @@ agtermctl sidebar mode flagged                            # show only the flagge
 agtermctl session go --to next                            # in flagged mode, nav steps the flagged set only
 agtermctl sidebar mode tree                               # back to the full tree
 agtermctl session flag clear                              # unflag everything in the window
+```
+
+## Acknowledge a driven session's notifications without stealing focus
+
+An orchestrator relaying a session's output elsewhere (Telegram, another agent) fires `notify` to signal
+"your turn", which raises the session's red unseen badge. Nothing normally clears that badge except
+visiting the session — which pulls the selection to it. `session seen` clears it in place, so the badge
+stays a real attention signal on the sessions a human tends while the driven ones stay clean.
+
+```bash
+agtermctl notify "your turn" --target "$SID"             # raises the unseen badge (body is positional)
+agtermctl tree --json | jq '.result.tree.workspaces[].sessions[] | {id, unseen}'  # read the counts
+agtermctl session seen --target "$SID"                   # clear it, selection/focus unchanged
 ```
 
 ## Focus a single workspace
@@ -256,6 +294,20 @@ agtermctl sidebar collapse --window "$AGTERM_WINDOW_ID"  # collapse a specific w
 ```bash
 sel=$(agtermctl session copy --json | jq -r '.result.text')
 agtermctl session type "$sel" --target "$other"
+```
+
+`session select-all` selects the whole buffer, then `session copy` reads it back (or use `session text --all`):
+
+```bash
+agtermctl session select-all --target "$other"
+buf=$(agtermctl session copy --target "$other" --json | jq -r '.result.text')
+```
+
+`session paste` pastes the system clipboard into a session — the socket analogue of ⌘V:
+
+```bash
+printf 'deploy staging' | pbcopy
+agtermctl session paste --target "$other"   # lands at the prompt, not submitted
 ```
 
 ## Read a session's buffer as text
@@ -340,6 +392,30 @@ agtermctl tree --json | jq -r '.result.tree.workspaces[].sessions[] | select(.st
 `--pane left` (or omitting it) is the main pane. Feed a keymap command's `$AGT_PANE` straight through
 (`session status blocked --pane "$AGT_PANE"`) to tag the exact pane a shortcut fired from.
 
+## Zoom a terminal surface by control id
+
+```bash
+# Fill the window with the active terminal surface; call again to leave zoom.
+agtermctl surface zoom
+
+# Zoom the active session's right split pane by id, even if the split is hidden.
+sid=${AGTERM_SESSION_ID:?}
+surface=$(agtermctl tree --json |
+  jq -r --arg sid "$sid" '.result.tree.workspaces[].sessions[]
+    | select(.id == $sid)
+    | .surfaces[]
+    | select(.kind == "right")
+    | .id')
+agtermctl surface zoom show --target "$surface"
+agtermctl surface zoom hide --target "$surface"
+
+# Read the current zoom back (the zoomed surface's control id; null when nothing is zoomed).
+agtermctl tree --json | jq -r '.result.tree.zoomedSurface'
+```
+
+`surface zoom` is not `window zoom`: it does not move/resize the macOS window and must not change split
+ratios, sidebar state, focus, or split/scratch visibility. Surface ids come from `tree --json`.
+
 ## Navigate and manage windows
 
 ```bash
@@ -349,6 +425,7 @@ w=$(agtermctl window new "scratch" --json | jq -r '.result.id')
 agtermctl window resize "$w" --width 1200 --height 800
 agtermctl window move "$w" --x 100 --y 100 --display 0
 agtermctl window zoom "$w"                 # maximize-to-screen toggle (call again to restore)
+agtermctl window fullscreen "$w"           # native macOS full screen toggle (⌃⌘F / green button)
 agtermctl window select "$w"
 ```
 
@@ -381,6 +458,12 @@ agtermctl theme list --json | jq -r '.result.themes[]'   # just the names
 agtermctl theme set "Dracula"                # set + persist it app-wide (unknown name errors)
 agtermctl theme set "agterm"                 # back to the app default theme
 agtermctl theme set                          # ghostty's built-in default (no theme)
+
+# follow the macOS Light/Dark appearance automatically — setting a dark theme starts tracking:
+agtermctl theme set --dark "agterm"          # light side seeds from the current theme
+agtermctl theme set "Builtin Light"          # while tracking, a name replaces the LIGHT side (pair kept)
+agtermctl theme list --json | jq '.result | {sync, light, dark}'   # inspect the sync state
+agtermctl theme set --dark none              # stop tracking; the light theme stays as the single theme
 ```
 
 ## Targeting another window's tree

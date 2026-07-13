@@ -1,3 +1,4 @@
+import AppKit
 import Darwin
 import XCTest
 
@@ -136,6 +137,33 @@ class ControlAPITestCase: XCTestCase {
         if let target { obj["target"] = target }
         let data = try! JSONSerialization.data(withJSONObject: obj)
         return String(data: data, encoding: .utf8)!
+    }
+
+    /// Seed the SYSTEM pasteboard for one test, restoring its FULL prior contents afterwards.
+    ///
+    /// `NSPasteboard.general` is a machine-wide resource the app process reads, so a test that seeds it must
+    /// put back exactly what the user had — every representation (RTF, image, file URL, custom UTIs), not
+    /// just `.string`, since `clearContents()` destroys them all. The restore rides `addTeardownBlock`, which
+    /// XCTest runs even when an assertion fails; a `defer` would not, because `continueAfterFailure = false`
+    /// unwinds through an Objective-C exception that skips Swift defer blocks. Pass an empty closure to seed
+    /// a deliberately EMPTY clipboard.
+    func seedPasteboard(_ seed: (NSPasteboard) -> Void) {
+        let pb = NSPasteboard.general
+        // deep-copy each item: the originals are invalidated by clearContents().
+        let saved: [NSPasteboardItem] = (pb.pasteboardItems ?? []).map { item in
+            let copy = NSPasteboardItem()
+            for type in item.types {
+                if let data = item.data(forType: type) { copy.setData(data, forType: type) }
+            }
+            return copy
+        }
+        addTeardownBlock {
+            let general = NSPasteboard.general
+            general.clearContents()
+            if !saved.isEmpty { general.writeObjects(saved) }
+        }
+        pb.clearContents()
+        seed(pb)
     }
 
     /// Polls `file` until its (trimmed) contents are non-empty, returning them, or nil on timeout.
@@ -291,6 +319,28 @@ class ControlAPITestCase: XCTestCase {
             guard let workspaces = obj["workspaces"] as? [[String: Any]] else { return nil }
             return workspaces.compactMap { $0["name"] as? String }
         }
+    }
+
+    /// The (single seeded workspace's) first session's persisted `fontSize` override, or nil when the
+    /// session has none (or the snapshot isn't readable yet).
+    func firstSessionFontSize() -> Double? {
+        guard let data = try? Data(contentsOf: stateDir.windowSnapshotFile()),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let workspaces = obj["workspaces"] as? [[String: Any]],
+              let sessions = workspaces.first?["sessions"] as? [[String: Any]]
+        else { return nil }
+        return sessions.first?["fontSize"] as? Double
+    }
+
+    /// Polls the hermetic snapshot file until the first session has a persisted `fontSize` override,
+    /// returning it, or nil on timeout (the `FontSizeUITests.pollFontSize` shape).
+    func pollFirstSessionFontSize(timeout: TimeInterval) -> Double? {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if let size = firstSessionFontSize() { return size }
+            usleep(200_000)
+        }
+        return firstSessionFontSize()
     }
 
     // MARK: - Socket client

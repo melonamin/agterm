@@ -129,8 +129,22 @@ struct CommandsTests {
         #expect(try request(["session", "close", "--target", "x"]) == ControlRequest(cmd: .sessionClose, target: "x"))
     }
 
+    @Test func sessionCloseMultipleTargets() throws {
+        let expected = ControlRequest(cmd: .sessionClose, target: "a", args: ControlArgs(targets: ["a", "b"]))
+        #expect(try request(["session", "close", "--target", "a", "--target", "b"]) == expected)
+    }
+
     @Test func sessionSelectDefaultsActive() throws {
         #expect(try request(["session", "select"]) == ControlRequest(cmd: .sessionSelect, target: "active"))
+    }
+
+    @Test func sessionSeenDefaultsActive() throws {
+        #expect(try request(["session", "seen"]) == ControlRequest(cmd: .sessionSeen, target: "active"))
+    }
+
+    @Test func sessionSeenTargetAndWindow() throws {
+        let expected = ControlRequest(cmd: .sessionSeen, target: "x", args: ControlArgs(window: "win"))
+        #expect(try request(["session", "seen", "--target", "x", "--window", "win"]) == expected)
     }
 
     @Test func sessionRename() throws {
@@ -141,6 +155,12 @@ struct CommandsTests {
     @Test func sessionMove() throws {
         let expected = ControlRequest(cmd: .sessionMove, target: "s1", args: ControlArgs(workspace: "ws2"))
         #expect(try request(["session", "move", "ws2", "--target", "s1"]) == expected)
+    }
+
+    @Test func sessionMoveMultipleTargetsToWorkspace() throws {
+        let expected = ControlRequest(cmd: .sessionMove, target: "s1",
+                                      args: ControlArgs(targets: ["s1", "s2"], workspace: "ws2"))
+        #expect(try request(["session", "move", "ws2", "--target", "s1", "--target", "s2"]) == expected)
     }
 
     @Test func sessionMoveReorder() throws {
@@ -158,9 +178,20 @@ struct CommandsTests {
         #expect(validationMessage(["session", "move", "ws2", "--to", "up"]) == "provide a destination workspace or --to, not both")
     }
 
+    @Test func sessionMoveRejectsMultipleTargetsWithReorder() {
+        #expect(validationMessage(["session", "move", "--to", "up", "--target", "s1", "--target", "s2"])
+            == "session.move --target can be repeated only with a workspace or --after/--before")
+    }
+
     @Test func sessionMoveAfter() throws {
         let expected = ControlRequest(cmd: .sessionMove, target: "s1", args: ControlArgs(after: "s2"))
         #expect(try request(["session", "move", "--after", "s2", "--target", "s1"]) == expected)
+    }
+
+    @Test func sessionMoveAfterMultipleTargets() throws {
+        let expected = ControlRequest(cmd: .sessionMove, target: "s1",
+                                      args: ControlArgs(targets: ["s1", "s2"], after: "s3"))
+        #expect(try request(["session", "move", "--after", "s3", "--target", "s1", "--target", "s2"]) == expected)
     }
 
     @Test func sessionMoveBefore() throws {
@@ -325,6 +356,22 @@ struct CommandsTests {
 
     @Test func sessionCopyWithTarget() throws {
         #expect(try request(["session", "copy", "--target", "9f3c"]) == ControlRequest(cmd: .sessionCopy, target: "9f3c"))
+    }
+
+    @Test func sessionPasteDefaultsActive() throws {
+        #expect(try request(["session", "paste"]) == ControlRequest(cmd: .sessionPaste, target: "active"))
+    }
+
+    @Test func sessionPasteWithTarget() throws {
+        #expect(try request(["session", "paste", "--target", "9f3c"]) == ControlRequest(cmd: .sessionPaste, target: "9f3c"))
+    }
+
+    @Test func sessionSelectAllDefaultsActive() throws {
+        #expect(try request(["session", "select-all"]) == ControlRequest(cmd: .sessionSelectAll, target: "active"))
+    }
+
+    @Test func sessionSelectAllWithTarget() throws {
+        #expect(try request(["session", "select-all", "--target", "9f3c"]) == ControlRequest(cmd: .sessionSelectAll, target: "9f3c"))
     }
 
     @Test func sessionTextDefaultsActive() throws {
@@ -578,6 +625,26 @@ struct CommandsTests {
             == ControlRequest(cmd: .sessionOverlayResult, target: "9f3c"))
     }
 
+    @Test func sessionOverlayResizeWithSizePercent() throws {
+        let expected = ControlRequest(cmd: .sessionOverlayResize, target: "9f3c", args: ControlArgs(sizePercent: 40))
+        #expect(try request(["session", "overlay", "resize", "--size-percent", "40", "--target", "9f3c"]) == expected)
+    }
+
+    @Test func sessionOverlayResizeFull() throws {
+        let expected = ControlRequest(cmd: .sessionOverlayResize, target: "active", args: ControlArgs(full: true))
+        #expect(try request(["session", "overlay", "resize", "--full"]) == expected)
+    }
+
+    @Test func sessionOverlayResizeRejectsBadArgs() {
+        // validate() enforces exactly-one-of --size-percent/--full and the 1...100 range at parse time.
+        #expect(throws: (any Error).self) { try Agtermctl.parseAsRoot(["session", "overlay", "resize"]) }
+        #expect(throws: (any Error).self) {
+            try Agtermctl.parseAsRoot(["session", "overlay", "resize", "--full", "--size-percent", "50"])
+        }
+        #expect(throws: (any Error).self) { try Agtermctl.parseAsRoot(["session", "overlay", "resize", "--size-percent", "150"]) }
+        #expect(throws: (any Error).self) { try Agtermctl.parseAsRoot(["session", "overlay", "resize", "--size-percent", "0"]) }
+    }
+
     @Test func sessionOverlayBlockRejectsWait() {
         // validate() enforces the mutually-exclusive flags at parse time (before any connection).
         #expect(throws: (any Error).self) {
@@ -591,6 +658,60 @@ struct CommandsTests {
 
     @Test func quickShow() throws {
         #expect(try request(["quick", "show"]) == ControlRequest(cmd: .quick, args: ControlArgs(mode: "show")))
+    }
+
+    @Test func quickTypeWithText() throws {
+        #expect(try request(["quick", "type", "ls\n"]) == ControlRequest(cmd: .quickType, args: ControlArgs(text: "ls\n")))
+    }
+
+    @Test func quickTypeStdinFlagParses() throws {
+        // the --stdin flag parses (we don't call makeRequest here — it would block reading stdin).
+        let command = try Quick.TypeText.parse(["--stdin"])
+        #expect(command.stdin)
+        #expect(command.text == nil)
+    }
+
+    @Test func quickTypeWithoutTextOrStdinThrows() {
+        // "provide TEXT or --stdin" is raised in makeRequest (not validate), so it's reached via request(),
+        // which calls makeRequest, rather than parseAsRoot alone.
+        #expect(throws: (any Error).self) { try request(["quick", "type"]) }
+    }
+
+    @Test func quickTextDefaultsToVisibleScreen() throws {
+        #expect(try request(["quick", "text"]) == ControlRequest(cmd: .quickText, args: ControlArgs()))
+    }
+
+    @Test func quickTextWithAll() throws {
+        #expect(try request(["quick", "text", "--all"]) == ControlRequest(cmd: .quickText, args: ControlArgs(all: true)))
+    }
+
+    @Test func quickTextWithLines() throws {
+        #expect(try request(["quick", "text", "--lines", "50"]) == ControlRequest(cmd: .quickText, args: ControlArgs(lines: 50)))
+    }
+
+    @Test func quickTextRejectsAllWithLines() {
+        #expect(validationMessage(["quick", "text", "--all", "--lines", "10"]) == "use either --all or --lines, not both")
+    }
+
+    @Test func quickTextRejectsZeroLines() {
+        #expect(validationMessage(["quick", "text", "--lines", "0"]) == "--lines must be greater than 0")
+    }
+
+    @Test func surfaceZoomDefaultsToggleActive() throws {
+        #expect(try request(["surface", "zoom"]) ==
+            ControlRequest(cmd: .surfaceZoom, target: "active", args: ControlArgs(mode: "toggle")))
+    }
+
+    @Test func surfaceZoomTargetsSurfaceID() throws {
+        let id = "surface:5E5B1C5B-75C5-49E6-8806-2C61D8D6BBA9:right"
+
+        #expect(try request(["surface", "zoom", "show", "--target", id]) ==
+            ControlRequest(cmd: .surfaceZoom, target: id, args: ControlArgs(mode: "show")))
+    }
+
+    @Test func surfaceZoomTargetsWindow() throws {
+        #expect(try request(["surface", "zoom", "hide", "--window", "win"]) ==
+            ControlRequest(cmd: .surfaceZoom, target: "active", args: ControlArgs(mode: "hide", window: "win")))
     }
 
     @Test func sidebarDefaultsToggle() throws {
@@ -660,6 +781,25 @@ struct CommandsTests {
         #expect(try request(["font", "reset"]) == ControlRequest(cmd: .fontReset, target: "active"))
     }
 
+    @Test func fontIncWithPane() throws {
+        #expect(try request(["font", "inc", "--pane", "right", "--target", "s1"])
+            == ControlRequest(cmd: .fontInc, target: "s1", args: ControlArgs(pane: "right")))
+    }
+
+    @Test func fontDecWithPaneScratch() throws {
+        #expect(try request(["font", "dec", "--pane", "scratch"])
+            == ControlRequest(cmd: .fontDec, target: "active", args: ControlArgs(pane: "scratch")))
+    }
+
+    @Test func fontResetWithPaneAndWindow() throws {
+        #expect(try request(["font", "reset", "--pane", "left", "--window", "w1"])
+            == ControlRequest(cmd: .fontReset, target: "active", args: ControlArgs(window: "w1", pane: "left")))
+    }
+
+    @Test func fontRejectsInvalidPane() throws {
+        #expect(validationMessage(["font", "inc", "--pane", "other"]) == "--pane must be left, right, or scratch")
+    }
+
     @Test func keymapReload() throws {
         #expect(try request(["keymap", "reload"]) == ControlRequest(cmd: .keymapReload))
     }
@@ -686,6 +826,29 @@ struct CommandsTests {
 
     @Test func themeSetWithoutNameSelectsDefault() throws {
         #expect(try request(["theme", "set"]) == ControlRequest(cmd: .themeSet, args: ControlArgs(name: nil)))
+    }
+
+    @Test func themeSetSyncWithBothSides() throws {
+        #expect(try request(["theme", "set", "--light", "Builtin Light", "--dark", "agterm"])
+            == ControlRequest(cmd: .themeSet, args: ControlArgs(light: "Builtin Light", dark: "agterm")))
+    }
+
+    @Test func themeSetOneSlotAlone() throws {
+        // theme.set is per-slot: either side alone is a valid request (the server keeps/seeds the other).
+        #expect(try request(["theme", "set", "--light", "Builtin Light"])
+            == ControlRequest(cmd: .themeSet, args: ControlArgs(light: "Builtin Light")))
+        #expect(try request(["theme", "set", "--dark", "Nord"])
+            == ControlRequest(cmd: .themeSet, args: ControlArgs(dark: "Nord")))
+        // the reserved 'none' keyword (clear the dark slot) travels as a plain value.
+        #expect(try request(["theme", "set", "--dark", "none"])
+            == ControlRequest(cmd: .themeSet, args: ControlArgs(dark: "none")))
+    }
+
+    @Test func themeSetRejectsNamePlusLight() {
+        // a positional NAME plus --light targets the same slot twice — validate() rejects it.
+        #expect(throws: (any Error).self) {
+            try Agtermctl.parseAsRoot(["theme", "set", "Dracula", "--light", "Builtin Light"])
+        }
     }
 
     @Test func themeList() throws {
@@ -750,6 +913,18 @@ struct CommandsTests {
     @Test func windowMoveDefaultsActiveAndCurrentDisplay() throws {
         let expected = ControlRequest(cmd: .windowMove, target: "active", args: ControlArgs(x: 100, y: 50))
         #expect(try request(["window", "move", "--x", "100", "--y", "50"]) == expected)
+    }
+
+    @Test func windowZoom() throws {
+        #expect(try request(["window", "zoom", "9f3c"]) == ControlRequest(cmd: .windowZoom, target: "9f3c"))
+    }
+
+    @Test func windowFullscreen() throws {
+        #expect(try request(["window", "fullscreen", "9f3c"]) == ControlRequest(cmd: .windowFullscreen, target: "9f3c"))
+    }
+
+    @Test func windowFullscreenDefaultsActive() throws {
+        #expect(try request(["window", "fullscreen"]) == ControlRequest(cmd: .windowFullscreen, target: "active"))
     }
 
     @Test func windowDeleteDefaultsActive() throws {

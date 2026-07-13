@@ -13,6 +13,7 @@ struct BuiltinActionTests {
         // spot-check the documented raw names so a rename can't drift silently.
         #expect(BuiltinAction.newWindow.rawValue == "new_window")
         #expect(BuiltinAction.toggleSplit.rawValue == "toggle_split")
+        #expect(BuiltinAction.toggleTerminalZoom.rawValue == "toggle_terminal_zoom")
         #expect(BuiltinAction.toggleSearch.rawValue == "toggle_search")
         #expect(BuiltinAction.commandPalette.rawValue == "command_palette")
         #expect(BuiltinAction.customCommandPalette.rawValue == "custom_command_palette")
@@ -23,7 +24,10 @@ struct BuiltinActionTests {
         #expect(BuiltinAction.toggleFlag.rawValue == "toggle_flag")
         #expect(BuiltinAction.focusWorkspace.rawValue == "focus_workspace")
         #expect(BuiltinAction.showAttention.rawValue == "show_attention")
-        #expect(BuiltinAction.allCases.count == 35)
+        #expect(BuiltinAction.reopenRecent.rawValue == "reopen_recent")
+        #expect(BuiltinAction.undoClose.rawValue == "undo_close")
+        #expect(BuiltinAction.toggleFullscreen.rawValue == "toggle_fullscreen")
+        #expect(BuiltinAction.allCases.count == 39)
     }
 
     @Test func rejectsUnknownName() {
@@ -62,14 +66,18 @@ struct BuiltinActionTests {
             .openDirectory: Chord(mods: [.command], key: "o"),
             .renameSession: nil,
             .closeSession: Chord(mods: [.command], key: "w"),
+            .reopenRecent: Chord(mods: [.command, .shift], key: "t"),
+            .undoClose: Chord(mods: [.command], key: "z"),
             .clearStatus: nil,
             .increaseFontSize: Chord(mods: [.command], key: "+"),
             .decreaseFontSize: Chord(mods: [.command], key: "-"),
             .resetFontSize: Chord(mods: [.command], key: "0"),
             .toggleSplit: Chord(mods: [.command], key: "d"),
             .toggleScratch: Chord(mods: [.command], key: "j"),
+            .toggleTerminalZoom: Chord(mods: [.command, .shift], key: "return"),
             .toggleSearch: Chord(mods: [.command], key: "f"),
             .toggleSidebar: Chord(mods: [.command, .control], key: "s"),
+            .toggleFullscreen: Chord(mods: [.command, .control], key: "f"),
             .selectTheme: nil,      // keyless — gains a key only when the user maps one
             .toggleFlaggedView: nil, // keyless — gains a key only when the user maps one
             .toggleFlag: Chord(mods: [.command, .shift], key: "f"),
@@ -107,6 +115,13 @@ struct BuiltinActionTests {
     @Test func toggleSidebarDefaultIsCmdCtrlSAndRoundTrips() {
         let chord = Chord(mods: [.command, .control], key: "s")
         #expect(BuiltinAction.toggleSidebar.defaultChord == chord)
+        // must round-trip through the keymap grammar (so the starter renders it, not "(not expressible)").
+        #expect(parseKeybind(chord.displayString) == [chord])
+    }
+
+    @Test func toggleFullscreenDefaultIsCmdCtrlFAndRoundTrips() {
+        let chord = Chord(mods: [.command, .control], key: "f")
+        #expect(BuiltinAction.toggleFullscreen.defaultChord == chord)
         // must round-trip through the keymap grammar (so the starter renders it, not "(not expressible)").
         #expect(parseKeybind(chord.displayString) == [chord])
     }

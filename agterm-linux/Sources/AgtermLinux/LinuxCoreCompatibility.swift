@@ -137,9 +137,9 @@ extension AppStore {
     }
 
     @discardableResult
-    func clearAttentionStatusOnInput(sessionID: UUID, pane: StatusPane = .left, isEscape: Bool = false) -> Bool {
+    func clearAttentionStatusOnInput(sessionID: UUID, pane: StatusPane = .left, isInterrupt: Bool = false) -> Bool {
         guard let session = session(withID: sessionID),
-              session.agentIndicator.clearedBy(pane: pane, isEscape: isEscape)
+              session.agentIndicator.clearedBy(pane: pane, isInterrupt: isInterrupt)
         else { return false }
         setAgentIndicator(AgentIndicator(), forSession: sessionID)
         return true

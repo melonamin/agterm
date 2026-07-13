@@ -25,13 +25,19 @@ paths:
   `previewTheme` = `SettingsModel.previewTheme` sets `settings.theme = name` immediately but DEBOUNCES
   the live `apply()` (~0.07 s) so a burst of nav/typing previews coalesces to one surface reload — applied
   WITHOUT `settingsStore.save` (`persistAndApply` was split into `save(); apply()` so preview can apply-without-persist).
-  Enter/click commits via `commitThemePreview()` → `SettingsModel.commitTheme()`,
-  which FLUSHES the pending debounced apply (so the latest theme is live NOW) then `save()`s.
+  Enter/click commits via `commitThemePreview()` → `SettingsModel.commitTheme(nonActiveOriginal:)`,
+  which FLUSHES the pending debounced apply (so the active slot's latest value is live NOW), RESTORES the
+  off-screen slot to its captured original (so a value browsed into it during a mid-preview flip can't
+  commit — the commit-side twin of the Esc revert; re-applies only in that flip case so the dual line on
+  disk matches), then `save()`s.
   Any dismiss without a commit — Esc, scrim tap, switch to another palette mode,
-  unmount — reverts via `cancelThemePreview()` → `previewThemeImmediate(original)`,
-  which CANCELS the pending debounce and re-applies the theme captured on open SYNCHRONOUSLY (no debounce
+  unmount — reverts via `cancelThemePreview()` → `revertThemePreview(theme:darkTheme:)`,
+  which CANCELS the pending debounce and restores BOTH slots captured on open SYNCHRONOUSLY (no debounce
   lag, no stuck last-preview).
-  `AppActions` owns the session state (`themePreviewActive` + `themePreviewOriginal`);
+  `beginThemePreview` snapshots the WHOLE `(theme, darkTheme)` pair (not just the on-screen slot) so the
+  revert stays correct even if macOS flips appearance mid-preview — otherwise the Esc revert would re-resolve
+  the slot at flip-time and write the captured value into the wrong side, stranding both slots.
+  `AppActions` owns the session state (`themePreviewActive` + `themePreviewOriginal`, the captured pair);
   `SettingsModel` stays stateless about it.
   The View wires it through `syncThemeSession()` (begin + select the current theme's row on enter,
   cancel on leave — called from `.onAppear`/`.onChange(of: mode)`) + `.onDisappear { cancelThemePreview() }`
@@ -64,6 +70,19 @@ paths:
   is never silently re-themed.
   `theme.set` with no name still sets nil (ghostty built-in / "default ghostty"),
   distinct from the seeded app default.
+- **Appearance sync = two theme slots + an explicit toggle; emission is the RAW dual value.**
+  Three `AppSettings` fields hold it: `theme` (the single/base theme, and the LIGHT slot while following), `darkTheme` (the DARK slot), and `followSystemAppearance` (nil/false = off, the default).
+  `ghosttyConfigLines()` (no `isDark` param) emits ONE line: while following it is ghostty's own dual conditional `theme = light:NAME,dark:NAME` written RAW; otherwise the single theme — one `if`, no parsing.
+  libghostty resolves the active side itself at runtime, but the SWITCH is host-driven: `SystemAppearanceObserver` (an app-level KVO observer on `NSApplication.effectiveAppearance`) posts `.agtermSystemAppearanceChanged` with the KVO-delivered `isDark`; `SettingsModel.appearanceChanged` (guarded on following + both slots set, AND on the posted side differing from the last config feed) threads that `isDark` into `reloadConfigPreservingSessionZoom` → `GhosttyApp.reloadConfig(surfaces:isDark:)`, which sets `ghostty_app_set_color_scheme` + each surface's `ghostty_surface_set_color_scheme` from it and re-feeds via `update_config` DIRECTLY — the raw dual file text is stable across flips, so `writeGhosttyConfig`'s text-diff would otherwise skip the reload.
+  The flip reload KEEPS each session's ⌘+/⌘− zoom (`reapplySessionConfigIfNeeded` re-emits the zoomed sessions' `font-size` after the broadcast); only the explicit reloads clear it.
+  The side comes from the APP-level `NSApplication.effectiveAppearance` via KVO (`change.newValue`, the settled value), never from a view — the old per-view hook wedged after sleep/wake and stuck the terminal on the old theme (see the libghostty rule for the mechanism; `AppearanceFlipUITests` pins the zoom-preserving flip via the UI-test-only `debug.appearance` seam).
+  `AppSettings.activeTheme(isDark:)` (dark slot in dark mode, else `theme`) is now used ONLY by the palette badge/selection; emission never resolves a side.
+  The one surviving dual PARSE is `ThemeName.resolved(from:isDark:)` (host-free, from #146) — used only to pick the active side for the sidebar selection colors (`GhosttyApp.resolveSelectionColors`, which reads the raw `theme` line back out of the config); `ThemeResolution`, the branch's own `AppSettings.dualThemeSides`, and the legacy dual-string migration are gone.
+  Settings UI: picker 1 ("Theme", stable AX id `settings-theme`) edits the current-appearance slot via `setThemeForCurrentAppearance`; a `Toggle("Follow system appearance")` (`settings-follow-appearance`, default OFF) drives `setFollowSystemAppearance` (ON seeds the other slot from the current theme so both start equal; OFF collapses to the on-screen theme, no visual flip); and — only while following — an alternate picker (`settings-theme-dark`, labeled for the OTHER appearance) drives `setAlternateTheme`.
+  The primary picker offers the "default ghostty" (nil) row only when NOT following, since a dual conditional needs two named themes.
+  A palette PREVIEW writes the CURRENT-appearance slot (`previewTheme` writes the dark slot while following in dark mode, else `theme`), so the on-screen render reflects it and Esc restores the captured slot pair (both slots, snapshotted on open — flip-safe).
+  COMMIT (`AppActions.commitThemePreview` → `SettingsModel.commitTheme(nonActiveOriginal:)`) persists the active (on-screen) slot's browsed value and RESTORES the off-screen slot to its pre-preview original, so a value browsed into the other slot during a mid-preview flip never commits; save-only in the common no-flip case (nothing to restore), one reload in the flip case to rewrite the dual line.
+  The picker badges/opens on the EFFECTIVE theme (`activeTheme(isDark:)` — the on-screen slot), so the open-row preview is a config no-op.
 - **Control parity = the commit, not the preview**
   (preview is interactive-only): `theme.set`/`theme.list` (see the Control API catalog for the four-point
   audit).

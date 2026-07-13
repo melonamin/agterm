@@ -21,13 +21,14 @@ struct LinuxControlDispatcher {
         case .tree:
             return actions.controlTree(window: request.args?.window)
         case .sessionNew, .sessionSelect, .sessionGo, .sessionClose, .sessionRename,
-                .sessionMove, .sessionFlag, .sessionStatus:
+                .sessionMove, .sessionFlag, .sessionSeen, .sessionStatus:
             return dispatchSessionCommand(request)
-        case .sessionSplit, .sessionScratch, .sessionFocus, .sessionResize,
-                .sessionCopy, .sessionOverlayOpen, .sessionOverlayClose, .sessionOverlayResult,
+        case .sessionSplit, .sessionScratch, .sessionFocus, .sessionResize, .surfaceZoom,
+                .sessionCopy, .sessionPaste, .sessionSelectAll, .sessionOverlayOpen,
+                .sessionOverlayClose, .sessionOverlayResize, .sessionOverlayResult,
                 .sessionBackground, .sessionText:
             return dispatchSessionSurfaceCommand(request)
-        case .sessionType:
+        case .sessionType, .quickType, .quickText:
             return nil
         case .workspaceNew, .workspaceSelect, .workspaceRename, .workspaceDelete,
                 .workspaceMove, .workspaceFocus:
@@ -36,7 +37,7 @@ struct LinuxControlDispatcher {
                 .themeSet, .themeList, .sidebar, .sidebarMode, .sidebarExpand,
                 .sidebarCollapse, .restoreClear:
             return dispatchAppCommand(request)
-        case .windowRename, .windowResize, .windowMove, .windowZoom:
+        case .windowRename, .windowResize, .windowMove, .windowZoom, .windowFullscreen:
             return dispatchWindowCommand(request)
         default:
             return nil
@@ -78,6 +79,9 @@ struct LinuxControlDispatcher {
             }
             return actions.goSession(window: request.args?.window, direction: dir)
         case .sessionClose:
+            if let targets = request.args?.targets {
+                return actions.closeSessions(targets, window: request.args?.window)
+            }
             return actions.closeSession(request.target, window: request.args?.window)
         case .sessionRename:
             guard let name = request.args?.name else {
@@ -96,13 +100,22 @@ struct LinuxControlDispatcher {
                 if args?.workspace != nil {
                     return ControlResponse(ok: false, error: "session.move takes --after/--before or a workspace, not both")
                 }
-                return actions.moveSession(request.target, window: args?.window,
-                                           move: .place(anchor: anchor, after: args?.after != nil))
+                let move = ControlSessionMove.place(anchor: anchor, after: args?.after != nil)
+                if let targets = args?.targets {
+                    return actions.moveSessions(targets, window: args?.window, move: move)
+                }
+                return actions.moveSession(request.target, window: args?.window, move: move)
             }
             if args?.to != nil && args?.workspace != nil {
                 return ControlResponse(ok: false, error: "session.move takes either --to or a workspace, not both")
             }
             if let to = args?.to {
+                if args?.targets != nil {
+                    return ControlResponse(
+                        ok: false,
+                        error: "session.move --target can be repeated only with a workspace or --after/--before"
+                    )
+                }
                 guard let direction = ReorderDirection(rawValue: to) else {
                     return ControlResponse(ok: false, error: "session.move --to must be up|down|top|bottom")
                 }
@@ -111,9 +124,15 @@ struct LinuxControlDispatcher {
             guard let workspace = args?.workspace else {
                 return ControlResponse(ok: false, error: "session.move requires --to or a workspace")
             }
-            return actions.moveSession(request.target, window: args?.window, move: .workspace(workspace))
+            let move = ControlSessionMove.workspace(workspace)
+            if let targets = args?.targets {
+                return actions.moveSessions(targets, window: args?.window, move: move)
+            }
+            return actions.moveSession(request.target, window: args?.window, move: move)
         case .sessionFlag:
             return actions.setSessionFlag(request.target, window: request.args?.window, mode: request.args?.mode)
+        case .sessionSeen:
+            return actions.markSessionSeen(request.target, window: request.args?.window)
         case .sessionStatus:
             guard let status = AgentStatus(rawValue: request.args?.status ?? "") else {
                 return ControlResponse(ok: false, error: "invalid status")
@@ -187,6 +206,16 @@ struct LinuxControlDispatcher {
             }
         case .sessionCopy:
             return actions.copySessionSelection(request.target, window: request.args?.window)
+        case .sessionPaste:
+            return actions.pasteSession(request.target, window: request.args?.window)
+        case .sessionSelectAll:
+            return actions.selectAllSession(request.target, window: request.args?.window)
+        case .surfaceZoom:
+            guard let mode = ControlToggleMode.parse(request.args?.mode, on: "show", off: "hide") else {
+                return ControlResponse(ok: false,
+                                       error: "invalid surface.zoom mode: \(request.args?.mode ?? "toggle")")
+            }
+            return actions.setSurfaceZoom(request.target, window: request.args?.window, mode: mode)
         case .sessionOverlayOpen:
             guard let command = request.args?.command, !command.isEmpty else {
                 return ControlResponse(ok: false, error: "session.overlay.open requires a command")
@@ -205,6 +234,9 @@ struct LinuxControlDispatcher {
                                               ))
         case .sessionOverlayClose:
             return actions.closeSessionOverlay(request.target, window: request.args?.window)
+        case .sessionOverlayResize:
+            return actions.resizeSessionOverlay(request.target, window: request.args?.window,
+                                                sizePercent: request.args?.sizePercent)
         case .sessionOverlayResult:
             return actions.sessionOverlayResult(request.target, window: request.args?.window)
         case .sessionBackground:
@@ -219,11 +251,14 @@ struct LinuxControlDispatcher {
     private func dispatchAppCommand(_ request: ControlRequest) -> ControlResponse {
         switch request.cmd {
         case .fontInc:
-            return actions.font(request.target, window: request.args?.window, action: FontBindingAction.increase)
+            return actions.font(request.target, window: request.args?.window, pane: request.args?.pane,
+                                action: FontBindingAction.increase)
         case .fontDec:
-            return actions.font(request.target, window: request.args?.window, action: FontBindingAction.decrease)
+            return actions.font(request.target, window: request.args?.window, pane: request.args?.pane,
+                                action: FontBindingAction.decrease)
         case .fontReset:
-            return actions.font(request.target, window: request.args?.window, action: FontBindingAction.reset)
+            return actions.font(request.target, window: request.args?.window, pane: request.args?.pane,
+                                action: FontBindingAction.reset)
         case .keymapReload:
             return actions.reloadKeymap()
         case .configReload:
@@ -235,7 +270,7 @@ struct LinuxControlDispatcher {
             return actions.sendNotification(request.target, window: request.args?.window,
                                             title: request.args?.title, body: body)
         case .themeSet:
-            return actions.setTheme(name: request.args?.name)
+            return actions.setTheme(args: request.args)
         case .themeList:
             return actions.listThemes()
         case .sidebar:
@@ -350,6 +385,8 @@ struct LinuxControlDispatcher {
             return actions.windowMove(request.target, x: x, y: y, display: request.args?.display)
         case .windowZoom:
             return actions.windowZoom(request.target)
+        case .windowFullscreen:
+            return actions.windowFullscreen(request.target)
         default:
             preconditionFailure("unexpected window command: \(request.cmd.rawValue)")
         }
