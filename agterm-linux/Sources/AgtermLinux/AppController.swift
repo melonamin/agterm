@@ -932,9 +932,9 @@ final class AppController {
     /// `@view_bg_color`, …) re-themes the whole Adwaita stylesheet at once; the explicit `.agterm-sidebar`
     /// rules carry the shifted sidebar tint. Display-wide provider above the app CSS, re-applied on every
     /// theme/preview. A theme with no background drops the override so the Adwaita defaults return.
-    func applyWindowThemeColors(for theme: String?) {
+    func applyWindowThemeColors(for theme: String?, resolvedColors: ThemeColors? = nil) {
         guard let display = gdk_display_get_default() else { return }
-        let colors = Self.themeColors(for: theme)
+        let colors = resolvedColors ?? Self.themeColors(for: theme)
         guard let themeBg = colors.background else {
             if let p = Self.sidebarThemeProvider {   // default theme → restore Adwaita's own chrome
                 gtk_style_context_remove_provider_for_display(display, p)
@@ -991,6 +991,6 @@ final class AppController {
     }
 
     /// Re-theme the chrome to the PERSISTED theme (window build, settings change, config reload).
-    func applySidebarThemeColor() { applyWindowThemeColors(for: currentTheme) }
+    func applySidebarThemeColor() { applyResolvedWindowThemeColors() }
 
 }

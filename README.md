@@ -377,6 +377,7 @@ The toolbar has three modes: **Normal**, **Compact** (the default), and **Hidden
 Hiding it does not disable **Ctrl+,**, keyboard shortcuts, or command-palette access.
 
 The theme picker (View ▸ Select Theme…, or the action palette) previews each bundled theme on the open terminals as you move through the list, so you see it before committing. Enter commits and syncs it to Settings; Esc reverts to the one you started on. While following the system appearance, the picker edits the theme for the appearance you are in; the control channel drives both slots with `agtermctl theme set --light NAME --dark NAME` (or either flag alone).
+On Linux, the GTK window chrome reads its palette from the same finalized Ghostty configuration as the terminal, so colors loaded through an agterm-scoped `config-file` import also theme the header and sidebar.
 
 ## Scripting agterm
 

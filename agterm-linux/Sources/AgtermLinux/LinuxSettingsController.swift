@@ -7,6 +7,7 @@ extension AppController {
     func applySettings(_ settings: AppSettings) {
         let lines = Self.ghosttyLines(for: settings)
         guard let config = GhosttyApp.shared.buildConfig(extraLines: lines) else { return }
+        let chromeColors = GhosttyConfigTheme.colors(from: config)
         GhosttyApp.shared.updateConfig(config)
         for controller in gWindows.values {
             for surface in controller.configurableSurfaces {
@@ -26,7 +27,7 @@ extension AppController {
                 surface.feed(liveOSC)
                 surface.queueRender()
             }
-            controller.applyWindowThemeColors(for: activeTheme)
+            controller.applyWindowThemeColors(for: activeTheme, resolvedColors: chromeColors)
         }
     }
 
