@@ -31,6 +31,10 @@ extension WindowContentView {
             Label("Recent sessions", systemImage: "clock.arrow.circlepath")
         }
         .help("Recent sessions (⌃Tab)")
+        // pin the tint to chromeText like the attention bell: without it a disabled plain button resolves
+        // the SF Symbol to the system disabled color, which is near-invisible on the themed titlebar (the
+        // dimmed clock would vanish instead of graying out like the bell).
+        .foregroundStyle(chromeText)
         .disabled(!enabled)
         .opacity(enabled ? 1 : 0.35)
         .accessibilityIdentifier("recent-sessions-button")
