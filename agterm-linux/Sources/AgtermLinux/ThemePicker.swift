@@ -14,6 +14,10 @@ extension AppController {
         themeCommitted = currentTheme
         guard let win = op(gtk_window_new()) else { return }
         themeWindow = win
+        noteUserActivity()
+        suppressAutoFollow()
+        connect(win, "destroy", unsafeBitCast(onThemeDestroyed, to: GCallback.self),
+                Unmanaged.passRetained(self).toOpaque())
         gtk_window_set_transient_for(WIN(win), WIN(windowPointer))
         gtk_window_set_modal(WIN(win), 1)
         "Select Theme".withCString { gtk_window_set_title(WIN(win), $0) }
@@ -113,11 +117,31 @@ extension AppController {
     }
 
     func closeThemePicker() {
+        guard let win = themeWindow else { return }
         themePreviewDebouncer.cancel()   // any close path (incl. commit) cancels a pending preview
-        if let win = themeWindow { gtk_window_destroy(WIN(win)) }
         themeWindow = nil
         themeList = nil
         themeItems = []
+        resumeAutoFollow()
+        gtk_window_destroy(WIN(win))
+    }
+
+    /// Handles the window-manager close path, which is a cancellation rather than a commit.
+    func themePickerWasDestroyed() {
+        guard themeWindow != nil else { return }
+        themePreviewDebouncer.cancel()
+        previewTheme(themeCommitted)
+        themeWindow = nil
+        themeList = nil
+        themeItems = []
+        resumeAutoFollow()
+    }
+}
+
+private let onThemeDestroyed: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, data in
+    guard let data else { return }
+    MainActor.assumeIsolated {
+        Unmanaged<AppController>.fromOpaque(data).takeRetainedValue().themePickerWasDestroyed()
     }
 }
 

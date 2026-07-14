@@ -57,6 +57,10 @@ extension AppController {
     // MARK: - Replies from libghostty (via GhosttySurface.applySearch*)
 
     func searchDidStart(_ id: UUID, needle: String?) {
+        if !searchSuppressesAutoFollow {
+            suppressAutoFollow()
+            searchSuppressesAutoFollow = true
+        }
         searchSessionID = id
         searchTotal = nil
         searchSelected = nil
@@ -69,6 +73,7 @@ extension AppController {
     func searchDidEnd(_ id: UUID) {
         guard searchSessionID == id else { return }
         let owner = searchSurface
+        endSearchAutoFollowSuppression()
         searchSessionID = nil
         searchSurface = nil
         gtk_widget_set_visible(W(searchBar), 0)
@@ -91,6 +96,29 @@ extension AppController {
 
     // MARK: - Driven from the entry / buttons
 
+    /// Search owns keyboard focus outside the terminal, so keep auto-follow suppressed for its whole
+    /// lifetime. User input inside the entry still refreshes the idle stamp; the pending timer can fire
+    /// normally after search closes. Control-driven query changes do not pass through this method.
+    func noteSearchUserActivity() { noteUserActivity() }
+
+    func endSearchAutoFollowSuppression() {
+        guard searchSuppressesAutoFollow else { return }
+        searchSuppressesAutoFollow = false
+        resumeAutoFollow()
+    }
+
+    /// Clear host search ownership when its terminal disappears before libghostty can send END_SEARCH.
+    /// Session removal uses this before tearing down the surface so auto-follow suppression stays balanced.
+    func abandonSearch(ownedBy id: UUID) {
+        guard searchSessionID == id || searchSurface?.sessionID == id else { return }
+        endSearchAutoFollowSuppression()
+        searchSessionID = nil
+        searchSurface = nil
+        searchTotal = nil
+        searchSelected = nil
+        gtk_widget_set_visible(W(searchBar), 0)
+    }
+
     func searchQueryChanged(_ text: String) { searchSurface?.sendSearchQuery(text) }
     func searchNavigate(_ direction: SearchDirection) { searchSurface?.navigateSearch(direction) }
     func searchClose() { searchSurface?.endSearch() }
@@ -104,6 +132,7 @@ private let onSearchChanged: @convention(c) (OpaquePointer?, gpointer?) -> Void 
 }
 private let onSearchKey: @convention(c) (OpaquePointer?, UInt32, UInt32, UInt32, gpointer?) -> gboolean = { _, keyval, _, state, _ in
     let shift = (state & (1 << 0)) != 0
+    MainActor.assumeIsolated { gController?.noteSearchUserActivity() }
     switch keyval {
     case 0xFF1B: MainActor.assumeIsolated { gController?.searchClose() }; return 1                       // Esc
     case 0xFF0D, 0xFF8D: MainActor.assumeIsolated { gController?.searchNavigate(shift ? .previous : .next) }; return 1   // Enter / KP Enter
@@ -111,11 +140,20 @@ private let onSearchKey: @convention(c) (OpaquePointer?, UInt32, UInt32, UInt32,
     }
 }
 private let onSearchPrev: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _ in
-    MainActor.assumeIsolated { gController?.searchNavigate(.previous) }
+    MainActor.assumeIsolated {
+        gController?.noteSearchUserActivity()
+        gController?.searchNavigate(.previous)
+    }
 }
 private let onSearchNext: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _ in
-    MainActor.assumeIsolated { gController?.searchNavigate(.next) }
+    MainActor.assumeIsolated {
+        gController?.noteSearchUserActivity()
+        gController?.searchNavigate(.next)
+    }
 }
 private let onSearchClose: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _ in
-    MainActor.assumeIsolated { gController?.searchClose() }
+    MainActor.assumeIsolated {
+        gController?.noteSearchUserActivity()
+        gController?.searchClose()
+    }
 }

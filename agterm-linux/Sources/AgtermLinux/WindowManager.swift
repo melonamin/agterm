@@ -112,6 +112,7 @@ extension WindowLibrary {
 /// Capture foreground commands (when restore is on), then flush every open window's snapshot + index.
 @MainActor func flushOnQuit() {
     guard let library = gLibrary else { return }
+    for controller in gWindows.values { controller.commitBackgroundOpacity() }
     if linuxSettingsStore().load().restoreRunningCommand ?? false {
         for ctl in gWindows.values { ctl.captureForegroundCommands() }
     }

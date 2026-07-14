@@ -104,6 +104,9 @@ jobs:
           key: libghostty-${{ hashFiles('scripts/setup-linux.sh', 'linux/patches/ghostty-embedded-opengl.patch') }}
       - name: Build libghostty (skips if the cache restored it)
         run: scripts/setup-linux.sh
+      - name: swift test (agterm-linux)
+        working-directory: agterm-linux
+        run: swift test
       - name: swift build (agterm-linux)
         working-directory: agterm-linux
         run: swift build

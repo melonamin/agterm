@@ -145,6 +145,10 @@ jobs:
       - name: Build libghostty
         run: scripts/setup-linux.sh
 
+      - name: Test Linux package
+        working-directory: agterm-linux
+        run: swift test
+
       - name: Build agterm-linux
         working-directory: agterm-linux
         run: swift build -c release

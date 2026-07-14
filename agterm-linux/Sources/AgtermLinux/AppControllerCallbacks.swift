@@ -3,6 +3,17 @@ import Foundation
 
 // MARK: - GTK trampolines
 
+@MainActor
+final class DirectoryChooserContext {
+    let controller: AppController
+    let workspaceID: UUID
+
+    init(controller: AppController, workspaceID: UUID) {
+        self.controller = controller
+        self.workspaceID = workspaceID
+    }
+}
+
 let onWindowActive: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { _, _, data in
     guard let data else { return }
     MainActor.assumeIsolated {
@@ -226,12 +237,20 @@ let onClearFocusPill: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, 
     MainActor.assumeIsolated { gController?.focusWorkspace(nil) }
 }
 
-let onDirectoryChosen: @convention(c) (UnsafeMutablePointer<GObject>?, OpaquePointer?, gpointer?) -> Void = { source, result, _ in
-    guard let file = gtk_file_dialog_select_folder_finish(source.map { OpaquePointer($0) }, result, nil) else { return }
-    guard let cpath = g_file_get_path(file) else { return }
-    let path = String(cString: cpath)
-    g_free(cpath)
-    MainActor.assumeIsolated { gController?.createSessionInDirectory(path) }
+let onDirectoryChosen: @convention(c) (UnsafeMutablePointer<GObject>?, OpaquePointer?, gpointer?) -> Void = { source, result, data in
+    guard let data else { return }
+    MainActor.assumeIsolated {
+        let context = Unmanaged<DirectoryChooserContext>.fromOpaque(data).takeRetainedValue()
+        defer { context.controller.resumeAutoFollow() }
+        guard gWindows[context.controller.windowID] === context.controller else { return }
+        guard let file = gtk_file_dialog_select_folder_finish(
+            source.map { OpaquePointer($0) }, result, nil) else { return }
+        defer { g_object_unref(RAW(file)) }
+        guard let cpath = g_file_get_path(file) else { return }
+        let path = String(cString: cpath)
+        g_free(cpath)
+        context.controller.createSessionInDirectory(path, workspaceID: context.workspaceID)
+    }
 }
 
 let onCtxFlag: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _ in

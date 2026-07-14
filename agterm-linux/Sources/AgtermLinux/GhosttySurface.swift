@@ -279,15 +279,15 @@ final class GhosttySurface: TerminalSurface {
         ghostty_surface_update_config(surface, config)
     }
 
-    func applyWatermarkFromSession() {
+    func applyWatermarkFromSession(windowOpacity: Double? = nil, settings: AppSettings? = nil) {
         guard let surface, let session = controller?.store.session(withID: sessionID) else { return }
         let resolvedImagePath = WatermarkRenderer.materialize(session.backgroundWatermark, sessionID: session.id)
-        let windowOpacity = linuxSettingsStore().load().backgroundOpacity ?? 1
+        let effectiveWindowOpacity = windowOpacity ?? linuxSettingsStore().load().backgroundOpacity ?? 1
         let overlay = WatermarkConfig.overlayText(watermark: session.backgroundWatermark,
                                                   resolvedImagePath: resolvedImagePath,
                                                   fontSize: dashboardFontOverride ?? session.fontSize,
-                                                  windowOpacity: windowOpacity)
-        guard let config = GhosttyApp.shared.configWithOverlay(overlay) else { return }
+                                                  windowOpacity: effectiveWindowOpacity)
+        guard let config = GhosttyApp.shared.configWithOverlay(overlay, settings: settings) else { return }
         ghostty_surface_update_config(surface, config)
         ownedConfigs.forEach { ghostty_config_free($0) }
         ownedConfigs = [config]
@@ -296,9 +296,9 @@ final class GhosttySurface: TerminalSurface {
         queueRender()
     }
 
-    func reapplyWatermarkIfNeeded() {
+    func reapplyWatermarkIfNeeded(windowOpacity: Double? = nil, settings: AppSettings? = nil) {
         guard controller?.store.session(withID: sessionID)?.backgroundWatermark != nil else { return }
-        applyWatermarkFromSession()
+        applyWatermarkFromSession(windowOpacity: windowOpacity, settings: settings)
     }
 
     func startSearch() { performBindingAction("start_search") }
@@ -469,6 +469,7 @@ final class GhosttySurface: TerminalSurface {
 
     func keyPressed(keyval: UInt32, keycode: UInt32, state: UInt32) -> Bool {
         guard let surface else { return false }
+        controller?.noteUserActivity()
 
         let control = (state & (1 << 2)) != 0
         let hasOtherModifiers = (state & ((1 << 0) | (1 << 3) | (1 << 26))) != 0
@@ -520,6 +521,7 @@ final class GhosttySurface: TerminalSurface {
     /// The IM context committed composed text (dead-key/compose/CJK result) → send it to the terminal.
     func imCommit(_ text: String) {
         guard let surface, !text.isEmpty else { return }
+        controller?.noteUserActivity()
         text.withCString { ptr in
             var ke = ghostty_input_key_s()
             ke.action = GHOSTTY_ACTION_PRESS

@@ -29,8 +29,12 @@ You are inside agterm (`AGTERM_ENABLED=1`). Use:
   ```
   Categories: `CustomCommandRunner`, `SettingsModel`, `GhosttyApp`, `NotificationManager`, `ControlServer`.
 - **Files** — keymap `~/.config/agterm/keymap.conf`; agterm-scoped ghostty config
-  `~/.config/agterm/ghostty.conf`; settings `~/Library/Application Support/agterm/settings.json`;
-  socket path in `$AGTERM_SOCKET`.
+  `~/.config/agterm/ghostty.conf`; settings in the platform application-support directory
+  (`~/Library/Application Support/agterm/settings.json` on macOS); socket path in `$AGTERM_SOCKET`.
+- **Linux integrations** — `agtermctl integration status --json` is local and works without the app.
+  A `conflict` means agterm found unrelated content and refused to replace it. Preview repairs with
+  `agtermctl integration install hooks --dry-run --json` or `integration install skill --dry-run --json`.
+  Multi-target installs may still apply independent safe targets; the conflicting target remains untouched and exit status is `2`.
 
 ### "Keymap editor won't open"
 
@@ -45,7 +49,7 @@ also no-ops with no session selected or an overlay already open.
 
 Causes, in order: a parse error (see the diagnostics); the chord conflicts with a built-in or another
 custom command and was dropped to palette-only (it still runs from `⌃⇧P`, tagged `custom`); a reserved
-chord (`ctrl+tab`, `ctrl+1`/`ctrl+2`); a modifier-less key (rejected — a custom chord needs a
+chord (`ctrl+tab`, `ctrl+1`/`ctrl+2`, or Linux `ctrl+,`); a modifier-less key (rejected — a custom chord needs a
 modifier); it only fires while a terminal pane has keyboard focus; it runs in a non-interactive
 `/bin/sh -c` (no aliases/functions, a smaller `PATH` — use absolute paths or `$SHELL -lc '…'`); a
 non-zero exit posts a failure banner (meaning it DID fire and failed). Reload after edits:

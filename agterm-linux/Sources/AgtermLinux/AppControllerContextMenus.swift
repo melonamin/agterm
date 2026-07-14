@@ -9,6 +9,7 @@ extension AppController {
     func showRowContextMenu(listBox: OpaquePointer, x: Double, y: Double) {
         guard let rowPtr = gtk_list_box_get_row_at_y(listBox, Int32(y)),
               let sid = rowSession[OpaquePointer(rowPtr)] else { return }
+        noteUserActivity()
         if !store.sidebarSelectionIDs.contains(sid) {
             store.selectSession(sid, sidebarSelection: [sid])
             sidebarSelectionAnchor = sid

@@ -12,6 +12,86 @@ import CGtk
 import Foundation
 import agtermCore
 
+private let linuxPreferencesChord = Chord(mods: [.control], key: ",")
+
+func isLinuxReservedChord(_ chord: Chord) -> Bool {
+    isReservedMonitorChord(chord) || chord == linuxPreferencesChord
+}
+
+/// Re-resolve parsed overrides against the Linux default chord table. The shared parser already does
+/// this against upstream's macOS defaults, but removing a Linux-reserved override restores a different
+/// default and can expose a fresh collision. Iterate to a fixpoint because dropping one override may
+/// restore another Linux default that invalidates a second override.
+private func resolveLinuxBuiltinOverrides(
+    _ parsed: [BuiltinAction: Chord], diagnostics: inout [KeymapDiagnostic]
+) -> [BuiltinAction: Chord] {
+    var candidates = parsed
+    while true {
+        var ownersByChord: [Chord: [BuiltinAction]] = [:]
+        for action in BuiltinAction.allCases {
+            guard let chord = candidates[action] ?? action.linuxDefaultChord else { continue }
+            ownersByChord[chord, default: []].append(action)
+        }
+
+        var loserAndKeeper: (BuiltinAction, BuiltinAction)?
+        for owners in ownersByChord.values where owners.count > 1 {
+            let defaults = owners.filter { candidates[$0] == nil }
+                .sorted { $0.rawValue < $1.rawValue }
+            let overrides = owners.filter { candidates[$0] != nil }
+                .sorted { $0.rawValue < $1.rawValue }
+            if let keeper = defaults.first, let loser = overrides.first {
+                loserAndKeeper = (loser, keeper)
+                break
+            }
+            if overrides.count > 1 {
+                loserAndKeeper = (overrides[overrides.count - 1], overrides[0])
+                break
+            }
+        }
+        guard let (loser, keeper) = loserAndKeeper else { return candidates }
+        let chord = candidates.removeValue(forKey: loser)
+        diagnostics.append(KeymapDiagnostic(
+            line: 0,
+            message: "chord '\(chord?.displayString ?? "unknown")' conflicts with Linux built-in "
+                + "'\(keeper.rawValue)'; \(loser.rawValue) map skipped"
+        ))
+    }
+}
+
+func loadLinuxKeymap(configDirectory: URL) -> (keymap: Keymap, diagnostics: [KeymapDiagnostic]) {
+    let (parsed, baseDiagnostics) = KeymapStore(configDirectory: configDirectory).load()
+    var diagnostics = baseDiagnostics
+    var overrides = parsed.builtinOverrides
+    for (action, chord) in parsed.builtinOverrides.sorted(by: { $0.key.rawValue < $1.key.rawValue })
+    where isLinuxReservedChord(chord) {
+        overrides[action] = nil
+        diagnostics.append(KeymapDiagnostic(
+            line: 0,
+            message: "chord '\(chord.displayString)' is reserved by the Linux host; \(action.rawValue) map skipped"
+        ))
+    }
+    overrides = resolveLinuxBuiltinOverrides(overrides, diagnostics: &diagnostics)
+    // Dropping an override restores that action's Linux default. Re-check custom commands against the
+    // resulting Linux chord set because the shared parser validated against the upstream macOS defaults.
+    let activeBuiltinChords = Set(BuiltinAction.allCases.compactMap { action in
+        overrides[action] ?? action.linuxDefaultChord
+    })
+    var commands = parsed.commands
+    for index in commands.indices {
+        guard let keybind = parseKeybind(commands[index].shortcut) else { continue }
+        let reserved = keybind.contains(where: isLinuxReservedChord)
+        let restoredBuiltinConflict = keybind.first.map(activeBuiltinChords.contains) ?? false
+        guard reserved || restoredBuiltinConflict else { continue }
+        let reason = reserved ? "a Linux-reserved shortcut" : "an active Linux built-in shortcut"
+        diagnostics.append(KeymapDiagnostic(
+            line: 0,
+            message: "command '\(commands[index].name)' uses \(reason) and is palette-only"
+        ))
+        commands[index].shortcut = ""
+    }
+    return (Keymap(builtinOverrides: overrides, commands: commands), diagnostics)
+}
+
 /// The custom-command leader deadline fired on the main loop — abandon the half-typed sequence.
 /// Returns G_SOURCE_REMOVE (one-shot).
 private let onLeaderTimeout: @convention(c) (gpointer?) -> gboolean = { _ in
@@ -26,7 +106,7 @@ extension AppController {
     /// Called at startup and from the `keymap.reload` control command.
     @discardableResult
     func reloadKeymapDiagnostics() -> Int {
-        let (km, diagnostics) = KeymapStore(configDirectory: configDirectory()).load()
+        let (km, diagnostics) = loadLinuxKeymap(configDirectory: configDirectory())
         keymap = km
 
         // Reverse map: defaults for un-overridden actions first, then overrides (so an override REPLACES
@@ -34,9 +114,9 @@ extension AppController {
         // chords are never inserted — they're handled by the fixed fallback.
         var reverse: [Chord: BuiltinAction] = [:]
         for action in BuiltinAction.allCases where km.builtinOverrides[action] == nil {
-            if let chord = action.linuxDefaultChord, !isReservedMonitorChord(chord) { reverse[chord] = action }
+            if let chord = action.linuxDefaultChord, !isLinuxReservedChord(chord) { reverse[chord] = action }
         }
-        for (action, chord) in km.builtinOverrides where !isReservedMonitorChord(chord) {
+        for (action, chord) in km.builtinOverrides where !isLinuxReservedChord(chord) {
             reverse[chord] = action
         }
         resolvedBuiltinChords = reverse
@@ -77,7 +157,7 @@ extension AppController {
 
         // Reserved monitor chords (Ctrl+Tab, Ctrl+1/2) are never rebindable — they also can't be part of a
         // custom keybind, so abandon any armed leader and go straight to the fallback.
-        if isReservedMonitorChord(chord) {
+        if isLinuxReservedChord(chord) {
             if customCommandEngine.isArmed { customCommandEngine.reset() }
             return fallbackShortcut(keyval: keyval, state: state, sessionID: sessionID, origin: origin)
         }
@@ -197,6 +277,7 @@ extension AppController {
             // Sole-Control (no Alt/Super): the reserved pane chords + the font keys. A `where` on a
             // multi-pattern case binds only the last pattern, so the Alt/Super exclusion is on the branch.
             switch keyval {
+            case 0x2C: showSettings(); return true                       // Ctrl+, Preferences
             case 0xFF56: navigate(.next); return true                 // Ctrl+Page_Down
             case 0xFF55: navigate(.previous); return true             // Ctrl+Page_Up
             case 0xFF09: quickSwitchSession(); return true            // Ctrl+Tab (reserved MRU switch)

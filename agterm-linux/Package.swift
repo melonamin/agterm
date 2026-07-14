@@ -13,6 +13,7 @@ let package = Package(
     products: [
         .executable(name: "AgtermLinux", targets: ["AgtermLinux"]),
         .executable(name: "agtermctl-linux", targets: ["agtermctlLinux"]),
+        .library(name: "LinuxIntegrations", targets: ["LinuxIntegrations"]),
     ],
     dependencies: [
         .package(name: "agtermCore", path: "../agtermCore"),
@@ -20,10 +21,15 @@ let package = Package(
     ],
     targets: [
         .systemLibrary(name: "CGtk", path: "Sources/CGtk", pkgConfig: "libadwaita-1"),
+        .target(
+            name: "LinuxIntegrations",
+            dependencies: [.product(name: "agtermCore", package: "agtermCore")]
+        ),
         .executableTarget(
             name: "AgtermLinux",
             dependencies: [
                 "CGtk",
+                "LinuxIntegrations",
                 .product(name: "agtermCore", package: "agtermCore"),
             ],
             swiftSettings: [ .unsafeFlags(["-Xcc", "-I\(vendor)/include"]) ],
@@ -35,10 +41,24 @@ let package = Package(
         .executableTarget(
             name: "agtermctlLinux",
             dependencies: [
+                "LinuxIntegrations",
                 .product(name: "agtermCore", package: "agtermCore"),
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],
             path: "Sources/agtermctl"
+        ),
+        .testTarget(
+            name: "LinuxIntegrationsTests",
+            dependencies: ["LinuxIntegrations", .product(name: "agtermCore", package: "agtermCore")]
+        ),
+        .testTarget(
+            name: "agtermctlLinuxTests",
+            dependencies: ["agtermctlLinux", "LinuxIntegrations",
+                           .product(name: "ArgumentParser", package: "swift-argument-parser")]
+        ),
+        .testTarget(
+            name: "AgtermLinuxTests",
+            dependencies: ["AgtermLinux", .product(name: "agtermCore", package: "agtermCore")]
         ),
     ]
 )

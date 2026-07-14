@@ -61,7 +61,9 @@ extension BuiltinAction {
         case .quickTerminal: return Chord(mods: [.control], key: "`")
         case .sessionPalette: return Chord(mods: [.control], key: "p")
         case .commandPalette: return Chord(mods: [.control, .shift], key: "p")
-        case .customCommandPalette: return Chord(mods: [.control, .shift], key: "o")
+        // Ctrl+Shift+O belongs to Open Directory on Linux. Keep the custom-command palette keyless so
+        // restoring a reserved Open Directory override cannot create a default-vs-default collision.
+        case .customCommandPalette: return nil
         case .showAttention: return Chord(mods: [.control, .shift], key: "i")
         default: return nil
         }

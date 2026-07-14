@@ -30,7 +30,7 @@ extension AppController {
                 if searchSessionID == id { searchSurface?.endSearch() }
                 return ok(id)
             }   // close needs no counter
-            selectSession(id)
+            selectSession(id, userInitiated: false)
             guard let owner = searchTargetSurface(for: id) else { return err("session not realized") }
             searchSurface = owner
             owner.startSearch()   // action fires inline -> search bar is shown synchronously
@@ -76,7 +76,8 @@ extension AppController {
             openWindow(info.id)
             return ok(info.id)
         case .windowList:
-            return ControlResponse(ok: true, result: ControlResult(windows: library.controlWindowNodes()))
+            let nodes = projectingLinuxAutoFollow(library.controlWindowNodes())
+            return ControlResponse(ok: true, result: ControlResult(windows: nodes))
         case .windowSelect:
             guard case .resolved(let id) = library.resolveWindow(req.target ?? "active") else {
                 return resolveError("window", target: req.target, candidates: library.windows.map(\.id))

@@ -43,7 +43,7 @@ extension AppController {
         searchSurface?.endSearch()
         if sessionSwitcher.isActive { endSessionSwitch() }
         dashboard.open(members: members, fontMode: fontMode)
-        store.suppressAutoFollow()
+        suppressAutoFollow()
         applyDashboardFont()
         mountDashboard()
     }
@@ -69,7 +69,7 @@ extension AppController {
         dashboardRuntime.targets = [:]
         dashboardRuntime.clickContexts = []
         dashboard.close()
-        store.resumeAutoFollow()
+        resumeAutoFollow()
         gtk_widget_set_visible(W(splitView), 1)
         showActive()
         if refocus { focusedSurface()?.grabFocus() }
@@ -77,6 +77,7 @@ extension AppController {
 
     func selectDashboardMember(_ member: DashboardMember) {
         guard dashboard.members.contains(member) else { return }
+        noteUserActivity()
         store.selectSession(member.session)
         if let session = store.session(withID: member.session) {
             session.splitFocused = member.surface == .split

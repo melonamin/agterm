@@ -6,7 +6,7 @@ import agtermCore
 extension AppController {
     // MARK: - Reconcile
 
-    func reconcile(preservingSurfaceIDs: Set<UUID> = []) {
+    func reconcile(preservingSurfaceIDs: Set<UUID> = [], focusActive: Bool = true) {
         let dashboardRestore = prepareDashboardForReconcile()
         clearInvalidTerminalZoom()
         for ws in store.workspaces {
@@ -14,7 +14,7 @@ extension AppController {
                 ensurePrimary(s)
                 syncSplit(s)
                 syncScratch(s)
-                syncOverlay(s)   // after scratch so an open overlay wins the visible child
+                syncOverlay(s, allowFocus: focusActive)   // after scratch so an open overlay wins the visible child
             }
         }
         // Drop closed sessions.
@@ -22,7 +22,7 @@ extension AppController {
         live.formUnion(preservingSurfaceIDs)
         for id in Array(surfaces.keys) where !live.contains(id) { removeSession(id) }
         rebuildSidebar()
-        showActive()
+        showActive(focus: focusActive)
         updateTitle()
         updateAttentionButton()
         restoreDashboardAfterReconcile(dashboardRestore)
@@ -94,7 +94,7 @@ extension AppController {
     }
 
     /// Create/show/hide the ephemeral overlay terminal (runs `overlayCommand` over the session).
-    private func syncOverlay(_ s: Session) {
+    private func syncOverlay(_ s: Session, allowFocus: Bool) {
         guard let stack = sessionStacks[s.id] else { return }
         if s.overlayActive {
             if overlaySurfaces[s.id] == nil, let cmd = s.overlayCommand {
@@ -139,10 +139,10 @@ extension AppController {
                 ov.realizeWidgetIfNeeded()
             }
             if floatingOverlayFrames[s.id] != nil {
-                if s.id == store.selectedSessionID { overlaySurfaces[s.id]?.grabFocus() }
+                if allowFocus, s.id == store.selectedSessionID { overlaySurfaces[s.id]?.grabFocus() }
             } else {
                 "overlay".withCString { gtk_stack_set_visible_child_name(stack, $0) }
-                if s.id == store.selectedSessionID { overlaySurfaces[s.id]?.grabFocus() }
+                if allowFocus, s.id == store.selectedSessionID { overlaySurfaces[s.id]?.grabFocus() }
             }
         } else if let ov = overlaySurfaces[s.id], s.overlaySurface == nil {
             if let frame = floatingOverlayFrames[s.id], let overlay = deckOverlay {
@@ -194,7 +194,7 @@ extension AppController {
     }
 
     func loadKeymapCommands() -> (commands: [CustomCommand], diagnostics: Int) {
-        let (keymap, diags) = KeymapStore(configDirectory: configDirectory()).load()
+        let (keymap, diags) = loadLinuxKeymap(configDirectory: configDirectory())
         return (keymap.commands, diags.count)
     }
 
@@ -360,6 +360,7 @@ extension AppController {
     }
 
     private func removeSession(_ id: UUID) {
+        abandonSearch(ownedBy: id)
         splitCaptureSuppressed.remove(id)
         scratchSurfaces[id]?.teardown()
         scratchSurfaces[id] = nil
@@ -378,18 +379,20 @@ extension AppController {
         sessionStacks[id] = nil
     }
 
-    func showActive() {
+    func showActive(focus: Bool = true) {
         guard let active = store.activeSession else { return }
         active.id.uuidString.withCString { gtk_stack_set_visible_child_name(deck, $0) }
         updateFloatingOverlayVisibility(activeID: active.id)
-        if active.overlayActive {
-            overlaySurfaces[active.id]?.grabFocus()
-        } else if active.scratchActive {
-            scratchSurfaces[active.id]?.grabFocus()
-        } else if active.splitFocused, let split = splitSurfaces[active.id] {
-            split.grabFocus()
-        } else {
-            surfaces[active.id]?.grabFocus()
+        if focus {
+            if active.overlayActive {
+                overlaySurfaces[active.id]?.grabFocus()
+            } else if active.scratchActive {
+                scratchSurfaces[active.id]?.grabFocus()
+            } else if active.splitFocused, let split = splitSurfaces[active.id] {
+                split.grabFocus()
+            } else {
+                surfaces[active.id]?.grabFocus()
+            }
         }
         updateToggleIcons()
     }
@@ -461,6 +464,12 @@ extension AppController {
         }
         if let split = splitSurfaces[s.id]?.glArea {
             gtk_widget_set_opacity(W(split), s.isSplit && !s.splitFocused ? dimmed : 1.0)
+        }
+    }
+
+    func updateAllPaneDimming() {
+        for workspace in store.workspaces {
+            for session in workspace.sessions { updatePaneDim(session) }
         }
     }
 }

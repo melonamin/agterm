@@ -33,12 +33,9 @@ extension AppController {
         items.append(("Open Directory…", { gController?.openDirectory() }))
         // Preferences… (the Linux Settings surface; macOS uses the Settings scene / Cmd+,).
         items.append(("Preferences…", { gController?.showSettings() }))
-        items.append(("Install Agent Status Hooks…", {
-            if let controller = gController { LinuxAgentIntegrations.installHooks(in: controller) }
-        }))
-        items.append(("Install Agent Skill…", {
-            if let controller = gController { LinuxAgentIntegrations.installSkill(in: controller) }
-        }))
+        items.append(("Manage Integrations…", { gController?.showSettings(page: .integrations) }))
+        items.append(("Keyboard Shortcuts", { gController?.showKeyboardShortcuts() }))
+        items.append(("About agterm", { gController?.showAbout() }))
         // Linux has no global macOS-style Edit menu; expose the same terminal actions in the command palette.
         items.append(("Copy Selection", { gController?.activeSurface()?.performBindingAction("copy_to_clipboard") }))
         items.append(("Paste", { gController?.activeSurface()?.performBindingAction("paste_from_clipboard") }))
@@ -156,6 +153,9 @@ extension AppController {
         if paletteWindow != nil { closePalette(); return }   // re-invoking toggles the palette closed
         guard let win = op(gtk_window_new()) else { return }
         paletteWindow = win
+        suppressAutoFollow()
+        connect(win, "destroy", unsafeBitCast(onPaletteDestroyed, to: GCallback.self),
+                Unmanaged.passRetained(self).toOpaque())
         gtk_window_set_transient_for(WIN(win), WIN(windowPointer))
         gtk_window_set_modal(WIN(win), 1)
         let title = attention ? "Go to Attention" : (sessions ? "Go to Session" : "Command Palette")
@@ -232,10 +232,20 @@ extension AppController {
     }
 
     func closePalette() {
-        if let win = paletteWindow { gtk_window_destroy(WIN(win)) }
+        guard let win = paletteWindow else { return }
         paletteWindow = nil
         paletteList = nil
         paletteItems = []
+        resumeAutoFollow()
+        gtk_window_destroy(WIN(win))
+    }
+
+    func paletteWasDestroyed() {
+        guard paletteWindow != nil else { return }
+        paletteWindow = nil
+        paletteList = nil
+        paletteItems = []
+        resumeAutoFollow()
     }
 
     /// Move the highlighted palette result up/down (Up/Down arrows from the search entry), clamped at the
@@ -293,5 +303,11 @@ private let onPaletteKey: @convention(c) (OpaquePointer?, UInt32, UInt32, UInt32
     case 0xFF52: MainActor.assumeIsolated { gController?.paletteMove(down: false) }; return 1  // Up
     case 0xFF54: MainActor.assumeIsolated { gController?.paletteMove(down: true) }; return 1   // Down
     default: return 0
+    }
+}
+private let onPaletteDestroyed: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, data in
+    guard let data else { return }
+    MainActor.assumeIsolated {
+        Unmanaged<AppController>.fromOpaque(data).takeRetainedValue().paletteWasDestroyed()
     }
 }

@@ -4,14 +4,16 @@ A guide to checking what agterm is doing, the most common problems, and how to r
 
 ## Where things live
 
-Paths assume the defaults. When `AGTERM_STATE_DIR` is set, the state files move under that directory instead of `~/Library/Application Support/agterm`.
+Paths assume the defaults. When `AGTERM_STATE_DIR` is set, the state files and test configuration move under that directory instead of the platform application-support directory.
 
 - **Keymap**: `~/.config/agterm/keymap.conf` (or `$AGTERM_STATE_DIR/config/keymap.conf`, or a custom directory set in Settings ▸ Key Mapping).
 - **Ghostty config**: `~/.config/agterm/ghostty.conf` (same directory as the keymap), an agterm-scoped ghostty config that overrides the bundled defaults and your global `~/.config/ghostty/config`.
-- **Settings**: `~/Library/Application Support/agterm/settings.json`.
-- **Window and session state**: `~/Library/Application Support/agterm/windows.json` plus one `windows/<id>.json` per window.
-- **Control socket**: `~/Library/Application Support/agterm/agterm.sock` (or `$AGTERM_CONTROL_SOCKET` when set). A spawned shell sees the bound path in `$AGTERM_SOCKET`.
-- **Logs**: the macOS unified logging system, under the subsystem `com.umputun.agterm`.
+- **Settings**: `<state>/settings.json`.
+- **Window and session state**: `<state>/windows.json` plus one `windows/<id>.json` per window.
+- **Control socket**: `<state>/agterm.sock` (or `$AGTERM_CONTROL_SOCKET` when set). A spawned shell sees the bound path in `$AGTERM_SOCKET`.
+- **macOS state**: `~/Library/Application Support/agterm`.
+- **Linux state**: the Foundation application-support directory for the current user; run `printf '%s\n' "$AGTERM_SOCKET"` inside agterm to see the active directory, or set `AGTERM_STATE_DIR` for an isolated instance.
+- **Logs**: macOS uses unified logging under `com.umputun.agterm`; the Linux development build writes diagnostics to its process journal or stderr.
 
 ## Reading the logs
 
@@ -29,6 +31,37 @@ log show --predicate 'subsystem == "com.umputun.agterm" && category == "CustomCo
 ```
 
 The categories are `CustomCommandRunner`, `SettingsModel`, `GhosttyApp`, `NotificationManager`, and `ControlServer`. In Console.app, filter on the same subsystem.
+
+On Linux, launch the development binary from a terminal to retain stderr, or inspect the desktop-session journal:
+
+```bash
+journalctl --user --since "30 minutes ago" | grep -i agterm
+```
+
+## Checking Linux integrations
+
+The Integrations page and the local CLI use the same inspection engine.
+The CLI does not connect to the control socket, so it also works while agterm is stopped:
+
+```bash
+agtermctl integration status
+agtermctl integration status --json
+agtermctl integration install hooks --dry-run
+agtermctl integration install skill --dry-run
+```
+
+A `conflict` status means agterm found unrelated content and deliberately refused to replace it.
+For a multi-target hooks or skill install, independently safe targets can still be applied while the protected target is skipped and reported.
+Read the reported path and detail, move or merge that content yourself, then refresh the Integrations page.
+Exit status `2` is a protected conflict, `4` is a filesystem write failure, `1` is an unavailable bundled resource, and `64` is a malformed command line.
+
+Native DEB/RPM installations keep `/usr/bin/agtermctl` under package-manager ownership.
+Tar and development builds can create an agterm-owned launcher in `~/.local/bin` from Preferences ▸ Integrations.
+AppImage and Flatpak builds do not offer a host launcher because their executable paths are temporary or sandbox-local; use a native package, an extracted AppImage, or the tar archive for a persistent CLI.
+
+Hook installation preserves existing settings and writes a backup before changing Claude or Codex configuration.
+Malformed settings and pre-existing custom hook definitions are reported as conflicts for manual resolution.
+The skill installer updates only an agterm-managed `~/.claude/skills/agterm` or `~/.codex/skills/agterm` directory and refuses an unrelated directory with the same name.
 
 ## Checking the keymap
 
@@ -61,7 +94,7 @@ Work down this list:
 
 1. **Read the diagnostics.** Open Settings ▸ Key Mapping. A malformed `command` line is listed there and skipped.
 2. **Chord conflict.** If your chord collides with a built-in shortcut or with another custom command, the binding is dropped and the command becomes palette-only. It still runs from the action palette (`⌃⇧P`), where it is listed with a `custom` tag. Pick a free chord, or run it from the palette.
-3. **Reserved chords.** `ctrl+tab` / `ctrl+shift+tab` (the session switcher) and `ctrl+1` / `ctrl+2` (pane focus) are reserved and cannot be bound.
+3. **Reserved chords.** `ctrl+tab` / `ctrl+shift+tab` (the session switcher), `ctrl+1` / `ctrl+2` (pane focus), and Linux `ctrl+,` (Preferences) are reserved and cannot be bound.
 4. **Modifier-less keys are rejected.** A custom chord needs at least one modifier so it cannot shadow a plain terminal key. `command "x" g …` is palette-only; `command "x" cmd+g …` binds.
 5. **Focus.** A custom chord fires only while a terminal pane holds keyboard focus. When the sidebar, the inline rename field, a Settings field, or a palette has focus, the chord passes through. Click into the terminal first.
 6. **The command runs in a plain `/bin/sh -c`, not your login shell.** It does not load `~/.zshrc` or `~/.bashrc`, so shell aliases and functions are not available and `PATH` may be shorter than in your terminal. Use absolute paths, or wrap the body in `$SHELL -lc '…'`.

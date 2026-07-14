@@ -73,7 +73,7 @@ extension AppController: ControlActions {
     }
 
     func controlTree(window: String?) -> ControlResponse {
-        let tree = store.controlTree(
+        let baseTree = store.controlTree(
             foreground: { [weak self] session in self?.surfaces[session.id]?.foregroundCommand() },
             splitForeground: { [weak self] session in self?.splitSurfaces[session.id]?.foregroundCommand() },
             fontSize: { [weak self] in self?.surfaces[$0.id]?.currentFontSize() },
@@ -94,6 +94,7 @@ extension AppController: ControlActions {
                 }
             }
         )
+        let tree = projectingLinuxAutoFollow(baseTree)
         return ControlResponse(ok: true, result: ControlResult(tree: tree))
     }
 
@@ -109,7 +110,7 @@ extension AppController: ControlActions {
                     return err("no such workspace")
                 }
                 reconcile()
-                selectSession(session.id)
+                selectSession(session.id, userInitiated: false)
                 return ok(session.id)
             }
         }
@@ -134,7 +135,7 @@ extension AppController: ControlActions {
             return err("no such workspace")
         }
         reconcile()
-        selectSession(session.id)
+        selectSession(session.id, userInitiated: false)
         return ok(session.id)
     }
 
@@ -142,13 +143,13 @@ extension AppController: ControlActions {
         switch resolveSessionResponse(target) {
         case .failure(let response): return response
         case .success(let id):
-            selectSession(id)
+            selectSession(id, userInitiated: false)
             return ok(id)
         }
     }
 
     func goSession(window: String?, direction: SessionNavigation) -> ControlResponse {
-        navigate(direction)
+        navigate(direction, userInitiated: false)
         guard let id = store.selectedSessionID else { return err("no session to navigate") }
         return ok(id)
     }
@@ -219,7 +220,7 @@ extension AppController: ControlActions {
         case .failure(let response): return response
         case .success(let id):
             if let first = store.workspaces.first(where: { $0.id == id })?.sessions.first {
-                selectSession(first.id)
+                selectSession(first.id, userInitiated: false)
             }
             return ok(id)
         }
@@ -706,7 +707,7 @@ extension AppController: ControlActions {
         case .failure(let response): return response
         case .success(let id):
             if options.select {
-                selectSession(id)
+                selectSession(id, userInitiated: false)
                 reconcile()
             }
             for _ in 0..<12 {
@@ -767,7 +768,7 @@ extension AppController: ControlActions {
                 if searchSessionID == id { searchSurface?.endSearch() }
                 return ok(id)
             }
-            selectSession(id)
+            selectSession(id, userInitiated: false)
             guard let owner = searchTargetSurface(for: id) else { return err("session not realized") }
             searchSurface = owner
             owner.startSearch()
@@ -807,7 +808,7 @@ extension AppController: ControlActions {
                                     backgroundColor: options.backgroundColor) else {
                 return err("overlay already open")
             }
-            if options.follow { selectSession(id) }
+            if options.follow { selectSession(id, userInitiated: false) }
             reconcile()
             return ok(id)
         }
@@ -882,11 +883,11 @@ extension AppController: ControlActions {
     }
 
     func windowList() -> ControlResponse {
-        let nodes = library.controlWindowNodes(flags: { id in
+        let nodes = projectingLinuxAutoFollow(library.controlWindowNodes(flags: { id in
             guard let ctl = gWindows[id] else { return nil }
             return (fullscreen: gtk_window_is_fullscreen(WIN(ctl.windowPointer)) != 0,
                     zoomed: gtk_window_is_maximized(WIN(ctl.windowPointer)) != 0)
-        })
+        }))
         return ControlResponse(ok: true, result: ControlResult(windows: nodes))
     }
 

@@ -87,6 +87,16 @@ private let onOpen: @convention(c) (OpaquePointer?, UnsafeMutablePointer<OpaqueP
     let ids = gLibrary.openIDs()
     let toOpen = ids.isEmpty ? [gLibrary.windows.first?.id].compactMap { $0 } : ids
     for id in toOpen { openWindow(id) }
+    #if DEBUG
+    // AT-SPI cannot focus an arbitrary Wayland client on compositors such as Hyprland. Present the
+    // isolated smoke-test dialog during activation, while the initial surface is still being mapped,
+    // so libadwaita exposes its pages without requiring compositor-specific pointer automation.
+    if let pageName = ProcessInfo.processInfo.environment["AGTERM_ATSPI_OPEN_PREFERENCES"],
+       let page = LinuxSettingsPage(rawValue: pageName),
+       let id = gLibrary.frontmostWindowID ?? gLibrary.windows.first?.id {
+        gWindows[id]?.showSettings(page: page)
+    }
+    #endif
 }
 
 func linuxStateDirectory() -> URL {
@@ -188,6 +198,7 @@ private let onColorSchemeChanged: @convention(c) (OpaquePointer?, OpaquePointer?
     MainActor.assumeIsolated {
         for ctl in gWindows.values { ctl.reapplyColorScheme() }
         gWindows.values.first?.reloadConfig()
+        for ctl in gWindows.values { ctl.rebuildSettingsForColorSchemeChange() }
     }
 }
 
@@ -226,4 +237,37 @@ private let onRevealAction: @convention(c) (OpaquePointer?, OpaquePointer?, gpoi
         }
         return
     }
+}
+
+/// Reconcile the Linux auto-follow selection into GTK without raising or focusing a background
+/// window. A covering scratch terminal is hidden when the blocked status belongs to a regular pane.
+@MainActor func handleAutoFollow(_ id: UUID?, statusPane: StatusPane?) {
+    guard let id, let windowID = gLibrary.windowID(forSession: id),
+          let controller = gWindows[windowID],
+          let session = controller.store.session(withID: id) else { return }
+    // The selection made by AppStore stands, but terminal zoom owns the visible surface. Do not mutate
+    // scratch visibility or split focus behind that layer; the selected session appears when zoom exits.
+    guard controller.terminalZoom.target == nil else {
+        controller.syncSidebarSelection()
+        controller.updateTitle()
+        controller.refreshSidebar()
+        return
+    }
+    // Prefer the coordinator's pre-selection snapshot. An auto-reset indicator is cleared by
+    // AppStore.selectSession before this host-side reconciliation runs.
+    switch statusPane ?? session.agentIndicator.statusPane ?? .left {
+    case .left:
+        if session.scratchActive { controller.store.toggleScratch(id) }
+        if session.hasSplit { controller.store.setPaneFocus(false, forSession: id) }
+    case .right:
+        if session.scratchActive { controller.store.toggleScratch(id) }
+        if session.hasSplit { controller.store.setPaneFocus(true, forSession: id) }
+    case .scratch:
+        if !session.scratchActive { controller.store.toggleScratch(id) }
+    }
+    // Quick is a visible terminal overlay with its own first responder. Reconcile the selection beneath
+    // it, but do not steal keyboard focus from the terminal the user can actually see.
+    let shouldFocus = !controller.quickVisible
+        && gtk_window_is_active(WIN(controller.windowPointer)) != 0
+    controller.reconcile(focusActive: shouldFocus)
 }

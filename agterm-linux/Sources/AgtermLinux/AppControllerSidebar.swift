@@ -271,7 +271,7 @@ extension AppController {
         }
         let active = selected.contains(id) ? id : (store.selectedSessionID.flatMap { selected.contains($0) ? $0 : nil }
             ?? selected.last ?? id)
-        store.noteUserActivity()
+        noteUserActivity()
         store.selectSession(active, sidebarSelection: selected)
         showActive()
         syncSidebarSelection()

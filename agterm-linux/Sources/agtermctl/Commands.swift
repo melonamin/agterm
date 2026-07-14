@@ -84,10 +84,10 @@ struct SurfaceTargetOptions: ParsableArguments {
 public struct Agtermctl: ParsableCommand {
     public static let configuration = CommandConfiguration(
         commandName: "agtermctl",
-        abstract: "Drive agterm over its control socket.",
+        abstract: "Drive agterm and manage local integrations.",
         subcommands: [Tree.self, Workspace.self, Session.self, Surface.self, Window.self, Quick.self,
                       Dashboard.self, Sidebar.self, Notify.self, Font.self, Keymap.self, Config.self,
-                      Theme.self, Restore.self]
+                      Theme.self, Restore.self, Integration.self]
     )
 
     public init() {}

@@ -9,6 +9,7 @@
 // AdwHeaderBar/AdwToolbarView/AdwNavigationSplitView). Typed ones use W/WIN/GLBR/cast;
 // opaque ones take the stored OpaquePointer directly.
 import CGtk
+import LinuxIntegrations
 import agtermCore
 import Foundation
 @MainActor var gController: AppController?
@@ -16,6 +17,7 @@ import Foundation
 @MainActor
 final class AppController {
     let store: AppStore             // this window's tree (owned by the shared WindowLibrary)
+    let autoFollowCoordinator: LinuxAutoFollowCoordinator
     let windowID: UUID
     let library: WindowLibrary
 
@@ -52,6 +54,7 @@ final class AppController {
     // In-terminal search bar (Ctrl+Shift+F)
     var searchBar: OpaquePointer?
     var searchEntry: OpaquePointer?
+    var searchSuppressesAutoFollow = false
     var searchMatchLabel: OpaquePointer?
     var searchSessionID: UUID?
     var searchSurface: GhosttySurface?
@@ -108,6 +111,19 @@ final class AppController {
     var pendingDeleteWindow: UUID?                    // window awaiting the delete-confirm response
     var pendingRenameWindow: UUID?                    // window awaiting the rename-dialog response
     var pendingRenameEntry: OpaquePointer?            // the rename dialog's GtkEntry
+    var settingsDialog: OpaquePointer?
+    var settingsCustomDirectoryRow: OpaquePointer?
+    var settingsConfigDirectoryRow: OpaquePointer?
+    var settingsAutoFollowAwayRow: OpaquePointer?
+    var integrationRows: [IntegrationKind: OpaquePointer] = [:]
+    var integrationKindButtons: [IntegrationKind: OpaquePointer] = [:]
+    var integrationButtons: [OpaquePointer: IntegrationPlanKind] = [:]
+    var integrationRefreshGeneration: UInt64 = 0
+    var pendingIntegrationPlan: IntegrationPlan?
+    var integrationOperationInFlight = false
+    var pendingBackgroundOpacity: Double?
+    var backgroundOpacityPending = false
+    var backgroundSettingsSource: guint = 0
     var confirmedClose = false                       // set once the quit-confirm is accepted
     var badgeEnabled = linuxSettingsStore().load().notificationBadgeEnabled ?? true   // gates the unseen-count pill
     var sessionSwitcher = SessionSwitcherModel()                                  // Ctrl-Tab hold-to-cycle state
@@ -137,7 +153,9 @@ final class AppController {
         // migrated it from windows/<id>.json). AppStore.save() targets that per-window file.
         self.windowID = windowID
         self.library = library
-        self.store = library.store(for: windowID) ?? AppStore()
+        let store = library.store(for: windowID) ?? AppStore()
+        self.store = store
+        autoFollowCoordinator = LinuxAutoFollowCoordinator(store: store)
 
         window = OpaquePointer(adw_application_window_new(APPW(app)))
         // restore the window's last on-screen size (Wayland: size only — the compositor owns position),
@@ -197,7 +215,7 @@ final class AppController {
         adw_header_bar_set_show_start_title_buttons(contentHeader, 0)
         adw_header_bar_set_show_end_title_buttons(contentHeader, 0)
         // Title-bar terminal toggles (mirror the macOS top-right controls). pack_end stacks leftward,
-        // so the visual left-to-right order is split, scratch, quick, then the menu.
+        // so the visual left-to-right order is split, scratch, then quick.
         // Sidebar toggle on the LEFT (macOS sidebar.left), always visible so a hidden sidebar can return.
         let sidebarBtn = OpaquePointer(gtk_button_new_from_icon_name("agterm-sidebar-symbolic"))
         gtk_widget_set_tooltip_text(W(sidebarBtn), "Toggle Sidebar (Ctrl+Shift+B)")
@@ -209,6 +227,7 @@ final class AppController {
         connect(attentionButton, "clicked", unsafeBitCast(onAttentionButton as @convention(c) (OpaquePointer?, gpointer?) -> Void, to: GCallback.self))
         adw_header_bar_pack_start(contentHeader, W(attentionButton))
         updateAttentionButton()
+        installPreferencesShortcut()
         @discardableResult func headerToggle(_ icon: String, _ tip: String, _ cb: @escaping @convention(c) (OpaquePointer?, gpointer?) -> Void) -> OpaquePointer? {
             let b = OpaquePointer(gtk_button_new_from_icon_name(icon))
             gtk_widget_set_tooltip_text(W(b), tip)
@@ -259,47 +278,30 @@ final class AppController {
         connect(window, "close-request", unsafeBitCast(onWindowCloseRequest as @convention(c) (OpaquePointer?, gpointer?) -> gboolean, to: GCallback.self), me)
 
         applyWindowTranslucency()
+        applyAutoFollowSettings()
         gtk_window_present(WIN(window))
         applySidebarThemeColor()   // tint the sidebar to the terminal theme background
         reloadKeymapDiagnostics()   // load keymap.conf → built-in overrides + custom-command chords for key dispatch
         reconcile()
         becameFrontmost()
     }
-
     // MARK: - Actions
-
     func newSession() {
         guard let wsID = store.currentWorkspaceID else { return }
+        noteUserActivity()
         _ = store.addSession(toWorkspace: wsID, cwd: newSessionCwd())
         reconcile()
     }
-
     private func newSessionCwd() -> String {
         linuxSettingsStore().load().resolveNewSessionCwd(currentSessionCwd: store.activeSession?.focusedCwd,
                                                     home: Self.homeCwd)
     }
-
     func newWorkspace() {
+        noteUserActivity()
         store.addWorkspaceSeeded(name: store.defaultWorkspaceName, cwd: Self.homeCwd)
         reconcile()
     }
-
-    /// Open a folder picker (GtkFileDialog) and create a session rooted at the chosen directory.
-    func openDirectory() {
-        let dialog = gtk_file_dialog_new()
-        "Open Directory".withCString { gtk_file_dialog_set_title(dialog, $0) }
-        gtk_file_dialog_select_folder(dialog, WIN(window), nil, onDirectoryChosen, nil)
-    }
-
-    /// Create + select a session rooted at `cwd` (the Open Directory result).
-    func createSessionInDirectory(_ cwd: String) {
-        guard let wsID = store.currentWorkspaceID,
-              let s = store.addSession(toWorkspace: wsID, cwd: cwd) else { return }
-        reconcile()
-        selectSession(s.id)
-    }
-
-    func selectSession(_ id: UUID) {
+    func selectSession(_ id: UUID, userInitiated: Bool = true) {
         // selectSession clears the unseen badge + an auto-reset (e.g. `completed`) glyph on BOTH the
         // visited and the previously-selected session; rebuild the sidebar when either row changes.
         let prev = store.selectedSessionID
@@ -307,10 +309,12 @@ final class AppController {
         let needsRefresh = clearedRowChanges(id) || (prev.map(clearedRowChanges) ?? false)
         if prev != id, let owner = searchSurface {
             owner.endSearch()
+            endSearchAutoFollowSuppression()
             searchSessionID = nil
             searchSurface = nil
             gtk_widget_set_visible(W(searchBar), 0)
         }
+        if userInitiated { noteUserActivity() }
         store.selectSession(id)
         let focusFilterChanged = focusedWorkspace != store.focusedWorkspaceID
         NotificationManager.withdraw(sessionID: id)   // clear any delivered banner now the session is seen
@@ -338,8 +342,9 @@ final class AppController {
         for s in overlaySurfaces.values { s.applyColorScheme() }
     }
 
-    func navigate(_ dir: SessionNavigation) {
+    func navigate(_ dir: SessionNavigation, userInitiated: Bool = true) {
         let attentionBefore = Set(store.attentionSessions.map(\.id))
+        if userInitiated { noteUserActivity() }
         store.navigateSession(dir)
         let attentionChanged = attentionBefore != Set(store.attentionSessions.map(\.id))
         showActive()
@@ -623,9 +628,14 @@ final class AppController {
     /// the label for an entry when the id matches `renaming`), then focus + select-all the entry.
     func beginRename(id: UUID, isWorkspace: Bool) {
         if isWorkspace { cancelPendingWorkspaceToggle() }
+        if renaming == nil { suppressAutoFollow() }
         renaming = isWorkspace ? .workspace(id) : .session(id)
         rebuildSidebar()
-        guard let e = renameEntry else { return }
+        guard let e = renameEntry else {
+            renaming = nil
+            resumeAutoFollow()
+            return
+        }
         let entryAddress = Int(bitPattern: e)
         runOnMain { MainActor.assumeIsolated {
             guard let entry = OpaquePointer(bitPattern: entryAddress) else { return }
@@ -648,6 +658,7 @@ final class AppController {
         let text = gtk_editable_get_text(entry).map { String(cString: $0) } ?? ""
         renaming = nil
         renameEntry = nil
+        resumeAutoFollow()
         if !text.isEmpty {
             if target.isWorkspace { store.renameWorkspace(target.id, to: text) } else { store.renameSession(target.id, to: text) }
         }
@@ -659,6 +670,7 @@ final class AppController {
         guard renaming != nil else { return }
         renaming = nil
         renameEntry = nil
+        resumeAutoFollow()
         rebuildAfterRename()
         focusedSurface()?.grabFocus()
     }
@@ -807,32 +819,6 @@ final class AppController {
         reconcile()
     }
 
-    private func applySettings(_ settings: AppSettings) {
-        let lines = Self.ghosttyLines(for: settings)
-        guard let cfg = GhosttyApp.shared.buildConfig(extraLines: lines) else { return }
-        GhosttyApp.shared.updateConfig(cfg)
-        for ctl in gWindows.values {
-            for s in ctl.configurableSurfaces {
-                s.applyConfig(cfg)
-                s.reapplyWatermarkIfNeeded()
-            }
-        }
-        ghostty_config_free(cfg)
-        // The embedded GL renderer ignores the config's colors, so ALSO push them as OSC to every live
-        // surface — and cache them for surfaces created later (new sessions, restored panes).
-        let osc = AppSettings.themeOSC(from: lines)
-        let activeTheme = settings.activeTheme(isDark: Self.systemIsDark)
-        let liveOSC = osc.isEmpty && activeTheme == nil ? AppSettings.themeResetOSC : osc
-        GhosttyApp.shared.currentThemeOSC = liveOSC
-        for ctl in gWindows.values {
-            for s in ctl.configurableSurfaces {
-                s.feed(liveOSC)
-                s.queueRender()
-            }
-            ctl.applyWindowThemeColors(for: activeTheme)
-        }
-    }
-
     /// Preview one theme as a single appearance-independent value without persisting it.
     func previewTheme(_ name: String?) {
         var settings = linuxSettingsStore().load()
@@ -884,6 +870,10 @@ final class AppController {
             rendered.followSystemAppearance = nil
         }
         var lines = rendered.ghosttyConfigLines()
+        if let opacity = settings.backgroundOpacity, opacity < 1 {
+            lines.removeAll { $0.hasPrefix("background-opacity = ") }
+            lines.append("background-opacity = \(min(1, max(0, opacity)))")
+        }
         if rendered.theme == AppSettings.defaultTheme, themeFileLines(for: AppSettings.defaultTheme) == nil {
             lines.removeAll { $0 == "theme = \(AppSettings.defaultTheme)" }
             lines.append(contentsOf: AppSettings.agtermThemeLines)
@@ -966,8 +956,15 @@ final class AppController {
         @define-color headerbar_bg_color \(themeBg);
         @define-color headerbar_backdrop_color \(themeBg);
         @define-color headerbar_fg_color \(fg);
+        @define-color dialog_bg_color \(themeBg);
+        @define-color dialog_fg_color \(fg);
+        @define-color card_bg_color alpha(\(fg), 0.08);
+        @define-color card_fg_color \(fg);
+        @define-color card_shade_color alpha(#000000, 0.25);
         @define-color popover_bg_color \(themeBg);
         @define-color popover_fg_color \(fg);
+        @define-color popover_shade_color alpha(#000000, 0.25);
+        @define-color shade_color alpha(#000000, 0.25);
         @define-color sidebar_bg_color \(sidebarBg);
         @define-color sidebar_fg_color \(fg);
         .agterm-sidebar { background-color: \(sidebarBg); }

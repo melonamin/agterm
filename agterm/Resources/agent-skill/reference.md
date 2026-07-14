@@ -329,6 +329,33 @@ Two simpler routes fail and are why the overlay is needed: emitting graphics esc
 tool stdout (the harness escapes the control bytes) and running an image viewer in the agent's tool
 shell (no controlling terminal — `/dev/tty` errors). See examples.md for usage.
 
+## Linux integration management
+
+These Linux-only commands inspect or install local files and never connect to the agterm control
+socket. They work when the app is stopped, ignore `--socket`, and are not counted among the 60 runtime
+control commands above.
+
+- `integration status [--json]` — inspect the command-line tool, Claude Code hooks, Codex hooks, and
+  agent skill in that stable order. JSON is `{"items":[...]}`; each item has `kind`, `state`, `path`,
+  optional `version`, and `detail`. `state` is `not-installed`, `installed`, `update-available`,
+  `partial`, `conflict`, or `unavailable`.
+- `integration install hooks [--dry-run] [--json]` — preview or safely apply the shared Claude/Codex
+  hook plan. It preserves settings, symlinks, file modes, and backups; malformed files or unrelated
+  custom hooks are conflicts.
+- `integration install skill [--dry-run] [--json]` — preview or safely install/update the bundled
+  skill in detected Claude Code and Codex destinations. It replaces only agterm-managed content.
+
+Install JSON contains `kind`, `steps`, `warnings`, `conflicts`, and `canApply`; applied output also
+contains structured per-operation results and protected targets skipped while independent safe targets were applied.
+`--dry-run` never writes. Exit `2` means a protected
+conflict, `4` means a write failed after preview, `1` means unavailable bundled resources, and `64`
+means a malformed command line.
+
+DEB/RPM installations report `/usr/bin/agtermctl` as package-managed and leave updates to the package
+manager. Tar and development builds can create an agterm-owned `~/.local/bin/agtermctl` launcher from
+Preferences ▸ Integrations. AppImage and Flatpak builds do not create a launcher into a temporary or
+sandbox-local executable path.
+
 ## window
 
 - `window new [name]` — create and open a window; returns its id.
@@ -536,7 +563,7 @@ base key is a single character or `tab`/`space`/`return`/`delete`. A key typed w
 `shift+<base>` (`shift+/` = `?`, `shift+=` = `+`, `shift+5` = `%`) — the base key, not the shifted glyph.
 Arrows aren't expressible, and `+`/`>` can't be a bare key token (they are the separators), though those
 keys are bindable via `shift+=`/`shift+.`. Some chords are reserved (the Ctrl-Tab switcher, Ctrl-1/2 pane
-focus) and cannot be bound.
+focus, and Linux Ctrl+, Preferences shortcut) and cannot be rebound.
 
 Custom-command tokens (expanded into the `/bin/sh -c` line, raw — prefer the quoted `$AGT_*` env form
 for untrusted content). A remote host can set the session title (OSC) and working directory (OSC 7),

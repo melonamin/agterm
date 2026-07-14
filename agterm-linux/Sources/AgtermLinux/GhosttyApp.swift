@@ -85,7 +85,9 @@ final class GhosttyApp: @unchecked Sendable {
     func buildConfig(extraLines: [String]) -> ghostty_config_t? {
         let cfg = ghostty_config_new()
         if let path = Self.writeDefaultsConf() { path.withCString { ghostty_config_load_file(cfg, $0) } }
-        ghostty_config_load_default_files(cfg)
+        if linuxSettingsStore().load().inheritGlobalGhosttyConfig == true {
+            ghostty_config_load_default_files(cfg)
+        }
         // The agterm-scoped <configDir>/ghostty.conf overrides the bundled defaults + the user's
         // global ghostty config for any key, but the UI settings (extraLines) still win since they
         // load last. Mirrors macOS's 4-layer stack. Skipped when absent.
@@ -105,8 +107,8 @@ final class GhosttyApp: @unchecked Sendable {
 
     /// Build a config for one surface with a final per-session overlay (`background-image*`, solid
     /// `background`, and/or a font-size override). The returned config is owned by the caller.
-    func configWithOverlay(_ overlayText: String) -> ghostty_config_t? {
-        let base = AppController.ghosttyLines(for: linuxSettingsStore().load())
+    func configWithOverlay(_ overlayText: String, settings: AppSettings? = nil) -> ghostty_config_t? {
+        let base = AppController.ghosttyLines(for: settings ?? linuxSettingsStore().load())
         let overlay = overlayText.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
         return buildConfig(extraLines: base + overlay)
     }
