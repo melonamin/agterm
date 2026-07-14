@@ -34,7 +34,8 @@ extension AppController {
         SurfaceEnvironment.session(sessionID: s.id, windowID: windowID,
                                    workspaceID: store.workspace(forSession: s.id)?.id,
                                    socketPath: gControlServer.boundSocketPath ?? ControlServer.defaultSocketPath(),
-                                   programVersion: LinuxAppMetadata.version, pane: pane)
+                                   programVersion: LinuxAppMetadata.version, pane: pane,
+                                   paneToken: pane == nil ? nil : UUID().uuidString)
     }
 
     /// Each session's deck page is an outer GtkStack ("main" = a GtkPaned holding the
@@ -198,16 +199,34 @@ extension AppController {
         return (keymap.commands, diags.count)
     }
 
-    func runCustomCommand(_ cmd: CustomCommand) {
+    func runCustomCommand(_ cmd: CustomCommand, origin: GhosttySurface? = nil) {
         let s = store.activeSession
         let workspace = s.flatMap { store.workspace(forSession: $0.id) }
+        let pane: CommandContext.Pane
+        let selectionSurface: GhosttySurface?
+        if let s, let origin, scratchSurfaces[s.id] === origin {
+            pane = .scratch
+            selectionSurface = origin
+        } else if let s, let origin, splitSurfaces[s.id] === origin {
+            pane = .right
+            selectionSurface = origin
+        } else if let s, let origin, surfaces[s.id] === origin {
+            pane = .left
+            selectionSurface = origin
+        } else if let s, s.splitFocused, let split = splitSurfaces[s.id] {
+            pane = .right
+            selectionSurface = split
+        } else {
+            pane = .left
+            selectionSurface = s.flatMap { surfaces[$0.id] }
+        }
         let context = CommandContext(sessionID: s?.id.uuidString ?? "", sessionName: s?.displayName ?? "",
                                      sessionPWD: s?.effectiveCwd ?? "",
                                      workspaceID: workspace?.id.uuidString ?? "",
                                      workspaceName: workspace?.name ?? "",
                                      windowID: windowID.uuidString,
                                      windowName: gLibrary.windows.first(where: { $0.id == windowID })?.name ?? "",
-                                     selection: activeSurface()?.readSelection() ?? "",
+                                     pane: pane, selection: selectionSurface?.readSelection() ?? "",
                                      socket: gControlServer.boundSocketPath ?? "")
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/bin/sh")

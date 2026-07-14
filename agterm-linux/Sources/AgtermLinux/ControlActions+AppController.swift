@@ -374,9 +374,11 @@ extension AppController: ControlActions {
                 return err(error)
             }
             let wasBlocked = store.session(withID: id)?.agentIndicator.status == .blocked
+            let pane = update.paneID.flatMap { store.session(withID: id)?.paneRole(forToken: $0) }
+                ?? update.pane
             store.setAgentIndicator(AgentIndicator(status: update.status, blink: update.blink ?? false,
                                                    autoReset: update.autoReset ?? false,
-                                                   color: update.color, statusPane: update.pane), forSession: id)
+                                                   color: update.color, statusPane: pane), forSession: id)
             let blockedDefault = wasBlocked ? nil : linuxSettingsStore().load().blockedStatusSoundName
             if let sound = update.status.effectiveSound(perCall: update.sound, blockedDefault: blockedDefault) {
                 StatusSoundPlayer.shared.play(sound)

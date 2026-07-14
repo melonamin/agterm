@@ -7,6 +7,7 @@ final class DashboardRuntime {
     var host: OpaquePointer?
     var frames: [DashboardMember: OpaquePointer] = [:]
     var targets: [DashboardMember: TerminalZoomTarget] = [:]
+    var statusIcons: [DashboardMember: OpaquePointer] = [:]
     var clickContexts: [DashboardClickContext] = []
 }
 
@@ -67,6 +68,7 @@ extension AppController {
         dashboardRuntime.host = nil
         dashboardRuntime.frames = [:]
         dashboardRuntime.targets = [:]
+        dashboardRuntime.statusIcons = [:]
         dashboardRuntime.clickContexts = []
         dashboard.close()
         resumeAutoFollow()
@@ -160,12 +162,17 @@ extension AppController {
             gtk_overlay_set_child(cell, W(surface.glArea))
             let sessionName = store.session(withID: member.session)?.displayName ?? "Session"
             let paneName = member.surface == .split ? "Right" : "Left"
-            let caption = OpaquePointer(gtk_label_new("\(sessionName) · \(paneName)"))
+            let caption = OpaquePointer(gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6))
             gtk_widget_add_css_class(W(caption), "agterm-dashboard-caption")
             gtk_widget_set_halign(W(caption), GTK_ALIGN_START)
             gtk_widget_set_valign(W(caption), GTK_ALIGN_END)
             gtk_widget_set_margin_start(W(caption), 8)
             gtk_widget_set_margin_bottom(W(caption), 8)
+            let statusIcon = OpaquePointer(gtk_image_new())
+            dashboardRuntime.statusIcons[member] = statusIcon
+            gtk_box_append(cast(caption), W(statusIcon))
+            let captionLabel = OpaquePointer(gtk_label_new("\(sessionName) · \(paneName)"))
+            gtk_box_append(cast(caption), W(captionLabel))
             gtk_overlay_add_overlay(cell, W(caption))
             gtk_frame_set_child(cast(frame), W(cell))
             g_object_unref(RAW(surface.glArea))
@@ -201,8 +208,29 @@ extension AppController {
         gtk_overlay_add_overlay(deckOverlay, W(host))
         dashboardRuntime.host = host
         gtk_widget_set_visible(W(splitView), 0)
+        updateDashboardStatusIndicators()
         updateDashboardHighlight()
         _ = gtk_widget_grab_focus(W(host))
+    }
+
+    func updateDashboardStatusIndicators() {
+        for (member, icon) in dashboardRuntime.statusIcons {
+            let indicator = store.session(withID: member.session)?.agentIndicator ?? AgentIndicator()
+            for colorClass in ["agterm-status-active", "agterm-status-completed", "agterm-status-blocked"] {
+                gtk_widget_remove_css_class(W(icon), colorClass)
+            }
+            gtk_widget_remove_css_class(W(icon), "agterm-blink")
+            guard let iconName = Self.statusIcon(indicator.status) else {
+                gtk_widget_set_visible(W(icon), 0)
+                continue
+            }
+            iconName.withCString { gtk_image_set_from_icon_name(icon, $0) }
+            if let colorClass = Self.statusColorClass(indicator.status) {
+                gtk_widget_add_css_class(W(icon), colorClass)
+            }
+            if indicator.blink { gtk_widget_add_css_class(W(icon), "agterm-blink") }
+            gtk_widget_set_visible(W(icon), 1)
+        }
     }
 
     private func applyDashboardFont() {

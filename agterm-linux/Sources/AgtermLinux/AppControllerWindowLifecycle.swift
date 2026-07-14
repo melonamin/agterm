@@ -50,6 +50,7 @@ extension AppController {
     /// drop it from the library + registry.
     func windowWillClose() {
         commitBackgroundOpacity()
+        dismissSessionPicker()
         cancelPendingWorkspaceToggle()
         cancelFullscreenTransitionTimeout()
         setTerminalZoom(.off, target: nil)

@@ -282,6 +282,72 @@ def verify_hidden_toolbar(env, state):
         stop(process)
 
 
+def verify_session_pickers(env, state):
+    settings_path = os.path.join(state, "settings.json")
+    with open(settings_path, "w", encoding="utf-8") as destination:
+        json.dump({"attentionButtonEnabled": True}, destination)
+
+    process, app = launch(env)
+    try:
+        tree = control_json(env, "tree", "--json")["result"]["tree"]
+        original_id = tree["workspaces"][0]["sessions"][0]["id"]
+        subprocess.run(
+            [CTL, "session", "new", "--socket", env["AGTERM_CONTROL_SOCKET"]],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=env,
+        )
+        subprocess.run(
+            [
+                CTL, "session", "status", "blocked", "--target", original_id,
+                "--socket", env["AGTERM_CONTROL_SOCKET"],
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=env,
+        )
+
+        recent = wait_for(
+            lambda: actionable(app, "Recent Sessions (Ctrl+Tab)"),
+            "Recent Sessions button is missing or not actionable",
+        )
+        activate(recent)
+        recent_row = wait_for(
+            lambda: next(
+                (
+                    item for item in collect(app, role="button")
+                    if "workspace 1 ·" in (item.get_name() or "")
+                ),
+                None,
+            ),
+            "Recent Sessions popover did not expose a session row",
+        )
+        activate(recent_row)
+        wait_for(
+            lambda: actionable(app, "Show sessions that need attention (Ctrl+Shift+I)"),
+            "Attention button is missing or not actionable",
+        )
+        activate(actionable(app, "Show sessions that need attention (Ctrl+Shift+I)"))
+        wait_for(
+            lambda: next(
+                (
+                    item for item in collect(app, role="button")
+                    if "workspace 1 ·" in (item.get_name() or "")
+                ),
+                None,
+            ),
+            "Attention popover did not expose a session row",
+        )
+        print("OK: recent-session and attention popovers expose actionable rows")
+    except AssertionError:
+        describe_tree(app)
+        raise
+    finally:
+        stop(process)
+
+
 def verify_auto_follow(env, state):
     auto_state = state + "-auto-follow"
     os.makedirs(auto_state)
@@ -341,7 +407,9 @@ def main():
 
     scenario = os.environ.get("AGTERM_ATSPI_SCENARIO")
     if scenario is None:
-        for child_scenario in ("normal", "preferences-pages", "auto-follow", "hidden-toolbar"):
+        for child_scenario in (
+            "normal", "preferences-pages", "session-pickers", "auto-follow", "hidden-toolbar",
+        ):
             child_env = dict(os.environ, AGTERM_ATSPI_SCENARIO=child_scenario)
             result = subprocess.run([sys.executable, __file__], env=child_env)
             if result.returncode != 0:
@@ -376,6 +444,8 @@ def main():
             verify_preferences_pages(env, home)
         elif scenario == "auto-follow":
             verify_auto_follow(env, state)
+        elif scenario == "session-pickers":
+            verify_session_pickers(env, state)
         elif scenario == "hidden-toolbar":
             verify_hidden_toolbar(env, state)
         else:

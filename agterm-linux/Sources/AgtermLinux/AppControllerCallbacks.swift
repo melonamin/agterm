@@ -91,8 +91,12 @@ let onFlaggedToggle: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _
     MainActor.assumeIsolated { gController?.toggleFlaggedView() }
 }
 
-let onAttentionButton: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _ in
-    MainActor.assumeIsolated { gController?.showAttentionPalette() }
+let onAttentionButton: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
+    MainActor.assumeIsolated { gController?.showSessionPicker(attention: true, anchor: button) }
+}
+
+let onRecentSessionsButton: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
+    MainActor.assumeIsolated { gController?.showSessionPicker(attention: false, anchor: button) }
 }
 
 let onRowActivated: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { _, row, _ in

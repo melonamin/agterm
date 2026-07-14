@@ -63,6 +63,9 @@ surface ownership, and the C-boundary concurrency contract before changing the b
   user can then act on it), acting is fine, but ANNOUNCE each action as you do it so the user can follow
   and help.
   When in doubt, treat it as manual and ask before touching.
+- **Non-trivial work goes in an ISOLATED git worktree, cleaned up after merge.**
+  See the worktree rule under "Build and test commands" for the mandate, the artifact-symlink setup a
+  fresh worktree needs, and the post-merge cleanup (which must never switch the main checkout's branch).
 
 ## Toolchain
 
@@ -114,6 +117,19 @@ The app must build, `swift test` must stay green, and `make lint` must pass afte
   (or any lint) limit to fit their change — bumping a size limit is a maintainer decision,
   so at most note the file is getting long, never offer the limit bump as the fix.
 
+- **Feature development and any non-trivial fix/change SHOULD go through an ISOLATED git worktree,
+  cleaned up after merge.**
+  A trivial one-file edit can stay on the main checkout; anything larger gets its own worktree so a
+  build/test/dev-launch iteration never disturbs the deployed daily driver or the main checkout's branch.
+  Create it with Claude Code's NATIVE support ("work in a worktree" runs `EnterWorktree`, or
+  `claude --worktree <name>`), never a manual `git worktree add` (global rule), then do the artifact
+  SYMLINK setup in the next bullet BEFORE building (a fresh worktree lacks the gitignored
+  `GhosttyKit.xcframework` / `agterm/Resources/{ghostty,terminfo}`).
+  AFTER the PR merges, remove the worktree (`git worktree remove --force <wt>`, or `ExitWorktree`),
+  which drops the worktree + its symlinks without touching the main repo's artifacts.
+  Cleanup must NEVER switch the main checkout's branch (the user may be working there in another window),
+  and `gh pr merge --delete-branch` run FROM the worktree switches it, so merge / branch-delete from the
+  main checkout, not the worktree.
 - **Working in a git WORKTREE: SYMLINK the prebuilt artifacts, don't re-run setup.** A fresh `git worktree`
   does NOT contain the gitignored `GhosttyKit.xcframework`, `agterm/Resources/ghostty`,
   or `agterm/Resources/terminfo` (they're build outputs, never committed).

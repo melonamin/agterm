@@ -43,6 +43,10 @@ fi
 UPSTREAM_BODY="$(curl "${CURL_ARGS[@]}" "$API_URL" | jq -er '.body | select(type == "string" and length > 0)')"
 # Upstream separates product notes from macOS signing and installation details with a horizontal rule.
 PRODUCT_NOTES="$(printf '%s\n' "$UPSTREAM_BODY" | awk '/^---[[:space:]]*$/ { exit } { print }')"
+CURATED_UPSTREAM_NOTES="packaging/linux/release-notes/${UPSTREAM_VERSION}-upstream.md"
+if [[ -f "$CURATED_UPSTREAM_NOTES" ]]; then
+  PRODUCT_NOTES="$(cat "$CURATED_UPSTREAM_NOTES")"
+fi
 if [[ -z "${PRODUCT_NOTES//[[:space:]]/}" ]]; then
   echo "upstream release $UPSTREAM_VERSION has no product notes" >&2
   exit 1

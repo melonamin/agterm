@@ -172,6 +172,7 @@
             <a href="#troubleshooting" style="color: #bfbab0; padding: 7px 12px; border-radius: 7px" class="hv9"
               >Troubleshooting</a
             >
+            <a href="#related" style="color: #bfbab0; padding: 7px 12px; border-radius: 7px" class="hv9">Related projects</a>
           </nav>
         </aside>
 
@@ -724,7 +725,9 @@
                 <p style="font-size: 15px; line-height: 1.6; color: #949ba4; margin: 0">
                   Watch several agents or builds at once: sessions' live output in one grid overlaid on the window. The cell unit is a
                   session+pane — a non-split session is one cell, a split session is two (its left and right panes), capped at nine
-                  cells. It is view-only — no cell takes input; the arrow keys move a highlight, Enter jumps into the highlighted
+                  cells. Each cell's name chip also reflects the session's agent status, filling with the status color and pulsing
+                  while it blinks, so a session that needs attention stands out in the grid. It is view-only — no cell takes input;
+                  the arrow keys move a highlight, Enter jumps into the highlighted
                   session and focuses that exact pane, and Esc closes. Opened over the control channel with
                   <code style="color: #e6e1d7">agtermctl dashboard &lt;ids…&gt;</code>, or
                   <code style="color: #e6e1d7">agtermctl dashboard --mru</code> to fill it from the window's most-recently-used
@@ -755,7 +758,8 @@
             </h2>
             <p style="font-size: 16px; line-height: 1.7; color: #cbc6bc; margin: 0 0 20px">
               agterm is built to run from the keyboard. Every action has a shortcut and appears in the menus. Three fuzzy palettes
-              (type to filter, Enter to run, Esc to dismiss) and a Ctrl-Tab MRU switcher cover the rest.
+              (type to filter, Enter to run, Esc to dismiss) and a Ctrl-Tab MRU switcher cover the rest; a title-bar clock button
+              opens the recent-session list with the mouse.
             </p>
             <div
               style="
@@ -942,7 +946,8 @@
               clear it headlessly with <span style="font-family: &quot;JetBrains Mono&quot;, monospace; color: #cbc6bc">agtermctl session seen</span>
               so an orchestrator driving a session over the socket can acknowledge it without pulling focus
               (<span style="font-family: &quot;JetBrains Mono&quot;, monospace; color: #cbc6bc">agtermctl tree --json</span> reports each session's <span style="font-family: &quot;JetBrains Mono&quot;, monospace; color: #cbc6bc">unseen</span> count).
-              Banners and count badges toggle independently in General settings. For a coding agent that just needs to say it is
+              Banners and count badges toggle independently in the Notifications settings, which also sets the Dock-icon
+              bounce for a background notification (off, once, or until you focus agterm). For a coding agent that just needs to say it is
               waiting, <a href="#status" style="color: #6d82f3">agent status</a> is usually the better fit.
             </p>
           </section>
@@ -988,8 +993,8 @@
                 <span
                   style="position: absolute; left: 0; top: 1px; color: #6d82f3; font-family: &quot;JetBrains Mono&quot;, monospace"
                   >›</span
-                ><strong style="color: #e6e1d7">Notifications</strong> — the banner, the unseen-count badge, and the title-bar
-                attention indicator.
+                ><strong style="color: #e6e1d7">Notifications</strong> — the banner, the unseen-count badge, the Dock-icon
+                bounce for a background notification (off / once / until focused), and the title-bar attention indicator.
               </div>
               <div style="font-size: 15px; line-height: 1.6; color: #cbc6bc; padding-left: 22px; position: relative">
                 <span
@@ -1366,7 +1371,10 @@
               <span style="font-family: &quot;JetBrains Mono&quot;, monospace">AGTERM_PANE</span> (which pane the shell runs in —
               <span style="font-family: &quot;JetBrains Mono&quot;, monospace">left</span> (main),
               <span style="font-family: &quot;JetBrains Mono&quot;, monospace">right</span> (split), or
-              <span style="font-family: &quot;JetBrains Mono&quot;, monospace">scratch</span>; unset in an overlay), so a
+              <span style="font-family: &quot;JetBrains Mono&quot;, monospace">scratch</span>; unset in an overlay), and
+              <span style="font-family: &quot;JetBrains Mono&quot;, monospace">AGTERM_PANE_ID</span> (a stable per-surface token the
+              agent-status hook forwards as <span style="font-family: &quot;JetBrains Mono&quot;, monospace">session status --pane-id</span>,
+              so a promoted-then-re-split pane still tags correctly), so a
               script can drive its own window without hard-coding ids.
             </div>
           </section>
@@ -1844,9 +1852,11 @@
               When the sidebar is hidden the glyphs go with it, so an optional
               <strong style="color: #e6e1d7">title-bar bell</strong> (Settings ▸ Notifications ▸ Show attention indicator, off by
               default) reflects the window: dimmed when nothing needs you, plain when a session is active or completed, filled
-              amber when any is blocked. Clicking it — or ⌃⇧I, <strong style="color: #e6e1d7">Navigate ▸ Go to Attention…</strong>,
-              or the action palette's "Show Attention" — opens the <strong style="color: #e6e1d7">attention list</strong>: this
-              window's non-idle sessions, sorted blocked → active → completed. Over the control channel,
+              amber when any is blocked. Clicking it opens a <strong style="color: #e6e1d7">popover</strong> of this window's non-idle
+              sessions, sorted blocked → active → completed, that you hover to highlight and click to jump to the session and the
+              pane that set its status. ⌃⇧I, <strong style="color: #e6e1d7">Navigate ▸ Go to Attention…</strong>, or the action
+              palette's "Show Attention" opens the same <strong style="color: #e6e1d7">attention list</strong> as a searchable
+              palette. Over the control channel,
               <span style="font-family: &quot;JetBrains Mono&quot;, monospace; color: #cbc6bc">agtermctl tree --json</span> reports
               each session's <span style="font-family: &quot;JetBrains Mono&quot;, monospace; color: #cbc6bc">status</span> and
               <span style="font-family: &quot;JetBrains Mono&quot;, monospace; color: #cbc6bc">statusPane</span> (which pane set it).
@@ -1996,6 +2006,121 @@
                 >Start a discussion ↗</a
               >
             </div>
+          </section>
+
+          <!-- RELATED PROJECTS -->
+          <section id="related" style="scroll-margin-top: 88px; padding-top: 56px">
+            <h2
+              style="
+                font-family: &quot;JetBrains Mono&quot;, monospace;
+                font-weight: 700;
+                font-size: 28px;
+                letter-spacing: -0.02em;
+                margin: 0 0 16px;
+                padding-bottom: 12px;
+                border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+              "
+            >
+              Related projects
+            </h2>
+            <p style="font-size: 16px; line-height: 1.7; color: #cbc6bc; margin: 0 0 24px">
+              A small ecosystem has grown around agterm. These are independent projects, not maintained here.
+            </p>
+
+            <p
+              style="
+                font-family: &quot;JetBrains Mono&quot;, monospace;
+                font-size: 12px;
+                letter-spacing: 0.14em;
+                text-transform: uppercase;
+                color: #6d82f3;
+                margin: 0 0 12px;
+              "
+            >
+              Built on agterm
+            </p>
+            <ul style="list-style: none; padding: 0; margin: 0 0 24px; display: flex; flex-direction: column; gap: 14px">
+              <li style="font-size: 15px; line-height: 1.65; color: #cbc6bc; padding-left: 22px; position: relative">
+                <span
+                  style="position: absolute; left: 0; top: 2px; color: #6d82f3; font-family: &quot;JetBrains Mono&quot;, monospace"
+                  >›</span
+                ><strong style="color: #e6e1d7"
+                  ><a href="https://github.com/melonamin/agterm-linux" style="color: #e6e1d7" class="hv11">agterm-linux</a></strong
+                >
+                is a Linux port (GTK4/libadwaita) built on the shared, host-free
+                <span style="font-family: &quot;JetBrains Mono&quot;, monospace; color: #cbc6bc">agtermCore</span>, by melonamin. The
+                macOS app stays here; the Linux frontend lives in that fork.
+              </li>
+            </ul>
+
+            <p
+              style="
+                font-family: &quot;JetBrains Mono&quot;, monospace;
+                font-size: 12px;
+                letter-spacing: 0.14em;
+                text-transform: uppercase;
+                color: #6d82f3;
+                margin: 0 0 12px;
+              "
+            >
+              Reimplementation
+            </p>
+            <ul style="list-style: none; padding: 0; margin: 0 0 24px; display: flex; flex-direction: column; gap: 14px">
+              <li style="font-size: 15px; line-height: 1.65; color: #cbc6bc; padding-left: 22px; position: relative">
+                <span
+                  style="position: absolute; left: 0; top: 2px; color: #6d82f3; font-family: &quot;JetBrains Mono&quot;, monospace"
+                  >›</span
+                ><strong style="color: #e6e1d7"
+                  ><a href="https://github.com/yeroo/agwinterm" style="color: #e6e1d7" class="hv11">agwinterm</a></strong
+                >
+                by yeroo is a native Windows terminal for AI coding agents (C#, Win32/Direct2D), an independent from-scratch homage
+                to agterm's design.
+              </li>
+            </ul>
+
+            <p
+              style="
+                font-family: &quot;JetBrains Mono&quot;, monospace;
+                font-size: 12px;
+                letter-spacing: 0.14em;
+                text-transform: uppercase;
+                color: #6d82f3;
+                margin: 0 0 12px;
+              "
+            >
+              Companion tools
+            </p>
+            <ul style="list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 14px">
+              <li style="font-size: 15px; line-height: 1.65; color: #cbc6bc; padding-left: 22px; position: relative">
+                <span
+                  style="position: absolute; left: 0; top: 2px; color: #6d82f3; font-family: &quot;JetBrains Mono&quot;, monospace"
+                  >›</span
+                ><strong style="color: #e6e1d7"
+                  ><a href="https://github.com/k0nsta/agterm-remote" style="color: #e6e1d7" class="hv11">agterm-remote</a></strong
+                >
+                carries agterm's agent-status colors and pushes to agents running in a remote tmux over SSH.
+              </li>
+              <li style="font-size: 15px; line-height: 1.65; color: #cbc6bc; padding-left: 22px; position: relative">
+                <span
+                  style="position: absolute; left: 0; top: 2px; color: #6d82f3; font-family: &quot;JetBrains Mono&quot;, monospace"
+                  >›</span
+                ><strong style="color: #e6e1d7"
+                  ><a href="https://github.com/khanton/pi-agterm" style="color: #e6e1d7" class="hv11">pi-agterm</a></strong
+                >
+                is a pi extension that reports agent status onto agterm's status indicator.
+              </li>
+              <li style="font-size: 15px; line-height: 1.65; color: #cbc6bc; padding-left: 22px; position: relative">
+                <span
+                  style="position: absolute; left: 0; top: 2px; color: #6d82f3; font-family: &quot;JetBrains Mono&quot;, monospace"
+                  >›</span
+                ><strong style="color: #e6e1d7"
+                  ><a href="https://github.com/rashpile/agterm-experimental" style="color: #e6e1d7" class="hv11"
+                    >agterm-experimental</a
+                  ></strong
+                >
+                collects custom skills and scripts for agterm.
+              </li>
+            </ul>
           </section>
 
           <!-- attribution -->

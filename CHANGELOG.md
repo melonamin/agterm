@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.13.0 - 2026-07-14
+
+### New Features
+
+- title-bar recent-sessions clock and attention bell, each opening a popover to jump to a recent or waiting session when the sidebar is hidden #212 @umputun
+- opt-in Dock-icon bounce on a background notification, off by default, with a None / Once / Until focused picker in Settings ▸ Notifications #215 @umputun
+- agent-status glyphs on dashboard cells, so a session that needs attention stands out in the grid #209 @umputun
+- `$AGT_PANE` now reports which pane a custom command fired from (`left` / `right` / `scratch`), so a keybinding can route a follow-up `agtermctl` call back into that pane #210 @umputun
+
+### Bug Fixes
+
+- resolve a session's agent-status pane from a stable surface token, keeping the status glyph and pane-aware reveal correct across split and scratch teardown #213 @umputun
+- apply libghostty mouse cursor shapes via `cursorUpdate`, so the pointer shape tracks what the terminal program requests #207 @umputun
+
 ## v0.12.1 - 2026-07-13
 
 ### Bug Fixes

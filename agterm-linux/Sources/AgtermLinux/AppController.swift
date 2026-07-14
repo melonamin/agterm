@@ -41,7 +41,11 @@ final class AppController {
     let terminalZoom = TerminalZoomController(); let dashboard = DashboardController(); let dashboardRuntime = DashboardRuntime(); var zoomHost: OpaquePointer?
     var splitToggleBtn: OpaquePointer?    // title-bar split toggle (swaps to .fill when active)
     var scratchToggleBtn: OpaquePointer?  // title-bar scratch toggle (swaps to .fill when active)
+    var recentSessionsButton: OpaquePointer? // title-bar MRU session picker
     var attentionButton: OpaquePointer?   // optional title-bar attention indicator button
+    var sessionPickerPopover: OpaquePointer?; var sessionPickerContexts: [SessionPickerRowContext] = []
+    var sessionPickerSuppressesAutoFollow = false
+    var sessionPickerShowsAttention = false
     let sidebarBox: OpaquePointer    // GtkBox holding per-workspace sections
     var splitView: OpaquePointer!    // root GtkPaned (collapsible, resizable sidebar)
 
@@ -214,19 +218,13 @@ final class AppController {
         self.contentHeader = contentHeader
         adw_header_bar_set_show_start_title_buttons(contentHeader, 0)
         adw_header_bar_set_show_end_title_buttons(contentHeader, 0)
-        // Title-bar terminal toggles (mirror the macOS top-right controls). pack_end stacks leftward,
-        // so the visual left-to-right order is split, scratch, then quick.
+        // Title-bar session pickers and terminal toggles mirror the macOS top-right action cluster.
+        // `pack_end` stacks leftward, so construction proceeds from the visual right edge.
         // Sidebar toggle on the LEFT (macOS sidebar.left), always visible so a hidden sidebar can return.
         let sidebarBtn = OpaquePointer(gtk_button_new_from_icon_name("agterm-sidebar-symbolic"))
         gtk_widget_set_tooltip_text(W(sidebarBtn), "Toggle Sidebar (Ctrl+Shift+B)")
         connect(sidebarBtn, "clicked", unsafeBitCast(onSidebarToggle as @convention(c) (OpaquePointer?, gpointer?) -> Void, to: GCallback.self))
         adw_header_bar_pack_start(contentHeader, W(sidebarBtn))
-        attentionButton = OpaquePointer(gtk_button_new_from_icon_name("dialog-warning-symbolic"))
-        gtk_widget_set_tooltip_text(W(attentionButton), "Show sessions that need attention (Ctrl+Shift+I)")
-        gtk_button_set_has_frame(BUTTON(attentionButton), 0)
-        connect(attentionButton, "clicked", unsafeBitCast(onAttentionButton as @convention(c) (OpaquePointer?, gpointer?) -> Void, to: GCallback.self))
-        adw_header_bar_pack_start(contentHeader, W(attentionButton))
-        updateAttentionButton()
         installPreferencesShortcut()
         @discardableResult func headerToggle(_ icon: String, _ tip: String, _ cb: @escaping @convention(c) (OpaquePointer?, gpointer?) -> Void) -> OpaquePointer? {
             let b = OpaquePointer(gtk_button_new_from_icon_name(icon))
@@ -235,11 +233,16 @@ final class AppController {
             adw_header_bar_pack_end(contentHeader, W(b))
             return b
         }
-        // pack_end stacks leftward, so this order yields left-to-right: Scratch, Split, Quick. Icons match
-        // the macOS SF Symbols; split/scratch swap to a .fill variant when active (updateToggleIcons).
+        // This order yields left-to-right: Recent, Attention, Scratch, Split, Quick. Icons match the
+        // macOS actions; split/scratch swap to a .fill variant when active (updateToggleIcons).
         headerToggle("agterm-quick-symbolic", "Quick Terminal (Ctrl+`)", onQuickToggle)
         splitToggleBtn = headerToggle("agterm-split-symbolic", "Toggle Split (Ctrl+Shift+D)", onSplitToggle)
         scratchToggleBtn = headerToggle("agterm-scratch-symbolic", "Scratch Terminal (Ctrl+Shift+J)", onScratchToggle)
+        attentionButton = headerToggle("emblem-important-symbolic", "Show sessions that need attention (Ctrl+Shift+I)",
+                                       onAttentionButton)
+        recentSessionsButton = headerToggle("document-open-recent-symbolic", "Recent Sessions (Ctrl+Tab)",
+                                            onRecentSessionsButton)
+        updateAttentionButton()
         let contentToolbar = OpaquePointer(adw_toolbar_view_new())
         adw_toolbar_view_add_top_bar(contentToolbar, W(contentHeader))
         let contentBox = OpaquePointer(gtk_box_new(GTK_ORIENTATION_VERTICAL, 0))
@@ -321,6 +324,7 @@ final class AppController {
         showActive()
         syncSidebarSelection()
         updateTitle()
+        updateRecentSessionsButton()
         if needsRefresh || focusFilterChanged { rebuildSidebar() }
     }
 

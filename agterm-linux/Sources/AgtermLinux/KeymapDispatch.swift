@@ -165,7 +165,7 @@ extension AppController {
         // Custom-command leader matcher (disjoint from built-ins by parseKeymap validation).
         switch customCommandEngine.advance(chord) {
         case .fired(let cmd):
-            runCustomCommand(cmd)
+            runCustomCommand(cmd, origin: origin)
             return true
         case .armed:
             return true   // leader in progress: consume and wait for the next chord

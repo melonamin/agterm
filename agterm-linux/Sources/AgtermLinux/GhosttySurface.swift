@@ -39,6 +39,12 @@ final class GhosttySurface: TerminalSurface {
     private let initialInput: String?
     /// `AGTERM_*` (and any other) env vars to inject into the spawned shell.
     private let env: [String: String]
+    /// The last libghostty-requested pointer state. GTK may receive visibility, link-hover, and shape
+    /// actions independently, so keep all three and re-apply their precedence instead of letting one
+    /// callback accidentally reset another.
+    private var mouseVisible = true
+    private var mouseOverLink = false
+    private var mouseShapeName = "text"
     /// strdup'd C copies of the injected env keys/values, kept alive for the surface's lifetime
     /// (libghostty copies the env-var STRUCT array during surface_new but keeps the char* pointers),
     /// freed in teardown.
@@ -414,37 +420,64 @@ final class GhosttySurface: TerminalSurface {
     /// Show/hide the mouse pointer over this surface (GHOSTTY_ACTION_MOUSE_VISIBILITY): a blank "none"
     /// cursor when hidden, the inherited default when visible.
     func setMouseVisible(_ visible: Bool) {
-        if visible {
-            gtk_widget_set_cursor(W(glArea), nil)
-        } else {
-            gtk_widget_set_cursor(W(glArea), gdk_cursor_new_from_name("none", nil))
-        }
+        mouseVisible = visible
+        applyMouseCursor()
     }
 
     /// Set the link-hover cursor (GHOSTTY_ACTION_MOUSE_OVER_LINK): the hand "pointer" over a hyperlink,
     /// the default otherwise.
     func setLinkHover(_ overLink: Bool) {
-        gtk_widget_set_cursor(W(glArea), overLink ? gdk_cursor_new_from_name("pointer", nil) : nil)
+        mouseOverLink = overLink
+        applyMouseCursor()
     }
 
     /// Set the pointer shape over this surface (GHOSTTY_ACTION_MOUSE_SHAPE). ghostty's shapes are named
-    /// after CSS cursors, which gdk_cursor_new_from_name accepts; map the common ones, default otherwise.
+    /// after CSS cursors, which GTK accepts directly; preserve the complete libghostty set.
     func setMouseShape(_ shape: ghostty_action_mouse_shape_e) {
         let name: String
         switch shape {
-        case GHOSTTY_MOUSE_SHAPE_TEXT: name = "text"
-        case GHOSTTY_MOUSE_SHAPE_POINTER: name = "pointer"
+        case GHOSTTY_MOUSE_SHAPE_ALIAS: name = "alias"
+        case GHOSTTY_MOUSE_SHAPE_ALL_SCROLL: name = "all-scroll"
+        case GHOSTTY_MOUSE_SHAPE_CELL: name = "cell"
+        case GHOSTTY_MOUSE_SHAPE_COL_RESIZE: name = "col-resize"
+        case GHOSTTY_MOUSE_SHAPE_CONTEXT_MENU: name = "context-menu"
+        case GHOSTTY_MOUSE_SHAPE_COPY: name = "copy"
         case GHOSTTY_MOUSE_SHAPE_CROSSHAIR: name = "crosshair"
-        case GHOSTTY_MOUSE_SHAPE_WAIT: name = "wait"
-        case GHOSTTY_MOUSE_SHAPE_PROGRESS: name = "progress"
+        case GHOSTTY_MOUSE_SHAPE_E_RESIZE: name = "e-resize"
+        case GHOSTTY_MOUSE_SHAPE_EW_RESIZE: name = "ew-resize"
         case GHOSTTY_MOUSE_SHAPE_HELP: name = "help"
         case GHOSTTY_MOUSE_SHAPE_MOVE: name = "move"
+        case GHOSTTY_MOUSE_SHAPE_N_RESIZE: name = "n-resize"
+        case GHOSTTY_MOUSE_SHAPE_NE_RESIZE: name = "ne-resize"
+        case GHOSTTY_MOUSE_SHAPE_NESW_RESIZE: name = "nesw-resize"
+        case GHOSTTY_MOUSE_SHAPE_NO_DROP: name = "no-drop"
+        case GHOSTTY_MOUSE_SHAPE_NOT_ALLOWED: name = "not-allowed"
+        case GHOSTTY_MOUSE_SHAPE_NS_RESIZE: name = "ns-resize"
+        case GHOSTTY_MOUSE_SHAPE_NW_RESIZE: name = "nw-resize"
+        case GHOSTTY_MOUSE_SHAPE_NWSE_RESIZE: name = "nwse-resize"
+        case GHOSTTY_MOUSE_SHAPE_POINTER: name = "pointer"
+        case GHOSTTY_MOUSE_SHAPE_PROGRESS: name = "progress"
         case GHOSTTY_MOUSE_SHAPE_GRAB: name = "grab"
         case GHOSTTY_MOUSE_SHAPE_GRABBING: name = "grabbing"
-        case GHOSTTY_MOUSE_SHAPE_NOT_ALLOWED: name = "not-allowed"
-        default: name = "default"
+        case GHOSTTY_MOUSE_SHAPE_ROW_RESIZE: name = "row-resize"
+        case GHOSTTY_MOUSE_SHAPE_S_RESIZE: name = "s-resize"
+        case GHOSTTY_MOUSE_SHAPE_SE_RESIZE: name = "se-resize"
+        case GHOSTTY_MOUSE_SHAPE_SW_RESIZE: name = "sw-resize"
+        case GHOSTTY_MOUSE_SHAPE_TEXT: name = "text"
+        case GHOSTTY_MOUSE_SHAPE_VERTICAL_TEXT: name = "vertical-text"
+        case GHOSTTY_MOUSE_SHAPE_W_RESIZE: name = "w-resize"
+        case GHOSTTY_MOUSE_SHAPE_WAIT: name = "wait"
+        case GHOSTTY_MOUSE_SHAPE_ZOOM_IN: name = "zoom-in"
+        case GHOSTTY_MOUSE_SHAPE_ZOOM_OUT: name = "zoom-out"
+        default: name = "text"
         }
-        gtk_widget_set_cursor(W(glArea), name == "default" ? nil : gdk_cursor_new_from_name(name, nil))
+        mouseShapeName = name
+        applyMouseCursor()
+    }
+
+    private func applyMouseCursor() {
+        let name = !mouseVisible ? "none" : (mouseOverLink ? "pointer" : mouseShapeName)
+        name.withCString { gtk_widget_set_cursor_from_name(W(glArea), $0) }
     }
 
     /// Push the current system light/dark scheme to the surface (at create + on style-manager change).
@@ -603,6 +636,10 @@ final class GhosttySurface: TerminalSurface {
     func promoteToPrimaryPane() {
         isSplitPane = false
     }
+
+    /// Stable spawn identity shared with the shell as `AGTERM_PANE_ID`. The session model resolves this
+    /// token against the surface's live slot after a split pane is promoted and a new split is created.
+    var paneToken: String { env["AGTERM_PANE_ID"] ?? "" }
 
     /// The live foreground-process argv (via `/proc/<pid>/cmdline`), or nil at the shell prompt — the
     /// Linux analogue of macOS's KERN_PROCARGS2 capture, used for `tree` introspection / restore.

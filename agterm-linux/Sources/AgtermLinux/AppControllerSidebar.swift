@@ -46,6 +46,7 @@ extension AppController {
 
     func rebuildSidebar() {
         updateAttentionButton()
+        updateDashboardStatusIndicators()
         while let child = gtk_widget_get_first_child(W(sidebarBox)) {
             gtk_box_remove(cast(sidebarBox), child)
         }
@@ -203,7 +204,7 @@ extension AppController {
         return row
     }
 
-    private static func statusIcon(_ s: AgentStatus) -> String? {
+    static func statusIcon(_ s: AgentStatus) -> String? {
         switch s {
         case .idle: return nil
         case .active: return "content-loading-symbolic"
@@ -212,7 +213,7 @@ extension AppController {
         }
     }
 
-    private static func statusColorClass(_ s: AgentStatus) -> String? {
+    static func statusColorClass(_ s: AgentStatus) -> String? {
         switch s {
         case .idle: return nil
         case .active: return "agterm-status-active"
@@ -222,6 +223,7 @@ extension AppController {
     }
 
     func updateAttentionButton() {
+        updateRecentSessionsButton()
         guard let button = attentionButton else { return }
         let enabled = linuxSettingsStore().load().attentionButtonEnabled ?? false
         gtk_widget_set_visible(W(button), enabled ? 1 : 0)
@@ -229,6 +231,9 @@ extension AppController {
         gtk_widget_set_sensitive(W(button), sessions.isEmpty ? 0 : 1)
         let hasBlocked = sessions.contains { $0.agentIndicator.status == .blocked }
         gtk_button_set_icon_name(BUTTON(button), hasBlocked ? "dialog-warning-symbolic" : "emblem-important-symbolic")
+        if !enabled || sessions.isEmpty, sessionPickerPopover != nil, sessionPickerShowsAttention {
+            dismissSessionPicker()
+        }
     }
 
     func session(forRow row: OpaquePointer?) -> UUID? {

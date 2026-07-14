@@ -41,11 +41,11 @@ Code layout:
 
 ### Linux feature parity and platform differences
 
-The `linux-port` branch carries the upstream v0.12.1 terminal model and control protocol, including
+The `linux-port` branch carries the upstream v0.13.0 terminal model and control protocol, including
 split/scratch/overlay terminals, Quick terminal input and read-back, terminal zoom, fullscreen,
 recently closed sessions with grouped undo, light/dark themes, configurable toolbar and sidebar text,
-the view-only multi-session dashboard, and Ctrl/Shift multi-session selection with batch move, close,
-flag, status, and drag/drop actions.
+recent-session and attention popovers, agent status in the multi-session dashboard, stable pane status
+routing, and Ctrl/Shift multi-session selection with batch move, close, flag, status, and drag/drop actions.
 The GTK frontend keeps the content toolbar focused on terminal controls.
 Preferences opens with Ctrl+, while Integrations, Keyboard Shortcuts, and About remain available from the command palette.
 
@@ -333,7 +333,7 @@ agterm arranges terminals into a small hierarchy. These are the only terms you n
 
 **Terminal zoom.** Zoom fills the whole window with one terminal surface — a pane, the scratch, an overlay, or the quick terminal — hiding the sidebar and collapsing the title bar to a slim strip that keeps the traffic lights and an exit button. Cmd+Shift+Return toggles it on the active surface (rebindable as `toggle_terminal_zoom`; the exit button, ⌘W, and View ▸ Toggle Terminal Zoom all leave it). It is a view mode, not a layout change: entering closes transient chrome (an open palette or search), and exiting restores split ratios, focus, and visibility exactly as they were. Everything else keeps running behind the zoomed surface, and a script can zoom any surface by id with `agtermctl surface zoom`. Distinct from macOS window zoom and full screen, which size the window itself.
 
-**Dashboard.** For watching several agents or builds at once, the dashboard shows sessions' live output side by side in a grid (laid out `ceil(sqrt(n))`), overlaid on the window. The cell unit is a session+pane: a non-split session is one cell, and a split session shows as two cells — its left/primary and right/split panes. It is view-only — no cell takes input; the keyboard navigates a highlight between cells with the arrow keys, Enter jumps into the highlighted session and focuses that exact pane (and closes the grid), and Esc closes it. It is opened over the control channel with `agtermctl dashboard <ids…>` — or with `agtermctl dashboard --mru` to fill the grid from the window's most-recently-used sessions instead of naming ids — and closed with `--close` (or Enter/Esc). The most-recently-used grid also has a built-in opener: **⌘⇧D** (or **Navigate ▸ Dashboard**, or the command palette's **Dashboard**) toggles it, auto-sized, so the recent-sessions view is one keystroke away without a script. Cell fonts can be sized absolutely with `--font-size` or scaled to the grid with `--auto-size`; the nine-cell cap counts panes, so a set whose panes exceed nine is capped with the drop reported, and `--window` picks a window (default frontmost). The dashboard and terminal zoom are mutually exclusive.
+**Dashboard.** For watching several agents or builds at once, the dashboard shows sessions' live output side by side in a grid (laid out `ceil(sqrt(n))`), overlaid on the window. The cell unit is a session+pane: a non-split session is one cell, and a split session shows as two cells — its left/primary and right/split panes. Each cell's name chip also reflects the session's agent status, filling with the status color and pulsing while it blinks, so a session that needs attention stands out in the grid. It is view-only — no cell takes input; the keyboard navigates a highlight between cells with the arrow keys, Enter jumps into the highlighted session and focuses that exact pane (and closes the grid), and Esc closes it. It is opened over the control channel with `agtermctl dashboard <ids…>` — or with `agtermctl dashboard --mru` to fill the grid from the window's most-recently-used sessions instead of naming ids — and closed with `--close` (or Enter/Esc). The most-recently-used grid also has a built-in opener: **⌘⇧D** (or **Navigate ▸ Dashboard**, or the command palette's **Dashboard**) toggles it, auto-sized, so the recent-sessions view is one keystroke away without a script. Cell fonts can be sized absolutely with `--font-size` or scaled to the grid with `--auto-size`; the nine-cell cap counts panes, so a set whose panes exceed nine is capped with the drop reported, and `--window` picks a window (default frontmost). The dashboard and terminal zoom are mutually exclusive.
 
 **Workspace.** A workspace is a named group of sessions for one project or context, for example "work" or "personal". Sessions belong to a workspace and can move between workspaces while still running, keeping their shell and scrollback. There is always at least one workspace.
 
@@ -345,7 +345,7 @@ Sidebar session rows support Shift-click range selection and Cmd-click toggling 
 
 **Finder integration.** In the tree view, drag folders from Finder onto a workspace or session row to open one session per folder there; drop on empty sidebar space to use the focused/current workspace. Collapsed workspaces spring open while you hover and close again if you cancel. Dropping more than 20 folders at once is rejected. **Reveal in Finder** in the session context menu or main menu selects the focused pane's current directory (and is disabled if that directory no longer exists). Folder-picking panels also start in the focused pane's directory when it is available.
 
-**Notifications.** A program in any session can raise a desktop notification (via OSC 9 / 777, or the control API). It shows as a banner and a count badge on the session's row; clicking the banner jumps to the exact pane that raised it. The badge clears when you visit the session, or headlessly with `agtermctl session seen` — so an orchestrator driving a session over the socket can acknowledge its notifications without pulling focus to it (`agtermctl tree --json` reports each session's `unseen` count). For a coding agent that just needs to say it is waiting on you, [Agent status](#agent-status) is usually the better fit.
+**Notifications.** A program in any session can raise a desktop notification (via OSC 9 / 777, or the control API). It shows as a banner and a count badge on the session's row; clicking the banner jumps to the exact pane that raised it. Upstream macOS can optionally bounce its Dock icon while the app is in the background; Linux omits that setting because desktop shells provide no portable equivalent. The badge clears when you visit the session, or headlessly with `agtermctl session seen` — so an orchestrator driving a session over the socket can acknowledge its notifications without pulling focus to it (`agtermctl tree --json` reports each session's `unseen` count). For a coding agent that just needs to say it is waiting on you, [Agent status](#agent-status) is usually the better fit.
 
 **Agent status.** A coding agent in a session can report its state (active, blocked, completed) onto that session's row, so a screen of concurrent agents shows which one needs you. See [Agent status](#agent-status) for wiring it up.
 
@@ -357,7 +357,7 @@ agterm is built to run from the keyboard. Every action has a shortcut and appear
 - the **action palette** (Ctrl-Shift-P) runs any command by name (new, rename, close, split, toggle scratch, move a session, change font size, and so on);
 - the **custom-commands palette** (Ctrl-Shift-O) lists the shell commands you define in `keymap.conf`.
 
-For jumping back to sessions you have been working in, a Ctrl-Tab switcher walks a most-recently-used list across every workspace, macOS app-switcher style: hold Ctrl and tap Tab to move through it, release to switch, and a single tap flips straight back to the session you were just in. The list survives a relaunch, so the switcher works right after your sessions restore. Shortcuts also step between adjacent sessions, panes, and windows.
+For jumping back to sessions you have been working in, a Ctrl-Tab switcher walks a most-recently-used list across every workspace, macOS app-switcher style: hold Ctrl and tap Tab to move through it, release to switch, and a single tap flips straight back to the session you were just in. The list survives a relaunch, so the switcher works right after your sessions restore. A title-bar clock button opens the same list for the mouse: a popover of the sessions you have used recently, tinted to the terminal theme, that you hover to highlight and click to switch to. Shortcuts also step between adjacent sessions, panes, and windows.
 
 ## Settings
 
@@ -371,7 +371,7 @@ Advanced terminal configuration remains in `<config directory>/ghostty.conf`, an
 `settings.json` is internal persistence, not a supported text configuration surface.
 The global Ghostty config is opt-in and loads before the agterm-scoped file.
 On Linux, Wayland/X11 compositor settings own background blur, so Preferences explains that boundary and intentionally has no blur toggle.
-On macOS, upstream Preferences uses **Cmd+,** and retains the platform-owned blur control.
+On macOS, upstream Settings uses **Cmd+,**, retains the platform-owned blur control, and offers Dock-icon bounce for background notifications.
 
 The toolbar has three modes: **Normal**, **Compact** (the default), and **Hidden**.
 Hiding it does not disable **Ctrl+,**, keyboard shortcuts, or command-palette access.
@@ -529,7 +529,7 @@ agtermctl tree --window "$w"                              # the tree of window $
 agtermctl session new --window "$w" --cwd ~/src/agterm       # open a session in window $w
 ```
 
-Inside a session's shell, `agterm` injects environment variables a script can read: `AGTERM_ENABLED=1`, `AGTERM_WINDOW_ID`, `AGTERM_WORKSPACE_ID`, `AGTERM_SESSION_ID`, `AGTERM_SOCKET` (the live control-socket path), and `AGTERM_PANE` (which pane this shell runs in — `left` for the main pane, `right` for the split, or `scratch`; unset in an overlay). So a script running in a session can drive its own window without hard-coding ids:
+Inside a session's shell, `agterm` injects environment variables a script can read: `AGTERM_ENABLED=1`, `AGTERM_WINDOW_ID`, `AGTERM_WORKSPACE_ID`, `AGTERM_SESSION_ID`, `AGTERM_SOCKET` (the live control-socket path), `AGTERM_PANE` (which pane this shell runs in — `left` for the main pane, `right` for the split, or `scratch`; unset in an overlay), and `AGTERM_PANE_ID` (a stable per-surface token the agent-status hook forwards as `session status --pane-id`, so a status from a pane whose role went stale — a split survivor promoted into the main pane, then re-split — still resolves to the pane's current slot). So a script running in a session can drive its own window without hard-coding ids:
 
 ```sh
 agtermctl session new --window "$AGTERM_WINDOW_ID" --cwd .   # open a sibling session in this window
@@ -584,7 +584,7 @@ The shell line of a `command` may use these `{AGT_X}` tokens, expanded at fire t
 {AGT_PANE}         {AGT_SELECTION}      {AGT_SOCKET}
 ```
 
-The context is resolved from the focused pane's session, so a custom command runs in that session's working directory and can read its current selection. `{AGT_PANE}` is the pane the shortcut fired from — `left` (main) or `right` (split) — so a script can route a follow-up `agtermctl session type --pane "$AGT_PANE"` back into the very pane it was invoked in. A custom command runs as a detached `/bin/sh -c`; a non-zero exit (or a spawn failure) posts a notification banner.
+The context is resolved from the focused pane's session, so a custom command runs in that session's working directory and can read its current selection. `{AGT_PANE}` is the pane the shortcut fired from — `left` (main), `right` (split), or `scratch` (the session's scratch terminal) — so a script can route a follow-up `agtermctl session type --pane "$AGT_PANE"` back into the very pane it was invoked in. A custom command runs as a detached `/bin/sh -c`; a non-zero exit (or a spawn failure) posts a notification banner.
 
 Because it runs detached with no controlling terminal, a custom command suits fire-and-forget launches — GUI apps (`open -a …`), scripts, one-off shell lines — not interactive or full-screen programs: a TUI like `lazygit` run bare has no TTY to draw into and exits immediately. The `Lazygit` example above launches it the right way, in an overlay terminal that *does* have a TTY (`agtermctl session overlay open`, passing `{AGT_SOCKET}` so the CLI reaches this very app; add `--size-percent 80` for a floating panel instead of full-size). A per-session scratch terminal (`agtermctl session scratch on --command lazygit`) works too.
 
@@ -633,7 +633,7 @@ Open the file with **File ▸ Edit ghostty.conf…** or the ⌃⇧P palette ("Ed
 
 A coding agent running in a session can flag its status on that session's sidebar row, so you can tell at a glance which of many concurrent agents needs you. The status shows as a small tinted SF Symbol just left of the notification badge: `active` is a blue ellipsis, `blocked` an amber exclamation, `completed` a green check, and `idle` is nothing. The glyph shows on every non-idle session, the selected one included. A one-time `completed` flash auto-clears once you visit the session.
 
-When the sidebar is hidden the per-session glyphs go with it, so the same signal is available two more ways. An optional **title-bar bell** (turn on **Show attention indicator** in Preferences ▸ Notifications; off by default) reflects the window at a glance: dimmed when nothing needs attention, plain when a session is active or completed, and a filled amber bell when any session is blocked. Clicking it — or pressing ⌃⇧I, choosing **Navigate ▸ Go to Attention…**, or the action palette's "Show Attention" — opens the **attention list**: a palette of just this window's non-idle sessions, each with its status glyph, sorted blocked → active → completed (newest change first). Enter jumps to the session. Over the control channel, `agtermctl tree --json` now reports each session's `status` (omitted when idle) and `statusPane` (`left`|`right`|`scratch` — which pane set the status, omitted when idle or unset).
+When the sidebar is hidden the per-session glyphs go with it, so the same signal is available two more ways. An optional **title-bar bell** (turn on **Show attention indicator** in Preferences ▸ Notifications; off by default) reflects the window at a glance: dimmed when nothing needs attention, plain when a session is active or completed, and a filled amber bell when any session is blocked. Clicking it opens a **popover** of just this window's non-idle sessions, each with its status glyph, sorted blocked → active → completed (newest change first); hover to highlight and click a row to jump to that session and the pane that set its status. Pressing ⌃⇧I, choosing **Navigate ▸ Go to Attention…**, or the action palette's "Show Attention" opens the same **attention list** as a searchable palette, where Enter jumps to the session. Over the control channel, `agtermctl tree --json` now reports each session's `status` (omitted when idle) and `statusPane` (`left`|`right`|`scratch` — which pane set the status, omitted when idle or unset).
 
 **Auto-follow blocked sessions.** When several agents run at once, a session that blocks is easy to miss. Turn on **Settings ▸ Agent Status ▸ Auto-follow blocked sessions** (Disabled by default, or a 5s/10s/30s/60s/5m idle timeout) and, after you have been idle from input for that long, the window selects and focuses the oldest blocked session, so you are pulled to whatever agent is waiting. It is per-window and window-wide (crossing workspaces within the window), and always picks the oldest blocked session first. Being parked on a blocked session suppresses further jumps until you type a reply, which clears its glyph and re-arms the timer for the next one. The opt-in **Don't auto-follow away from a running session** (off by default) also holds the selection put while the current session is `active`. Over the control channel, `agtermctl tree --json` reports the window's `idleMs` (milliseconds since your last input, live) and `autoFollowMs` (the configured timeout in milliseconds, omitted when Disabled); `agtermctl window list --json` reports `autoFollowMs` per window (as of the last refresh), but not the live `idleMs`.
 
@@ -670,6 +670,24 @@ Restore reconstructs the structure, not the running processes. Three limitations
 1. Live processes are not reattached — true process survival would require a tmux-style backend, which is out of scope. By default a restored session re-spawns a fresh login shell in its saved working directory. The optional **Restore running commands on restart** toggle (General settings, off by default) re-runs the command each pane had in the foreground at the last clean quit, so a gate `ssh`, `tail -f`, or `top` comes back — but it is a re-run, not a reattach: only a single-process command restores faithfully (pipelines and compound lines do not); a force-quit or crash captures nothing; and the programs named in `restore-denylist.conf` (in the config directory, seeded with the terminal multiplexers `tmux`/`screen`/`zellij`, one command name per line) are skipped so they start fresh rather than re-launching — everything else, including `python manage.py runserver` or `node server.js`, is restored. Edit that file to add or remove entries.
 2. The saved working directory depends on the `GHOSTTY_ACTION_PWD` callback, which only fires when the shell has Ghostty shell-integration / OSC 7 active (auto-injected for zsh, bash, fish, and nu when the shell-integration resources are present). If the working directory is never reported, a session restores to the directory it was created in.
 3. The live working directory is persisted on quit and on every structural change (adding, closing, moving, renaming, or selecting a session), but not on every `cd` — OSC 7 fires on each prompt redraw, so saving each one would thrash the disk. A crash or force-quit therefore loses only the working-directory changes made since the last structural change or quit.
+
+## Related projects
+
+A small ecosystem has grown around agterm. These are independent projects, not maintained here.
+
+**Built on agterm**
+
+- [agterm-linux](https://github.com/melonamin/agterm-linux) by [@melonamin](https://github.com/melonamin) is a Linux port (GTK4/libadwaita) built on the shared, host-free `agtermCore`. The macOS app stays here; the Linux frontend lives in that fork.
+
+**Reimplementation**
+
+- [agwinterm](https://github.com/yeroo/agwinterm) by [@yeroo](https://github.com/yeroo) is a native Windows terminal for AI coding agents (C#, Win32/Direct2D), an independent from-scratch homage to agterm's design.
+
+**Companion tools**
+
+- [agterm-remote](https://github.com/k0nsta/agterm-remote) carries agterm's agent-status colors and pushes to agents running in a remote tmux over SSH.
+- [pi-agterm](https://github.com/khanton/pi-agterm) is a pi extension that reports agent status onto agterm's status indicator.
+- [agterm-experimental](https://github.com/rashpile/agterm-experimental) collects custom skills and scripts for agterm.
 
 ## Attribution
 
