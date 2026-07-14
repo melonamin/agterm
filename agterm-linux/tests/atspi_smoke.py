@@ -137,9 +137,69 @@ def focus_window(process_id):
         )
 
 
+def right_click(node_provider, process_id):
+    """Open a GTK row context menu with a real secondary-button event."""
+    focus_window(process_id)
+    deadline = time.monotonic() + 8
+    bounds = None
+    while time.monotonic() < deadline:
+        try:
+            node = node_provider()
+            component = node.get_component_iface() if node else None
+            if component:
+                bounds = component.get_extents(Atspi.CoordType.SCREEN)
+                break
+        except Exception:
+            pass
+        time.sleep(0.1)
+    assert bounds, "session row did not expose stable screen bounds"
+    if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE") and shutil.which("hyprctl"):
+        # Wayland intentionally hides global coordinates from AT-SPI (SCREEN reports 0,0), while
+        # WINDOW coordinates remain valid. Combine those with Hyprland's own client origin.
+        local = component.get_extents(Atspi.CoordType.WINDOW)
+        clients = json.loads(subprocess.check_output(["hyprctl", "-j", "clients"], text=True))
+        client = next((item for item in clients if item.get("pid") == process_id), None)
+        assert client, "Hyprland did not expose the isolated agterm client"
+        x = client["at"][0] + local.x + max(1, local.width // 2)
+        y = client["at"][1] + local.y + max(1, local.height // 2)
+        if shutil.which("dotool"):
+            pointer = subprocess.Popen(
+                ["dotool"], stdin=subprocess.PIPE, text=True,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            try:
+                time.sleep(0.5)  # Let Hyprland register the temporary uinput pointer.
+                subprocess.run(
+                    ["hyprctl", "dispatch", "movecursor", str(x), str(y)],
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                time.sleep(0.2)
+                pointer.stdin.write("click right\n")
+                pointer.stdin.flush()
+                time.sleep(0.2)
+            finally:
+                pointer.stdin.close()
+                pointer.wait(timeout=3)
+            return
+        assert Atspi.generate_mouse_event(x, y, "b3c"), "AT-SPI secondary click failed"
+        return
+    x = bounds.x + max(1, bounds.width // 2)
+    y = bounds.y + max(1, bounds.height // 2)
+    assert Atspi.generate_mouse_event(x, y, "b3c"), "AT-SPI secondary click failed"
+
+
 def launch(env):
     process = subprocess.Popen([BIN], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     app = wait_for(lambda: find_app(process.pid), "agterm app not present in the AT-SPI tree")
+    if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE") and shutil.which("hyprctl"):
+        subprocess.run(
+            ["hyprctl", "dispatch", "movetoworkspacesilent", f"3,pid:{process.pid}"],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
     return process, app
 
 
@@ -158,6 +218,7 @@ def control_json(env, *arguments):
         [CTL, *arguments, "--socket", env["AGTERM_CONTROL_SOCKET"]],
         env=env,
         text=True,
+        timeout=5,
     )
     return json.loads(output)
 
@@ -195,6 +256,34 @@ def verify_normal_toolbar(env, state, home):
             "Ctrl+, did not preserve the single Preferences dialog",
         )
         print("OK: menu-free toolbar and Ctrl+, Preferences shortcut")
+    except AssertionError:
+        describe_tree(app)
+        raise
+    finally:
+        stop(process)
+
+
+def verify_context_menu(env):
+    process, app = launch(env)
+    try:
+        rows = wait_for(lambda: collect(app, role="list item"), "expected at least one session row")
+        flag = None
+        for _ in range(3):
+            right_click(lambda: next(iter(collect(app, role="list item")), None), process.pid)
+            try:
+                flag = wait_for(lambda: actionable(app, "Flag"), "session context menu did not open", timeout=1)
+                break
+            except AssertionError:
+                pass
+        assert flag, "session context menu did not open"
+        assert process.poll() is None, "session context menu terminated the app"
+        activate(wait_for(lambda: actionable(app, "New Session"), "New Session button is not actionable"))
+        wait_for(
+            lambda: len(collect(app, role="list item")) == len(rows) + 1,
+            "creating a session with a context menu open blocked the app",
+        )
+        control_json(env, "tree", "--json")
+        print("OK: session context menu survives a sidebar rebuild")
     except AssertionError:
         describe_tree(app)
         raise
@@ -355,7 +444,7 @@ def verify_auto_follow(env, state):
         env,
         AGTERM_STATE_DIR=auto_state,
         AGTERM_CONTROL_SOCKET=os.path.join(auto_state, "agterm.sock"),
-        AGTERM_APP_ID="com.umputun.agterm.linux.atspi.autofollow",
+        AGTERM_APP_ID="io.github.melonamin.agterm.atspi.autofollow",
     )
     with open(os.path.join(auto_state, "settings.json"), "w", encoding="utf-8") as destination:
         json.dump({"autoFollowAttention": "s5"}, destination)
@@ -408,7 +497,7 @@ def main():
     scenario = os.environ.get("AGTERM_ATSPI_SCENARIO")
     if scenario is None:
         for child_scenario in (
-            "normal", "preferences-pages", "session-pickers", "auto-follow", "hidden-toolbar",
+            "normal", "context-menu", "preferences-pages", "session-pickers", "auto-follow", "hidden-toolbar",
         ):
             child_env = dict(os.environ, AGTERM_ATSPI_SCENARIO=child_scenario)
             result = subprocess.run([sys.executable, __file__], env=child_env)
@@ -430,7 +519,7 @@ def main():
         AGTERM_STATE_DIR=state,
         AGTERM_CONTROL_SOCKET=socket,
         AGTERM_RESOURCE_ROOT=RESOURCE_ROOT,
-        AGTERM_APP_ID="com.umputun.agterm.linux.atspi",
+        AGTERM_APP_ID="io.github.melonamin.agterm.atspi",
         PATH="/usr/bin:/bin",
     )
     if scenario in ("preferences-pages", "auto-follow"):
@@ -440,6 +529,8 @@ def main():
         Atspi.init()
         if scenario == "normal":
             verify_normal_toolbar(env, state, home)
+        elif scenario == "context-menu":
+            verify_context_menu(env)
         elif scenario == "preferences-pages":
             verify_preferences_pages(env, home)
         elif scenario == "auto-follow":

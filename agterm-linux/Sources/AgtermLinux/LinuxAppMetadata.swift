@@ -1,6 +1,10 @@
 import Foundation
 
 enum LinuxAppMetadata {
+    /// Linux application identity used by GApplication, desktop integration, notifications, and packaging.
+    /// Keep this owned by the Linux fork; the upstream macOS bundle retains its own identifier.
+    static let applicationID = "io.github.melonamin.agterm"
+
     static let version: String = {
         let environment = ProcessInfo.processInfo.environment
         if let value = environment["AGTERM_VERSION"]?.trimmingCharacters(in: .whitespacesAndNewlines),

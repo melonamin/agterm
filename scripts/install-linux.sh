@@ -44,10 +44,12 @@ else
   echo "Skipped ghostty resources (run scripts/setup-linux.sh to vendor them; the app falls back to /usr/share/ghostty)."
 fi
 
-install -Dm644 "packaging/linux/com.umputun.agterm.linux.desktop" \
-  "$APP_DIR/com.umputun.agterm.linux.desktop"
+install -Dm644 "packaging/linux/io.github.melonamin.agterm.desktop" \
+  "$APP_DIR/io.github.melonamin.agterm.desktop"
 # point Exec at the installed absolute path.
-sed -i "s|^Exec=.*|Exec=$BIN_DIR/agterm-linux|" "$APP_DIR/com.umputun.agterm.linux.desktop"
+sed -i "s|^Exec=.*|Exec=$BIN_DIR/agterm-linux|" "$APP_DIR/io.github.melonamin.agterm.desktop"
+# Remove desktop metadata from pre-migration personal installs so launchers do not show two entries.
+rm -f "$APP_DIR/com.umputun.agterm.linux.desktop"
 
 # Generate the hicolor app icon set from the macOS Icon Composer source PNG (no committed binaries),
 # so the .desktop's Icon= key + the taskbar/notification icon resolve.
@@ -56,7 +58,8 @@ ICON_BASE="$HOME/.local/share/icons/hicolor"
 if [ -n "$ICON_SRC" ] && command -v magick >/dev/null 2>&1; then
   for sz in 16 32 48 64 128 256 512; do
     install -d "$ICON_BASE/${sz}x${sz}/apps"
-    magick "$ICON_SRC" -resize "${sz}x${sz}" "$ICON_BASE/${sz}x${sz}/apps/com.umputun.agterm.linux.png"
+    magick "$ICON_SRC" -resize "${sz}x${sz}" "$ICON_BASE/${sz}x${sz}/apps/io.github.melonamin.agterm.png"
+    rm -f "$ICON_BASE/${sz}x${sz}/apps/com.umputun.agterm.linux.png"
   done
   command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -f -t "$ICON_BASE" 2>/dev/null || true
   echo "Installed hicolor app icons (16-512px)."

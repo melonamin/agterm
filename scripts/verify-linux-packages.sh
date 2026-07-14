@@ -44,8 +44,8 @@ verify_payload() {
   test -x "$payload/share/agterm/agent-status/agterm-codex-status.sh"
   test -f "$payload/share/agterm/agent-skill/SKILL.md"
   [[ "$(<"$payload/share/agterm/VERSION")" == "$VERSION" ]]
-  test -f "$payload/share/applications/com.umputun.agterm.linux.desktop"
-  desktop-file-validate "$payload/share/applications/com.umputun.agterm.linux.desktop"
+  test -f "$payload/share/applications/io.github.melonamin.agterm.desktop"
+  desktop-file-validate "$payload/share/applications/io.github.melonamin.agterm.desktop"
   file "$payload/bin/agterm-linux.bin" | grep -q 'x86-64'
   for binary in agterm-linux.bin agtermctl.bin; do
     LD_LIBRARY_PATH="$payload/lib" ldd "$payload/bin/$binary" > "$WORK/$binary.ldd"

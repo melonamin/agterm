@@ -70,7 +70,7 @@ extension AppController {
     func showAbout() {
         let dialog = OpaquePointer(adw_about_dialog_new())
         "agterm".withCString { adw_about_dialog_set_application_name(dialog, $0) }
-        "com.umputun.agterm.linux".withCString { adw_about_dialog_set_application_icon(dialog, $0) }
+        LinuxAppMetadata.applicationID.withCString { adw_about_dialog_set_application_icon(dialog, $0) }
         "agterm-linux maintainers".withCString { adw_about_dialog_set_developer_name(dialog, $0) }
         LinuxAppMetadata.version.withCString { adw_about_dialog_set_version(dialog, $0) }
         "A workspace terminal for long-lived coding-agent and shell sessions.".withCString {

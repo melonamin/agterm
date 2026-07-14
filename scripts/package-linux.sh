@@ -49,7 +49,7 @@ export AGTERM_PACKAGE_ROOT="$PAYLOAD"
 "$NFPM" package --config "$ROOT/packaging/linux/nfpm.yml" --packager rpm --target "$RPM"
 
 cp -a "$PAYLOAD/." "$APPDIR/usr/"
-ICON="$APPDIR/usr/share/icons/hicolor/512x512/apps/com.umputun.agterm.linux.png"
+ICON="$APPDIR/usr/share/icons/hicolor/512x512/apps/io.github.melonamin.agterm.png"
 (
   cd "$WORK"
   APPIMAGE_EXTRACT_AND_RUN=1 \
@@ -59,7 +59,7 @@ ICON="$APPDIR/usr/share/icons/hicolor/512x512/apps/com.umputun.agterm.linux.png"
       --appdir "$APPDIR" \
       --executable "$APPDIR/usr/bin/agterm-linux.bin" \
       --executable "$APPDIR/usr/bin/agtermctl.bin" \
-      --desktop-file "$APPDIR/usr/share/applications/com.umputun.agterm.linux.desktop" \
+      --desktop-file "$APPDIR/usr/share/applications/io.github.melonamin.agterm.desktop" \
       --icon-file "$ICON" \
       --plugin gtk \
       --output appimage

@@ -947,8 +947,10 @@ final class AppController {
             return
         }
         let fg = colors.foreground ?? "inherit"
-        let sel = colors.selectionBackground ?? themeBg
-        let selFg = colors.selectionForeground ?? fg
+        let fallbackColors = Self.themeColors(for: theme)
+        let preferredSelection = colors.selectionBackground ?? fallbackColors.selectionBackground
+        let sel = ThemeColorResolver.selectionHighlight(background: themeBg, preferred: preferredSelection)
+        let selFg = colors.selectionForeground ?? fallbackColors.selectionForeground ?? fg
         // Sidebar tint: shift the theme background darker (>5) / lighter (<5) per the Sidebar Tint setting.
         let shift = linuxSettingsStore().load().sidebarBackgroundShift ?? AppSettings.defaultSidebarBackgroundShift
         let sidebarBg = ThemeColorResolver.shiftedHex(themeBg, amount: AppSettings.sidebarShiftAmount(strength: shift))
@@ -973,9 +975,9 @@ final class AppController {
         @define-color sidebar_fg_color \(fg);
         .agterm-sidebar { background-color: \(sidebarBg); }
         .agterm-sidebar list, .agterm-sidebar row { background-color: transparent; }
-        .agterm-sidebar row:selected { background-color: \(sel); }
+        .agterm-selected { background-color: \(sel); }
         .agterm-sidebar label { color: \(fg); }
-        .agterm-sidebar row:selected label { color: \(selFg); }
+        .agterm-selected label { color: \(selFg); }
         .agterm-sidebar button { color: \(fg); }
         .agterm-sidebar separator { background-color: alpha(\(fg), 0.22); }
         toolbarview.agterm-sidebar-column > .top-bar,
@@ -993,8 +995,6 @@ final class AppController {
             css.withCString { gtk_css_provider_load_from_string(cast(provider), $0) }
         }
     }
-
     /// Re-theme the chrome to the PERSISTED theme (window build, settings change, config reload).
     func applySidebarThemeColor() { applyResolvedWindowThemeColors() }
-
 }

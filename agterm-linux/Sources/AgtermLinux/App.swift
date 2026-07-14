@@ -16,7 +16,7 @@ struct AgtermApp {
         // AGTERM_APP_ID overrides the GApplication id so a dev/test instance registers separately on
         // the session bus and runs ALONGSIDE a deployed one (the Linux analogue of the macOS .debug
         // bundle id) instead of forwarding its launch to the running instance.
-        let appID = ProcessInfo.processInfo.environment["AGTERM_APP_ID"] ?? "com.umputun.agterm.linux"
+        let appID = ProcessInfo.processInfo.environment["AGTERM_APP_ID"] ?? LinuxAppMetadata.applicationID
         // HANDLES_OPEN (1<<2): route a dir/file arg to the `open` signal (agterm-linux <dir> → a session
         // there) instead of erroring on unknown args; no-arg launches still fire `activate`.
         let app = OpaquePointer(adw_application_new(appID, GApplicationFlags(rawValue: 4)))

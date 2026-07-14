@@ -51,6 +51,7 @@ Preferences opens with Ctrl+, while Integrations, Keyboard Shortcuts, and About 
 
 Linux uses desktop conventions: key labels are Ctrl/Shift rather than Command/Option, native chrome is
 provided by libadwaita, and local `file://` links open their containing folder in the default file manager.
+Its desktop, notification, and Flatpak application ID is `io.github.melonamin.agterm`, owned by this Linux fork.
 Ctrl+Shift+M toggles the most-recently-used dashboard because Ctrl+Shift+D remains the split shortcut.
 Dropping directories from the file manager onto a workspace or session row opens one session per directory,
 and **Reveal in Files** opens a session's focused working directory in the default file manager.

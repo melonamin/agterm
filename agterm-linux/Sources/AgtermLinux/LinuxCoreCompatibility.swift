@@ -264,6 +264,21 @@ enum ThemeColorResolver {
         }
         return String(format: "#%02X%02X%02X", shift(r), shift(g), shift(b))
     }
+
+    /// Keep sidebar selection visible even when libghostty does not expose a selection color through
+    /// `ghostty_config_get` (or a theme intentionally makes it equal to the terminal background).
+    static func selectionHighlight(background: String, preferred: String?) -> String {
+        if let preferred, preferred.caseInsensitiveCompare(background) != .orderedSame { return preferred }
+        let trimmed = background.trimmingCharacters(in: .whitespaces)
+        let digits = trimmed.dropFirst()
+        guard trimmed.hasPrefix("#"), digits.count == 6,
+              let value = Int(digits, radix: 16) else { return preferred ?? background }
+        let red = Double((value >> 16) & 0xFF) / 255
+        let green = Double((value >> 8) & 0xFF) / 255
+        let blue = Double(value & 0xFF) / 255
+        let dark = ThemeBrightness.isDark(red: red, green: green, blue: blue)
+        return shiftedHex(trimmed, amount: dark ? -0.18 : 0.14)
+    }
 }
 
 enum DeletePrompt {

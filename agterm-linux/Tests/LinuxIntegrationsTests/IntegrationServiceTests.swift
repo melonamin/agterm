@@ -757,7 +757,7 @@ struct IntegrationServiceTests {
             environment: [
                 "HOME": fixture.home.path,
                 "PATH": fixture.bin.path,
-                "FLATPAK_ID": "com.umputun.agterm.linux",
+                "FLATPAK_ID": "io.github.melonamin.agterm",
             ],
             arguments: [fixture.bin.appendingPathComponent("agterm-linux").path]
         )

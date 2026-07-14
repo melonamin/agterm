@@ -16,12 +16,16 @@ extension AppController {
 
     func syncSidebarSelection() {
         for listBox in workspaceListBoxes { gtk_list_box_unselect_all(listBox) }
+        for row in rowSession.keys { setSidebarSelectionStyle(row, selected: false) }
         let selected = store.sidebarSelectionIDs.isEmpty ? store.selectedSessionID.map { [$0] } ?? []
             : store.sidebarSelectionIDs
         for id in selected {
             guard let row = rowSession.first(where: { $0.value == id })?.key,
                   let parent = gtk_widget_get_parent(W(row)) else { continue }
             gtk_list_box_select_row(OpaquePointer(parent), GLBR(row))
+            // Libadwaita's navigation-sidebar rules can suppress GtkListBoxRow's :selected paint.
+            // Mirror the model selection into an explicit class so the themed highlight stays visible.
+            setSidebarSelectionStyle(row, selected: true)
         }
         if let active = store.selectedSessionID,
            let row = rowSession.first(where: { $0.value == active })?.key {
@@ -45,6 +49,10 @@ extension AppController {
     }
 
     func rebuildSidebar() {
+        // GtkPopover is parented to the row's GtkListBox while its context menu is open. Detach it
+        // before destroying that list box: GtkListBox disposal otherwise treats the popover as a row,
+        // repeatedly fails to remove it, and starves the GTK main loop.
+        dismissContextMenu()
         updateAttentionButton()
         updateDashboardStatusIndicators()
         while let child = gtk_widget_get_first_child(W(sidebarBox)) {
@@ -147,6 +155,7 @@ extension AppController {
             if store.sidebarSelectionIDs.contains(s.id) ||
                 (store.sidebarSelectionIDs.isEmpty && s.id == store.selectedSessionID) {
                 gtk_list_box_select_row(lb, GLBR(row))
+                setSidebarSelectionStyle(row, selected: true)
             }
         }
         gtk_box_append(cast(sidebarBox), W(lb))
@@ -155,6 +164,7 @@ extension AppController {
     private func makeRow(_ s: Session) -> OpaquePointer? {
         guard let row = op(gtk_list_box_row_new()), let box = op(gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6)) else { return nil }
         "session-row".withCString { gtk_widget_set_name(W(row), $0) }
+        gtk_widget_add_css_class(W(box), "agterm-session-row-content")
         if let lead = op(gtk_image_new_from_icon_name("utilities-terminal-symbolic")) {
             gtk_widget_set_margin_start(W(lead), 6)
             gtk_box_append(cast(box), W(lead))
@@ -202,6 +212,18 @@ extension AppController {
             gtk_widget_add_controller(W(row), directoryDrop)
         }
         return row
+    }
+
+    private func setSidebarSelectionStyle(_ row: OpaquePointer, selected: Bool) {
+        let update: (OpaquePointer?) -> Void = { widget in
+            if selected {
+                gtk_widget_add_css_class(W(widget), "agterm-selected")
+            } else {
+                gtk_widget_remove_css_class(W(widget), "agterm-selected")
+            }
+        }
+        update(row)
+        update(gtk_list_box_row_get_child(GLBR(row)).map { OpaquePointer($0) })
     }
 
     static func statusIcon(_ s: AgentStatus) -> String? {

@@ -17,11 +17,11 @@ contents:
     dst: /opt/agterm-linux
     type: tree
     expand: true
-  - src: ${AGTERM_PACKAGE_ROOT}/share/applications/com.umputun.agterm.linux.desktop
-    dst: /usr/share/applications/com.umputun.agterm.linux.desktop
+  - src: ${AGTERM_PACKAGE_ROOT}/share/applications/io.github.melonamin.agterm.desktop
+    dst: /usr/share/applications/io.github.melonamin.agterm.desktop
     expand: true
-  - src: ${AGTERM_PACKAGE_ROOT}/share/pixmaps/com.umputun.agterm.linux.png
-    dst: /usr/share/pixmaps/com.umputun.agterm.linux.png
+  - src: ${AGTERM_PACKAGE_ROOT}/share/pixmaps/io.github.melonamin.agterm.png
+    dst: /usr/share/pixmaps/io.github.melonamin.agterm.png
     expand: true
   - src: ${AGTERM_PACKAGE_ROOT}/share/icons/hicolor/
     dst: /usr/share/icons/hicolor

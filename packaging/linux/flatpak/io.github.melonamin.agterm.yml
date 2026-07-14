@@ -12,8 +12,8 @@
 #   scripts/dist-linux.sh
 #   rm -rf .flatpak-builder build-flatpak
 #   flatpak-builder --user --install --force-clean build-flatpak \
-#     packaging/linux/flatpak/com.umputun.agterm.linux.yml
-app-id: com.umputun.agterm.linux
+#     packaging/linux/flatpak/io.github.melonamin.agterm.yml
+app-id: io.github.melonamin.agterm
 runtime: org.gnome.Platform
 runtime-version: '47'
 sdk: org.gnome.Sdk
@@ -33,7 +33,7 @@ modules:
       - cp -r bin /app/
       - cp -r lib /app/
       - 'if [ -d share/ghostty ]; then cp -r share /app/; fi'
-      - install -Dm644 com.umputun.agterm.linux.desktop /app/share/applications/com.umputun.agterm.linux.desktop
+      - install -Dm644 io.github.melonamin.agterm.desktop /app/share/applications/io.github.melonamin.agterm.desktop
     sources:
       - type: archive
         path: ../../../agterm-linux-dist.tar.gz   # produced by scripts/dist-linux.sh

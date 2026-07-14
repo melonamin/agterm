@@ -20,4 +20,17 @@ struct GhosttyConfigThemeTests {
                     selectionBackground: "#CECDC3",
                     selectionForeground: "#205EA6"))
     }
+
+    @Test("sidebar selection keeps a distinct supplied theme color")
+    func suppliedSelectionHighlight() {
+        #expect(
+            ThemeColorResolver.selectionHighlight(background: "#303030", preferred: "#5B5B5B")
+                == "#5B5B5B")
+    }
+
+    @Test("sidebar selection derives contrast when the resolved color is absent")
+    func derivedSelectionHighlight() {
+        #expect(ThemeColorResolver.selectionHighlight(background: "#303030", preferred: nil) == "#555555")
+        #expect(ThemeColorResolver.selectionHighlight(background: "#FFFCF0", preferred: nil) == "#DBD9CE")
+    }
 }

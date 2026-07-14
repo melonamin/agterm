@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build a RELEASE agterm-linux, package the self-contained tarball, then build + install the flatpak
-# (com.umputun.agterm.linux) into the user flatpak — one command for a fresh, runnable flatpak.
-#   scripts/flatpak-linux.sh   →   then run it:  flatpak run com.umputun.agterm.linux
+# (io.github.melonamin.agterm) into the user flatpak — one command for a fresh, runnable flatpak.
+#   scripts/flatpak-linux.sh   →   then run it:  flatpak run io.github.melonamin.agterm
 # Needs flatpak-builder + the GNOME 47 runtime/SDK once:
 #   flatpak install --user flathub org.gnome.Platform//47 org.gnome.Sdk//47
 set -euo pipefail
@@ -35,6 +35,6 @@ rm -rf "$ROOT/.flatpak-builder" "$ROOT/build-flatpak"
 
 echo "==> flatpak-builder --install"
 flatpak-builder --user --install --force-clean "$ROOT/build-flatpak" \
-  "$ROOT/packaging/linux/flatpak/com.umputun.agterm.linux.yml"
+  "$ROOT/packaging/linux/flatpak/io.github.melonamin.agterm.yml"
 
-echo "→ installed. run it:  flatpak run com.umputun.agterm.linux"
+echo "→ installed. run it:  flatpak run io.github.melonamin.agterm"

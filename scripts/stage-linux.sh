@@ -57,21 +57,21 @@ cp -R "$ROOT/agterm/Resources/agent-status" "$DEST/share/agterm/agent-status"
 cp -R "$ROOT/agterm/Resources/agent-skill" "$DEST/share/agterm/agent-skill"
 printf '%s\n' "${AGTERM_PACKAGE_VERSION:-dev}" > "$DEST/share/agterm/VERSION"
 
-DESKTOP="$ROOT/packaging/linux/com.umputun.agterm.linux.desktop"
-install -m644 "$DESKTOP" "$DEST/share/applications/com.umputun.agterm.linux.desktop"
+DESKTOP="$ROOT/packaging/linux/io.github.melonamin.agterm.desktop"
+install -m644 "$DESKTOP" "$DEST/share/applications/io.github.melonamin.agterm.desktop"
 # Keep the historical root copy consumed by the local Flatpak manifest and convenient for tar users.
-install -m644 "$DESKTOP" "$DEST/com.umputun.agterm.linux.desktop"
+install -m644 "$DESKTOP" "$DEST/io.github.melonamin.agterm.desktop"
 
 ICON_SRC="$(find "$ROOT/agterm/AppIcon.icon/Assets" -maxdepth 1 -type f -name '*.png' -print -quit)"
 if [[ -n "$ICON_SRC" ]]; then
-  install -m644 "$ICON_SRC" "$DEST/share/pixmaps/com.umputun.agterm.linux.png"
+  install -m644 "$ICON_SRC" "$DEST/share/pixmaps/io.github.melonamin.agterm.png"
   IMAGE_CONVERTER="$(command -v magick || command -v convert || true)"
   if [[ -n "$IMAGE_CONVERTER" ]]; then
     for size in 16 32 48 64 128 256 512; do
       ICON_DIR="$DEST/share/icons/hicolor/${size}x${size}/apps"
       mkdir -p "$ICON_DIR"
       "$IMAGE_CONVERTER" "$ICON_SRC" -resize "${size}x${size}" \
-        "$ICON_DIR/com.umputun.agterm.linux.png"
+        "$ICON_DIR/io.github.melonamin.agterm.png"
     done
   fi
 fi

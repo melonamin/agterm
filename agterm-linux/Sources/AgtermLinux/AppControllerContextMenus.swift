@@ -16,8 +16,10 @@ extension AppController {
             syncSidebarSelection()
             showActive()
         }
-        contextMenuSession = sid
+        // Tear down the previous popover before storing the replacement. Popping down a newly-created,
+        // not-yet-mapped GtkPopover crashes inside gtk_popover_popdown.
         dismissContextMenu()
+        contextMenuSession = sid
         guard let popover = op(gtk_popover_new()) else { return }
         contextMenuPopover = popover
         gtk_widget_set_parent(W(popover), W(listBox))
@@ -68,7 +70,7 @@ extension AppController {
         gtk_box_append(cast(box), W(button))
     }
 
-    private func dismissContextMenu() {
+    func dismissContextMenu() {
         if let popover = contextMenuPopover {
             gtk_popover_popdown(POPOVER(popover))
             gtk_widget_unparent(W(popover))
@@ -116,8 +118,9 @@ extension AppController {
     func showWorkspaceContextMenu(_ rowData: gpointer?, x: Double, y: Double) {
         guard let rowData, let wsID = workspaceDiscButtons[OpaquePointer(rowData)] else { return }
         let parent = OpaquePointer(rowData)
-        contextMenuWorkspace = wsID
+        // See showRowContextMenu: the old popover must be dismissed before the new one is registered.
         dismissContextMenu()
+        contextMenuWorkspace = wsID
         guard let popover = op(gtk_popover_new()) else { return }
         contextMenuPopover = popover
         gtk_widget_set_parent(W(popover), W(parent))
