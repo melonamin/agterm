@@ -248,6 +248,25 @@ final class GhosttyApp: @unchecked Sendable {
         }
     }
 
+    #if DEBUG
+    /// Drive the real libghostty action boundary with a non-NUL-terminated, sentinel-suffixed URL.
+    /// The isolated AT-SPI runtime uses this when compositor pointer injection cannot express link hover reliably.
+    @MainActor static func exerciseURLAction(_ raw: String) {
+        var bytes = raw.utf8.map { CChar(bitPattern: $0) }
+        bytes.append(contentsOf: [CChar(bitPattern: 0x58), CChar(bitPattern: 0x59)])
+        bytes.withUnsafeMutableBufferPointer { buffer in
+            var payload = ghostty_action_u()
+            payload.open_url = ghostty_action_open_url_s(
+                kind: GHOSTTY_ACTION_OPEN_URL_KIND_TEXT,
+                url: UnsafePointer(buffer.baseAddress),
+                len: UInt(raw.utf8.count)
+            )
+            let action = ghostty_action_s(tag: GHOSTTY_ACTION_OPEN_URL, action: payload)
+            _ = shared.handleAction(ghostty_target_s(), action)
+        }
+    }
+    #endif
+
     /// Apply the shared safe-link policy. Linux has no portable select-in-file-manager API, so a
     /// local file reveal opens its containing directory with the desktop's default file manager.
     private static func openTerminalURL(_ raw: String) {
@@ -260,6 +279,12 @@ final class GhosttyApp: @unchecked Sendable {
         case .ignore:
             return
         }
+        #if DEBUG
+        if let capturePath = ProcessInfo.processInfo.environment["AGTERM_ATSPI_URL_CAPTURE"],
+           !capturePath.isEmpty {
+            try? uri.write(toFile: capturePath, atomically: true, encoding: .utf8)
+        }
+        #endif
         uri.withCString { _ = g_app_info_launch_default_for_uri($0, nil, nil) }
     }
 

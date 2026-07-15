@@ -1047,6 +1047,113 @@ def verify_custom_command_failures(env):
         stop(process)
 
 
+def verify_surface_configuration_lifetimes(env):
+    """Exercise libghostty-owned command, cwd, overlay, and restored initial-input buffers."""
+    state = env["AGTERM_STATE_DIR"]
+    runner = os.path.join(state, "surface-lifetime-probe.sh")
+    with open(runner, "w", encoding="utf-8") as target:
+        target.write(
+            "#!/bin/sh\n"
+            "printf '%s\\n' \"$PWD\" > \"$1\"\n"
+            "sleep 0.4\n"
+        )
+    os.chmod(runner, 0o755)
+    command_cwd = os.path.join(state, "command-cwd")
+    overlay_cwd = os.path.join(state, "overlay-cwd")
+    os.makedirs(command_cwd)
+    os.makedirs(overlay_cwd)
+    command_marker = os.path.join(state, "command.marker")
+    overlay_marker = os.path.join(state, "overlay.marker")
+    restore_marker = os.path.join(state, "restore.marker")
+    url_marker = os.path.join(state, "url.marker")
+    url_callback_marker = os.path.join(state, "url-callback.marker")
+    url = "https://example.test/agterm/" + ("length-delimited-" * 10) + "end?q=one%20two#fragment"
+    xdg_data = os.path.join(state, "xdg-data")
+    xdg_config = os.path.join(state, "xdg-config")
+    applications = os.path.join(xdg_data, "applications")
+    os.makedirs(applications)
+    os.makedirs(xdg_config)
+    url_capture = os.path.join(state, "capture-url.sh")
+    with open(url_capture, "w", encoding="utf-8") as target:
+        target.write(f"#!/bin/sh\nprintf '%s' \"$1\" > {url_marker}\n")
+    os.chmod(url_capture, 0o755)
+    with open(os.path.join(applications, "agterm-url-test.desktop"), "w", encoding="utf-8") as target:
+        target.write(
+            "[Desktop Entry]\n"
+            "Type=Application\n"
+            "Name=agterm URL test\n"
+            f"Exec={url_capture} %u\n"
+            "MimeType=x-scheme-handler/https;\n"
+            "NoDisplay=true\n"
+        )
+    with open(os.path.join(xdg_config, "mimeapps.list"), "w", encoding="utf-8") as target:
+        target.write("[Default Applications]\nx-scheme-handler/https=agterm-url-test.desktop;\n")
+    env["XDG_DATA_HOME"] = xdg_data
+    env["XDG_CONFIG_HOME"] = xdg_config
+    env["GTK_A11Y"] = "atspi"
+    subprocess.run(["gio", "open", url], env=env, check=True)
+    wait_for(lambda: os.path.exists(url_marker), "test URL handler did not register")
+    os.remove(url_marker)
+
+    process, _ = launch(env)
+    try:
+        window_id = next(item["id"] for item in window_list(env) if item["open"])
+        initial = window_tree(env, window_id)["workspaces"][0]["sessions"][0]
+        control_json(
+            env, "session", "new", "--name", "surface-command", "--cwd", command_cwd,
+            "--command", f"{runner} {command_marker}", "--window", window_id, "--json",
+        )
+        wait_for(lambda: os.path.exists(command_marker), "session --command did not run")
+        with open(command_marker, encoding="utf-8") as source:
+            assert source.read().strip() == command_cwd
+
+        control_json(
+            env, "session", "overlay", "open", f"{runner} {overlay_marker}",
+            "--cwd", overlay_cwd, "--target", initial["id"], "--window", window_id, "--json",
+        )
+        wait_for(lambda: os.path.exists(overlay_marker), "overlay command did not run")
+        with open(overlay_marker, encoding="utf-8") as source:
+            assert source.read().strip() == overlay_cwd
+    finally:
+        stop(process)
+
+    snapshot_path = os.path.join(state, "windows", f"{window_id}.json")
+    with open(snapshot_path, encoding="utf-8") as source:
+        snapshot = json.load(source)
+    restored = next(
+        session for workspace in snapshot["workspaces"] for session in workspace["sessions"]
+        if session["id"] == initial["id"]
+    )
+    restored["foregroundCommand"] = [runner, restore_marker]
+    with open(snapshot_path, "w", encoding="utf-8") as target:
+        json.dump(snapshot, target)
+    with open(os.path.join(state, "settings.json"), "w", encoding="utf-8") as target:
+        json.dump({"restoreRunningCommand": True}, target)
+    env["AGTERM_ATSPI_OPEN_URL"] = url
+    env["AGTERM_ATSPI_URL_CAPTURE"] = url_callback_marker
+
+    process, _ = launch(env)
+    try:
+        wait_for(
+            lambda: os.path.exists(restore_marker),
+            "restored foreground command was not delivered through initial input",
+        )
+        with open(restore_marker, encoding="utf-8") as source:
+            assert source.read().strip() == initial["cwd"]
+        wait_for(
+            lambda: os.path.exists(url_callback_marker),
+            "runtime URL action did not reach the Linux launch boundary",
+        )
+        with open(url_callback_marker, encoding="utf-8") as source:
+            assert source.read() == url, "libghostty URL callback was truncated or changed"
+        wait_for(lambda: os.path.exists(url_marker), "runtime URL action did not reach the URL launcher")
+        with open(url_marker, encoding="utf-8") as source:
+            assert source.read() == url, "terminal hyperlink was truncated or changed"
+        print("OK: libghostty buffers survive command/cwd/restore paths and exact URL launch")
+    finally:
+        stop(process)
+
+
 def verify_preferences_pages(env, home):
     process, app = launch(env)
     try:
@@ -1307,7 +1414,7 @@ def main():
         for child_scenario in (
             "normal", "dashboard-modal", "context-menu", "window-ownership", "preferences-pages",
             "notification-reveal", "notification-focus", "session-pickers",
-            "custom-command-failures", "auto-follow", "hidden-toolbar",
+            "custom-command-failures", "surface-lifetimes", "auto-follow", "hidden-toolbar",
         ):
             child_env = dict(os.environ, AGTERM_ATSPI_SCENARIO=child_scenario)
             result = subprocess.run([sys.executable, __file__], env=child_env)
@@ -1353,6 +1460,8 @@ def main():
             verify_notification_banner_round_trip(env)
         elif scenario == "custom-command-failures":
             verify_custom_command_failures(env)
+        elif scenario == "surface-lifetimes":
+            verify_surface_configuration_lifetimes(env)
         elif scenario == "preferences-pages":
             verify_preferences_pages(env, home)
         elif scenario == "auto-follow":

@@ -88,6 +88,9 @@ private let onOpen: @MainActor @convention(c) (OpaquePointer?, UnsafeMutablePoin
     let toOpen = ids.isEmpty ? [gLibrary.windows.first?.id].compactMap { $0 } : ids
     for id in toOpen { openWindow(id) }
     #if DEBUG
+    if let rawURL = ProcessInfo.processInfo.environment["AGTERM_ATSPI_OPEN_URL"], !rawURL.isEmpty {
+        GhosttyApp.exerciseURLAction(rawURL)
+    }
     // AT-SPI cannot focus an arbitrary Wayland client on compositors such as Hyprland. Present the
     // isolated smoke-test dialog during activation, while the initial surface is still being mapped,
     // so libadwaita exposes its pages without requiring compositor-specific pointer automation.
