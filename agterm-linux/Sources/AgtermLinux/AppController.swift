@@ -301,7 +301,7 @@ final class AppController {
     }
     func newWorkspace() {
         noteUserActivity()
-        store.addWorkspaceSeeded(name: store.defaultWorkspaceName, cwd: Self.homeCwd)
+        _ = store.addSession(toWorkspace: store.addWorkspace(name: store.defaultWorkspaceName).id, cwd: Self.homeCwd)
         reconcile()
     }
     func selectSession(_ id: UUID, userInitiated: Bool = true) {
@@ -521,14 +521,14 @@ final class AppController {
     }
 
     func toggleFlagActive() {
-        guard let id = store.selectedSessionID else { return }
-        store.toggleFlag(forSession: id)
+        guard let id = store.selectedSessionID, let session = store.session(withID: id) else { return }
+        store.setFlag(!session.flagged, forSession: id)
         rebuildSidebar()
         syncSidebarSelection()
     }
 
     func toggleFlaggedView() {
-        store.toggleSidebarMode()
+        store.setSidebarMode(store.sidebarMode == .tree ? .flagged : .tree)
         rebuildSidebar()
         syncSidebarSelection()
     }
@@ -589,11 +589,11 @@ final class AppController {
 
     /// Typing clears blocked/completed status; Escape or bare Ctrl-C also clears active status.
     func clearAttentionStatus(_ id: UUID, pane: StatusPane, isInterrupt: Bool) {
-        if store.clearAttentionStatusOnInput(sessionID: id, pane: pane, isInterrupt: isInterrupt) {
-            rebuildSidebar()
-        }
+        guard let session = store.session(withID: id),
+              session.agentIndicator.clearedBy(pane: pane, isInterrupt: isInterrupt) else { return }
+        store.setAgentIndicator(AgentIndicator(), forSession: id)
+        rebuildSidebar()
     }
-
     /// Reset the active session's agent status to idle (the palette "Clear Status", GUI half of
     /// `session.status idle`).
     func clearActiveStatus() {

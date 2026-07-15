@@ -170,7 +170,9 @@ extension AppController {
             gtk_box_append(cast(box), W(lead))
         }
         let flaggedView = store.sidebarMode == .flagged
-        let label = flaggedView ? op(gtk_label_new(store.flaggedRowLabel(for: s))) : makeNameWidget(id: s.id, text: s.displayName, isWorkspace: false)
+        let label = flaggedView
+            ? op(gtk_label_new(LinuxSidebarPolicy.flaggedRowLabel(for: s, in: store)))
+            : makeNameWidget(id: s.id, text: s.displayName, isWorkspace: false)
         gtk_widget_set_hexpand(W(label), 1)
         gtk_widget_set_margin_top(W(label), 4)
         gtk_widget_set_margin_bottom(W(label), 4)
