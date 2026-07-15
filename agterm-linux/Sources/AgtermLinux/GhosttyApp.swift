@@ -185,7 +185,10 @@ final class GhosttyApp: @unchecked Sendable {
                 if let display = gdk_display_get_default() { gdk_display_beep(display) }
                 return true
             case GHOSTTY_ACTION_OPEN_URL:
-                if let ptr = action.action.open_url.url { Self.openTerminalURL(String(cString: ptr)) }
+                let value = action.action.open_url
+                if let raw = GhosttyActionDecoder.utf8String(value.url, length: value.len) {
+                    Self.openTerminalURL(raw)
+                }
                 return true
             case GHOSTTY_ACTION_MOUSE_OVER_LINK:
                 // a non-null url means the pointer is over a hyperlink → show the hand cursor.

@@ -45,10 +45,8 @@ final class GhosttySurface: TerminalSurface {
     private var mouseVisible = true
     private var mouseOverLink = false
     private var mouseShapeName = "text"
-    /// strdup'd C copies of the injected env keys/values, kept alive for the surface's lifetime
-    /// (libghostty copies the env-var STRUCT array during surface_new but keeps the char* pointers),
-    /// freed in teardown.
-    private var envCStrings: [UnsafeMutablePointer<CChar>] = []
+    /// Surface-owned C configuration buffers. libghostty may consume these after surface creation.
+    private var configurationStorage: GhosttySurfaceConfigurationStorage?
     /// Per-surface overlay configs (session background/font override), retained until a newer overlay
     /// replaces them or the surface is torn down.
     private var ownedConfigs: [ghostty_config_t] = []
@@ -71,6 +69,12 @@ final class GhosttySurface: TerminalSurface {
     /// Set by the host: the shell process exited.
     var onExit: (() -> Void)?
     private var didHandleProcessExit = false
+
+    deinit {
+        if let surface { ghostty_surface_free(surface) }
+        ownedConfigs.forEach { ghostty_config_free($0) }
+        configurationStorage?.release()
+    }
 
     init(sessionID: UUID, cwd: String, command: String? = nil, env: [String: String] = [:],
          controller: AppController? = nil, waitAfterCommand: Bool = false,
@@ -178,35 +182,23 @@ final class GhosttySurface: TerminalSurface {
         cfg.userdata = Unmanaged.passUnretained(self).toOpaque()
         cfg.scale_factor = Double(scale)
         if let fontSize { cfg.font_size = Float(fontSize) }   // restore a persisted per-session zoom
-        // Inject the AGTERM_* env: strdup each key/value (kept alive in envCStrings for the surface
-        // lifetime) and build the ghostty_env_var_s array. libghostty reads it during surface_new.
-        var envVars: [ghostty_env_var_s] = []
-        if !env.isEmpty {
-            for (key, value) in env {
-                guard let keyPtr = strdup(key), let valuePtr = strdup(value) else { continue }
-                envCStrings.append(keyPtr); envCStrings.append(valuePtr)
-                envVars.append(ghostty_env_var_s(key: UnsafePointer(keyPtr), value: UnsafePointer(valuePtr)))
-            }
+        guard let storage = GhosttySurfaceConfigurationStorage(
+            workingDirectory: cwd, command: command, initialInput: initialInput, environment: env
+        ) else {
+            FileHandle.standardError.write(Data("agterm: could not allocate libghostty surface configuration\n".utf8))
+            return
         }
-        // working_directory / command buffers only need to outlive ghostty_surface_new
-        // (libghostty copies them), so nested withCString around the call is sufficient; the env-var
-        // array is supplied via its buffer pointer for the same call.
-        envVars.withUnsafeMutableBufferPointer { envBuf in
-            if let base = envBuf.baseAddress { cfg.env_vars = base; cfg.env_var_count = envBuf.count }
-            withOptionalCString(initialInput) { inputPtr in
-                cfg.initial_input = inputPtr
-                cwd.withCString { cwdPtr in
-                    cfg.working_directory = cwdPtr
-                    if let command {
-                        cfg.wait_after_command = waitAfterCommand
-                        command.withCString { cfg.command = $0; surface = ghostty_surface_new(app, &cfg) }
-                    } else {
-                        surface = ghostty_surface_new(app, &cfg)
-                    }
-                }
-            }
+        configurationStorage = storage
+        storage.apply(to: &cfg)
+        if command != nil {
+            cfg.wait_after_command = waitAfterCommand
         }
-        guard let surface else { return }
+        surface = ghostty_surface_new(app, &cfg)
+        guard let surface else {
+            storage.release()
+            configurationStorage = nil
+            return
+        }
         ghostty_surface_set_content_scale(surface, Double(scale), Double(scale))
         pushSize()
         ghostty_surface_set_focus(surface, true)
@@ -662,8 +654,8 @@ final class GhosttySurface: TerminalSurface {
         }
         ownedConfigs.forEach { ghostty_config_free($0) }
         ownedConfigs = []
-        for ptr in envCStrings { free(ptr) }
-        envCStrings = []
+        configurationStorage?.release()
+        configurationStorage = nil
     }
 }
 

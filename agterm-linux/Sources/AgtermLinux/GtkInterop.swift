@@ -16,12 +16,6 @@ import agtermCore
 @inline(__always) func BUTTON(_ p: OpaquePointer?) -> UnsafeMutablePointer<GtkButton>? { p.map { UnsafeMutablePointer($0) } }
 @inline(__always) func RAW(_ p: OpaquePointer?) -> UnsafeMutableRawPointer? { p.map { UnsafeMutableRawPointer($0) } }
 
-/// Run `body` with `s` as a C string (or nil when `s` is nil), so an optional string maps to a nullable
-/// `const char*` argument without a separate strdup.
-@inline(__always) func withOptionalCString<R>(_ s: String?, _ body: (UnsafePointer<CChar>?) -> R) -> R {
-    s != nil ? s!.withCString(body) : body(nil)
-}
-
 /// Normalize a GTK constructor result (which inconsistently imports as optional or
 /// non-optional `UnsafeMutablePointer<GtkWidget>`) to the `OpaquePointer?` we store.
 @inline(__always) func op(_ p: UnsafeMutablePointer<GtkWidget>?) -> OpaquePointer? { p.map { OpaquePointer($0) } }
