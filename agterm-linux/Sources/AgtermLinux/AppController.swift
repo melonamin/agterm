@@ -17,6 +17,7 @@ final class AppController {
     let autoFollowCoordinator: LinuxAutoFollowCoordinator
     let windowID: UUID
     let library: WindowLibrary
+    let customCommandOrigin: LinuxCustomCommandOrigin
 
     let window: OpaquePointer        // AdwApplicationWindow
     let deck: OpaquePointer          // GtkStack (one page per session)
@@ -147,12 +148,13 @@ final class AppController {
 
     /// The primary surface for a session, exposed to the search extension (different file).
     func surface(for id: UUID?) -> GhosttySurface? { id.flatMap { surfaces[$0] } }
-
-    init(app: OpaquePointer?, windowID: UUID, library: WindowLibrary) {
+    init(app: OpaquePointer?, windowID: UUID, library: WindowLibrary,
+         commandProcessLauncher: any LinuxProcessLaunching = FoundationLinuxProcessLauncher()) {
         // This window's tree comes from the shared WindowLibrary (which loaded/seeded/
         // migrated it from windows/<id>.json). AppStore.save() targets that per-window file.
         self.windowID = windowID
         self.library = library
+        customCommandOrigin = LinuxCustomCommandOrigin(launcher: commandProcessLauncher)
         let store = library.store(for: windowID) ?? AppStore()
         self.store = store
         autoFollowCoordinator = LinuxAutoFollowCoordinator(store: store)

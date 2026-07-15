@@ -50,6 +50,7 @@ extension AppController {
     /// The window is closing: capture its size for restore-on-reopen, then tear down its surfaces and
     /// drop it from the library + registry.
     func windowWillClose() {
+        customCommandOrigin.invalidate()
         commitBackgroundOpacity()
         dismissSessionPicker()
         cancelPendingWorkspaceToggle()

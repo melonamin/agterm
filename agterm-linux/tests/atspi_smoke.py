@@ -170,6 +170,19 @@ def press_escape(process_id, window_title=None):
     Atspi.generate_keyboard_event(0xFF1B, None, Atspi.KeySynthType.PRESSRELEASE)
 
 
+def press_return(process_id, window_title=None):
+    if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE") and shutil.which("hyprctl"):
+        target = f"title:^({window_title})$" if window_title else f"pid:{process_id}"
+        subprocess.run(
+            ["hyprctl", "dispatch", "sendshortcut", f",return,{target}"],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return
+    Atspi.generate_keyboard_event(0xFF0D, None, Atspi.KeySynthType.PRESSRELEASE)
+
+
 def focus_window(process_id):
     """Give the isolated app real keyboard focus before testing its shortcut."""
     if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE") and shutil.which("hyprctl"):
@@ -330,6 +343,33 @@ def activate_reveal_action(env, identity):
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         env=env,
+    )
+
+
+def run_palette_action(app, process_id, window_title, action_name):
+    window = wait_for(
+        lambda: named(app, window_title, role="frame"),
+        f"custom-command window {window_title!r} is missing",
+    )
+    focus_accessible_window(window, process_id)
+    press_ctrl_shift_p(process_id, window_title=window_title)
+    palette = wait_for(
+        lambda: named(app, "Command Palette", role="frame"),
+        f"command palette did not open in {window_title!r}",
+    )
+    search = wait_for(
+        lambda: editable_descendant(palette),
+        "command palette search is missing",
+    )
+    assert search.get_editable_text_iface().set_text_contents(action_name)
+    wait_for(
+        lambda: named(palette, action_name) and not named(palette, "About agterm"),
+        f"palette action {action_name!r} did not become the selected result",
+    )
+    press_return(process_id, window_title="Command Palette")
+    wait_for(
+        lambda: not named(app, "Command Palette", role="frame"),
+        f"command palette did not close after {action_name!r}",
     )
 
 
@@ -746,6 +786,103 @@ def verify_notification_banner_round_trip(env):
         stop(process)
 
 
+def verify_custom_command_failures(env):
+    config = os.path.join(env["AGTERM_STATE_DIR"], "config")
+    os.makedirs(config)
+    with open(os.path.join(config, "keymap.conf"), "w", encoding="utf-8") as target:
+        target.write(
+            'command "Launch Failure" true\n'
+            'command "Exit Failure" exit 23\n'
+            'command "Slow Failure" sleep 1; exit 29\n'
+        )
+    process, app = launch(env)
+    try:
+        first_window = next(item["id"] for item in window_list(env) if item["open"])
+        first_cwd = os.path.join(env["AGTERM_STATE_DIR"], "command-cwd-a")
+        second_cwd = os.path.join(env["AGTERM_STATE_DIR"], "command-cwd-b")
+        os.makedirs(first_cwd)
+        os.makedirs(second_cwd)
+        first_session = control_json(
+            env, "session", "new", "--name", "command-origin-a", "--cwd", first_cwd,
+            "--window", first_window, "--json",
+        )["result"]["id"]
+        second_window = control_json(env, "window", "new", "command-window-b", "--json")["result"]["id"]
+        second_session = control_json(
+            env, "session", "new", "--name", "command-origin-b", "--cwd", second_cwd,
+            "--window", second_window, "--json",
+        )["result"]["id"]
+
+        def frame(title):
+            return named(app, title, role="frame")
+
+        def failure_named(window, prefix):
+            return next((item for item in collect(window) if (item.get_name() or "").startswith(prefix)), None)
+
+        wait_for(lambda: frame("command-origin-a"), "first command window did not become accessible")
+        wait_for(lambda: frame("command-origin-b"), "second command window did not become accessible")
+        time.sleep(0.5)
+        shutil.rmtree(first_cwd)
+        shutil.rmtree(second_cwd)
+        exit_titles = {}
+        for window_id, session_id, title, other_title in (
+            (first_window, first_session, "command-origin-a", "command-origin-b"),
+            (second_window, second_session, "command-origin-b", "command-exit-a"),
+        ):
+            run_palette_action(app, process.pid, title, "Launch Failure  (custom)")
+            launch_prefix = "command failed to launch: Launch Failure —"
+            wait_for(
+                lambda: failure_named(frame(title), launch_prefix),
+                f"launch failure toast did not appear in {title}",
+            )
+            assert not failure_named(frame(other_title), launch_prefix), (
+                f"launch failure from {title} leaked into {other_title}"
+            )
+
+            suffix = "a" if window_id == first_window else "b"
+            exit_title = f"command-exit-{suffix}"
+            control_json(
+                env, "session", "new", "--name", exit_title, "--cwd", "/tmp",
+                "--window", window_id, "--json",
+            )
+            wait_for(lambda: frame(exit_title), f"{exit_title} did not become accessible")
+            exit_titles[window_id] = exit_title
+            run_palette_action(app, process.pid, exit_title, "Exit Failure  (custom)")
+            exit_message = "command failed (exit 23): Exit Failure"
+            wait_for(
+                lambda: named(frame(exit_title), exit_message),
+                f"non-zero failure toast did not appear in {exit_title}",
+            )
+            assert not named(frame(other_title), exit_message), (
+                f"non-zero failure from {exit_title} leaked into {other_title}"
+            )
+
+        run_palette_action(app, process.pid, exit_titles[first_window], "Slow Failure  (custom)")
+        control_json(env, "window", "close", first_window, "--json")
+        wait_for(
+            lambda: not next(item for item in window_list(env) if item["id"] == first_window)["open"],
+            "slow-command source window did not close",
+        )
+        control_json(env, "window", "select", first_window, "--json")
+        wait_for(
+            lambda: next(item for item in window_list(env) if item["id"] == first_window)["open"],
+            "slow-command source window did not reopen",
+        )
+        time.sleep(1.4)
+        slow_message = "command failed (exit 29): Slow Failure"
+        assert not named(frame(exit_titles[first_window]), slow_message), (
+            "old command completion reached the reopened controller incarnation"
+        )
+        assert not named(frame(exit_titles[second_window]), slow_message), (
+            "old command completion leaked into the other window"
+        )
+        print("OK: custom-command failures stay with their originating controller incarnation")
+    except AssertionError:
+        describe_tree(app)
+        raise
+    finally:
+        stop(process)
+
+
 def verify_preferences_pages(env, home):
     process, app = launch(env)
     try:
@@ -954,7 +1091,7 @@ def main():
         for child_scenario in (
             "normal", "context-menu", "window-ownership", "preferences-pages",
             "notification-reveal", "notification-focus", "session-pickers",
-            "auto-follow", "hidden-toolbar",
+            "custom-command-failures", "auto-follow", "hidden-toolbar",
         ):
             child_env = dict(os.environ, AGTERM_ATSPI_SCENARIO=child_scenario)
             result = subprocess.run([sys.executable, __file__], env=child_env)
@@ -996,6 +1133,8 @@ def main():
             verify_notification_focus_policy(env)
         elif scenario == "notification-banner":
             verify_notification_banner_round_trip(env)
+        elif scenario == "custom-command-failures":
+            verify_custom_command_failures(env)
         elif scenario == "preferences-pages":
             verify_preferences_pages(env, home)
         elif scenario == "auto-follow":

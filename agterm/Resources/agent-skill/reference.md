@@ -585,6 +585,10 @@ so `{AGT_SESSION_NAME}` and `{AGT_SESSION_PWD}` are as untrusted as `{AGT_SELECT
   into the very pane the shortcut was pressed in.
 - Plus the other `$AGT_*` context vars the runner exports.
 
+Linux runs custom commands detached with stdin, stdout, and stderr connected to `/dev/null`.
+A spawn error or non-zero exit appears as a transient toast only in the originating window while that
+controller incarnation remains open.
+
 Built-in action names for `map` include: `new_window`, `new_workspace`, `new_session`,
 `open_directory`, `rename_session`, `close_session`, `reopen_recent`, `undo_close`, `clear_status`, `increase_font_size`,
 `decrease_font_size`, `reset_font_size`, `toggle_split`, `toggle_scratch`, `toggle_sidebar`, `quick_terminal`,

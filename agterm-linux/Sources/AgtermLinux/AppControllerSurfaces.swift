@@ -230,24 +230,20 @@ extension AppController {
                                      windowName: gLibrary.windows.first(where: { $0.id == windowID })?.name ?? "",
                                      pane: pane, selection: selectionSurface?.readSelection() ?? "",
                                      socket: gControlServer.boundSocketPath ?? "")
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/bin/sh")
-        proc.arguments = ["-c", context.expand(cmd.command)]
-        var env = ProcessInfo.processInfo.environment
-        for (key, value) in context.environment() { env[key] = value }
-        proc.environment = env
-        if !context.sessionPWD.isEmpty {
-            proc.currentDirectoryURL = URL(fileURLWithPath: context.sessionPWD, isDirectory: true)
-        }
-        let name = cmd.name
-        proc.terminationHandler = { p in
-            let code = p.terminationStatus
-            guard code != 0 else { return }
-            runOnMain { [weak self] in
-                MainActor.assumeIsolated { self?.showToast("command failed (exit \(code)): \(name)") }
+        let controllerOrigin = customCommandOrigin
+        let launcher = controllerOrigin.launcher
+        LinuxCustomCommandProcess.launch(command: cmd, context: context, launcher: launcher) { [weak self] failure in
+            runOnMain { [weak self, weak controllerOrigin] in
+                MainActor.assumeIsolated {
+                    guard let self, let controllerOrigin,
+                          self.customCommandOrigin === controllerOrigin,
+                          gWindows[self.windowID] === self else { return }
+                    controllerOrigin.deliverIfActive {
+                        self.showToast(failure.toast(commandName: cmd.name))
+                    }
+                }
             }
         }
-        try? proc.run()
     }
 
     func configDirectory() -> URL {
