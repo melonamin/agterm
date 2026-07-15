@@ -11,6 +11,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  UPSTREAM_BASE_TAG: "v0.14.0"
+  UPSTREAM_BASE_COMMIT: "ed0e4c6c48f1422b3e0428b46779fd6e9d46c4d8"
   SWIFTLINT_VERSION: "0.65.0"
   SWIFTLINT_SHA256: "79306a34e5c7cc55a220cd108cbb861dcad5f10138dcdf261e2624ae8b0a486b"
   LINUX_SOURCEKIT_LIB_PATH: "/usr/lib/libsourcekitdInProc.so"
@@ -59,8 +61,10 @@ jobs:
         run: |
           apt-get update
           apt-get install -y --no-install-recommends ripgrep zsh
-      - name: Verify upstream boundary tag
-        run: git rev-parse --verify 'v0.14.0^{commit}'
+      - name: Materialize and verify upstream boundary tag
+        run: |
+          git tag --force "$UPSTREAM_BASE_TAG" "$UPSTREAM_BASE_COMMIT"
+          git merge-base --is-ancestor "$UPSTREAM_BASE_TAG" HEAD
       - name: swift test
         working-directory: agtermCore
         run: swift test
@@ -94,8 +98,10 @@ jobs:
           swiftlint --version
       - name: swiftlint (strict)
         run: swiftlint lint --strict --quiet
-      - name: Verify upstream boundary tag
-        run: git rev-parse --verify 'v0.14.0^{commit}'
+      - name: Materialize and verify upstream boundary tag
+        run: |
+          git tag --force "$UPSTREAM_BASE_TAG" "$UPSTREAM_BASE_COMMIT"
+          git merge-base --is-ancestor "$UPSTREAM_BASE_TAG" HEAD
       - name: Reject whitespace errors
         run: |
           git diff --check
@@ -131,8 +137,10 @@ jobs:
           echo "${ZIG_SHA256}  /tmp/zig.tar.xz" | sha256sum --check
           tar -xJf /tmp/zig.tar.xz -C /opt
           echo "/opt/zig-x86_64-linux-0.15.2" >> "$GITHUB_PATH"
-      - name: Verify upstream boundary tag
-        run: git rev-parse --verify 'v0.14.0^{commit}'
+      - name: Materialize and verify upstream boundary tag
+        run: |
+          git tag --force "$UPSTREAM_BASE_TAG" "$UPSTREAM_BASE_COMMIT"
+          git merge-base --is-ancestor "$UPSTREAM_BASE_TAG" HEAD
       - name: Enforce host-free core boundary and CLI sharing
         run: |
           scripts/check-linux-core-boundary.sh v0.14.0

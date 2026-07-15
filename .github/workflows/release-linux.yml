@@ -21,6 +21,8 @@ permissions:
   attestations: write
 
 env:
+  UPSTREAM_BASE_TAG: "v0.14.0"
+  UPSTREAM_BASE_COMMIT: "ed0e4c6c48f1422b3e0428b46779fd6e9d46c4d8"
   SWIFTLINT_VERSION: "0.65.0"
   SWIFTLINT_SHA256: "79306a34e5c7cc55a220cd108cbb861dcad5f10138dcdf261e2624ae8b0a486b"
   LINUX_SOURCEKIT_LIB_PATH: "/usr/lib/libsourcekitdInProc.so"
@@ -68,8 +70,9 @@ jobs:
             echo "$TAG does not point to a commit on origin/linux-port" >&2
             exit 1
           fi
+          git tag --force "$UPSTREAM_BASE_TAG" "$UPSTREAM_BASE_COMMIT"
+          git merge-base --is-ancestor "$UPSTREAM_BASE_TAG" "$COMMIT"
           git checkout --detach "$COMMIT"
-          git rev-parse --verify 'v0.14.0^{commit}' >/dev/null
 
           VERSION="${TAG#linux-}"
           PACKAGE_VERSION="${VERSION#v}"
