@@ -81,11 +81,8 @@ struct PiIntegrationTests {
     func unreadableExtension() throws {
         let fixture = try piFixture()
         let destination = piDestination(fixture)
-        try fixture.write("\(AgentHooksInstall.piExtensionMarker)\n", to: destination, mode: 0o000)
-        defer {
-            try? FileManager.default.setAttributes(
-                [.posixPermissions: 0o600], ofItemAtPath: destination.path)
-        }
+        try fixture.write("\(AgentHooksInstall.piExtensionMarker)\n", to: destination)
+        try Data([0xC3, 0x28]).write(to: destination)
         let service = fixture.service(path: [])
 
         let status = service.status()[.piHooks]
