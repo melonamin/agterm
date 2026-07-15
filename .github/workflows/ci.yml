@@ -53,6 +53,8 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
+      - name: Trust checkout directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Install test shell
         run: |
           apt-get update
@@ -78,6 +80,8 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
+      - name: Trust checkout directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Install SwiftLint
         run: |
           apt-get update
@@ -113,6 +117,8 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
+      - name: Trust checkout directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Install GTK4, accessibility, software GL, test shells, and zig
         run: |
           apt-get update
