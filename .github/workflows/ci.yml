@@ -64,6 +64,8 @@ jobs:
     container: swift:6.3.2-noble
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - name: Install SwiftLint
         run: |
           apt-get update
@@ -76,6 +78,8 @@ jobs:
           swiftlint --version
       - name: swiftlint (strict)
         run: swiftlint lint --strict --quiet
+      - name: Reject whitespace errors
+        run: git diff --check v0.14.0...HEAD
 
   build-linux:
     name: Build app (Linux GTK)
@@ -91,7 +95,7 @@ jobs:
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
-            libgtk-4-dev libadwaita-1-dev libepoxy-dev pkg-config git curl ca-certificates xz-utils
+            libgtk-4-dev libadwaita-1-dev libepoxy-dev pkg-config git curl ca-certificates xz-utils ncurses-bin
           curl -fsSLo /tmp/zig.tar.xz \
             https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz
           echo "${ZIG_SHA256}  /tmp/zig.tar.xz" | sha256sum --check
@@ -101,7 +105,9 @@ jobs:
         uses: actions/cache@v6
         with:
           path: agterm-linux/vendor/ghostty
-          key: libghostty-${{ hashFiles('scripts/setup-linux.sh', 'linux/patches/ghostty-embedded-opengl.patch') }}
+          key: libghostty-${{ hashFiles('scripts/setup-linux.sh', 'scripts/verify-linux-resources.sh', 'linux/ghostty-resources.env', 'linux/patches/ghostty-embedded-opengl.patch', 'linux/patches/ghostty-lib-resources.patch') }}
+      - name: Test deterministic Ghostty resources
+        run: scripts/test-linux-resources.sh
       - name: Build libghostty (skips if the cache restored it)
         run: scripts/setup-linux.sh
       - name: swift test (agterm-linux)

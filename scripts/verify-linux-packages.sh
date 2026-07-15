@@ -39,7 +39,7 @@ verify_payload() {
   test -x "$payload/bin/agtermctl"
   test -x "$payload/bin/agtermctl.bin"
   test -f "$payload/lib/libghostty.so"
-  test -d "$payload/share/ghostty"
+  "$ROOT/scripts/verify-linux-resources.sh" "$payload/share"
   test -x "$payload/share/agterm/agent-status/agterm-agent-status.sh"
   test -x "$payload/share/agterm/agent-status/agterm-codex-status.sh"
   test -f "$payload/share/agterm/agent-skill/SKILL.md"
@@ -104,6 +104,7 @@ test -f "$APPROOT/usr/share/agterm/agent-skill/SKILL.md"
 find "$APPROOT/usr/lib" -name 'libgtk-4.so.1' -print -quit | grep -q .
 find "$APPROOT/usr/lib" -name 'libadwaita-1.so.0' -print -quit | grep -q .
 find "$APPROOT/usr/lib" -name 'libghostty.so' -print -quit | grep -q .
+"$ROOT/scripts/verify-linux-resources.sh" "$APPROOT/usr/share"
 APPIMAGE_LIBRARY_PATH="$(find "$APPROOT/usr/lib" -type d -printf '%p:' | sed 's/:$//')"
 for binary in agterm-linux.bin agtermctl.bin; do
   LD_LIBRARY_PATH="$APPIMAGE_LIBRARY_PATH" ldd "$APPROOT/usr/bin/$binary" > "$WORK/appimage-$binary.ldd"

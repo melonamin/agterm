@@ -89,7 +89,7 @@ jobs:
             libgtk-4-dev libadwaita-1-dev libepoxy-dev pkg-config \
             librsvg2-dev libgirepository1.0-dev gobject-introspection \
             git curl jq ca-certificates xz-utils unzip zsh file imagemagick \
-            rpm cpio desktop-file-utils patchelf
+            rpm cpio desktop-file-utils patchelf ncurses-bin
           curl -fsSLo /tmp/swiftlint.zip \
             "https://github.com/realm/SwiftLint/releases/download/${SWIFTLINT_VERSION}/swiftlint_linux_amd64.zip"
           echo "${SWIFTLINT_SHA256}  /tmp/swiftlint.zip" | sha256sum --check
@@ -140,7 +140,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: agterm-linux/vendor/ghostty
-          key: libghostty-x86_64-${{ hashFiles('scripts/setup-linux.sh', 'linux/patches/ghostty-embedded-opengl.patch') }}
+          key: libghostty-x86_64-${{ hashFiles('scripts/setup-linux.sh', 'scripts/verify-linux-resources.sh', 'linux/ghostty-resources.env', 'linux/patches/ghostty-embedded-opengl.patch', 'linux/patches/ghostty-lib-resources.patch') }}
 
       - name: Build libghostty
         run: scripts/setup-linux.sh

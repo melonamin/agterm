@@ -5,13 +5,29 @@ import agtermCore
 
 @Suite("Linux-owned policy and adapters")
 struct LinuxPolicyTests {
-    @Test("resource resolution requires shell integration and preserves precedence")
+    @Test("resource resolution requires complete sibling resources and preserves precedence")
     func resourceResolution() {
+        let complete = [
+            "/complete/ghostty/shell-integration", "/complete/terminfo/x/xterm-ghostty",
+            "/later/ghostty/shell-integration", "/later/terminfo/x/xterm-ghostty"
+        ]
         let resolver = GhosttyResourceResolver(
-            candidates: ["/missing", "/complete", "/later"],
-            fileExists: { $0 == "/complete/shell-integration" || $0 == "/later/shell-integration" }
+            candidates: ["relative", "/shell-only/ghostty", "/terminfo-only/ghostty",
+                         "/complete/ghostty", "/later/ghostty"],
+            fileExists: { complete.contains($0) || $0 == "/shell-only/ghostty/shell-integration"
+                || $0 == "/terminfo-only/terminfo/x/xterm-ghostty" }
         )
-        #expect(resolver.resolve() == "/complete")
+        #expect(resolver.resolve() == "/complete/ghostty")
+        #expect(resolver.terminalName == "xterm-ghostty")
+
+        let incomplete = GhosttyResourceResolver(
+            candidates: ["", "relative", "/shell-only/ghostty", "/terminfo-only/ghostty"],
+            fileExists: { $0 == "/shell-only/ghostty/shell-integration"
+                || $0 == "/terminfo-only/terminfo/x/xterm-ghostty" }
+        )
+        #expect(incomplete.resolve() == nil)
+        #expect(incomplete.terminalName == "xterm-256color")
+        #expect(GhosttyResourceResolver.terminalName(resolvedResources: "/share/ghostty") == "xterm-ghostty")
     }
 
     @Test("URI lists become POSIX path payloads")

@@ -31,6 +31,7 @@ final class GhosttyApp: @unchecked Sendable {
 
     private let tickLock = NSLock()
     private var tickScheduled = false
+    private var resolvedResources: String?
 
     /// The current theme's colors as OSC escape sequences (OSC 11/10/4/…), fed to each surface at creation
     /// because the embedded OpenGL renderer doesn't adopt the config's default colors from the config file.
@@ -395,17 +396,13 @@ final class GhosttyApp: @unchecked Sendable {
         return Unmanaged<GhosttySurface>.fromOpaque(ud).takeUnretainedValue()
     }
 
-    /// Bundled config defaults: a portable TERM (we don't ship ghostty's terminfo
-    /// yet) and a steady block cursor. User's ~/.config/ghostty/config still wins.
+    /// Bundled config defaults select Ghostty's TERM only when its complete resource pair resolved.
+    /// User's ~/.config/ghostty/config still wins.
     private static func writeDefaultsConf() -> String? {
         let dir = ProcessInfo.processInfo.environment["XDG_RUNTIME_DIR"] ?? NSTemporaryDirectory()
         let path = (dir as NSString).appendingPathComponent("agterm-ghostty-defaults.conf")
-        // TERM=xterm-ghostty only when the ghostty resources resolved (so the sibling terminfo exists);
-        // otherwise a portable fallback. setGhosttyResourcesEnv() runs before this and exports the var via
-        // setenv — read it with getenv (the live C environ), NOT ProcessInfo.environment, which snapshots
-        // the environment at process start and would miss the setenv.
-        let haveResources = getenv("GHOSTTY_RESOURCES_DIR") != nil
-        let contents = "term = \(haveResources ? "xterm-ghostty" : "xterm-256color")\n" + GhosttyDefaults.baseConfLines
+        let term = GhosttyResourceResolver.terminalName(resolvedResources: GhosttyApp.shared.resolvedResources)
+        let contents = "term = \(term)\n" + GhosttyDefaults.baseConfLines
         try? contents.write(toFile: path, atomically: true, encoding: .utf8)
         return path
     }
@@ -419,7 +416,11 @@ final class GhosttyApp: @unchecked Sendable {
         let resolver = GhosttyResourceResolver(candidates: ghosttyResourceCandidates(),
                                                fileExists: { FileManager.default.fileExists(atPath: $0) })
         let resolved = resolver.resolve()
+        resolvedResources = resolved
         if let dir = resolved {
+            if dir == "/usr/share/ghostty" {
+                FileHandle.standardError.write(Data("agterm: using system Ghostty resources at \(dir)\n".utf8))
+            }
             setenv("GHOSTTY_RESOURCES_DIR", dir, 1)
         } else {
             unsetenv("GHOSTTY_RESOURCES_DIR")

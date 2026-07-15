@@ -29,6 +29,8 @@ CTL="$APP/.build/release/agtermctl-linux"
   exit 1
 }
 
+"$ROOT/scripts/verify-linux-resources.sh" "$APP/vendor/ghostty/share"
+
 mkdir -p "$DEST/bin" "$DEST/lib" "$DEST/share/applications" "$DEST/share/pixmaps"
 install -m755 "$BIN" "$DEST/bin/agterm-linux.bin"
 install -m755 "$CTL" "$DEST/bin/agtermctl.bin"
@@ -43,13 +45,8 @@ install -m755 "$CTL" "$DEST/bin/agtermctl.bin"
       [[ -f "$lib" ]] && cp -L "$lib" "$DEST/lib/"
     done
 
-if [[ -d "$APP/vendor/ghostty/share/ghostty" ]]; then
-  cp -R "$APP/vendor/ghostty/share/ghostty" "$DEST/share/ghostty"
-else
-  echo "NOTE: no vendored ghostty resources to bundle (runtime falls back to /usr/share/ghostty)" >&2
-fi
-[[ -d "$APP/vendor/ghostty/share/terminfo" ]] \
-  && cp -R "$APP/vendor/ghostty/share/terminfo" "$DEST/share/terminfo"
+cp -R "$APP/vendor/ghostty/share/ghostty" "$DEST/share/ghostty"
+cp -R "$APP/vendor/ghostty/share/terminfo" "$DEST/share/terminfo"
 
 [[ -d "$APP/Resources/icons" ]] && cp -R "$APP/Resources/icons" "$DEST/share/icons"
 mkdir -p "$DEST/share/agterm"
