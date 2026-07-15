@@ -83,6 +83,10 @@ let onQuickToggle: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button
     MainActor.assumeIsolated { controllerForWidget(button)?.toggleQuick() }
 }
 
+let onDashboardToggle: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
+    MainActor.assumeIsolated { controllerForWidget(button)?.toggleDashboard() }
+}
+
 let onNewWindow: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
     MainActor.assumeIsolated { controllerForWidget(button)?.openNewWindow() }
 }

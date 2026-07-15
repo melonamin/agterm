@@ -25,6 +25,7 @@ extension AppController {
         showActive(focus: focusActive)
         updateTitle()
         updateAttentionButton()
+        updateDashboardButton()
         restoreDashboardAfterReconcile(dashboardRestore)
     }
 
@@ -432,11 +433,21 @@ extension AppController {
     }
 
     func updateTitle() {
+        let windowInfo = library.windows.first(where: { $0.id == windowID })
+        let normalTitle = LinuxModalTitle.normal(sessionName: store.activeSession?.displayName, window: windowInfo)
         var title = store.activeSession?.displayName ?? "agterm"
         if let id = store.selectedSessionID, let p = sessionProgress[id] {
             title = (p < 0 ? "⋯ " : "\(p)% ") + title
         }
         title.withCString { gtk_window_set_title(WIN(window), $0) }
+        normalTitle.withCString { value in
+            if let zoomTitleLabel { gtk_label_set_text(zoomTitleLabel, value) }
+        }
+        LinuxModalTitle.dashboard(window: windowInfo).withCString { value in
+            if let dashboardTitle = dashboardRuntime.titleLabel {
+                gtk_label_set_text(dashboardTitle, value)
+            }
+        }
     }
 
     func monospaceFonts() -> [String] {

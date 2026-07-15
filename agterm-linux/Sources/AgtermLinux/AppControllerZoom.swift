@@ -40,25 +40,35 @@ extension AppController {
     private func hostZoomedSurface(_ target: TerminalZoomTarget) -> Bool {
         guard let surface = surface(for: target), detach(surface.glArea, from: target),
               let deckOverlay else { return false }
-        let host = OpaquePointer(gtk_overlay_new())
+        let host = OpaquePointer(adw_toolbar_view_new())
+        let header = OpaquePointer(adw_header_bar_new())
         gtk_widget_set_halign(W(host), GTK_ALIGN_FILL)
         gtk_widget_set_valign(W(host), GTK_ALIGN_FILL)
         gtk_widget_set_hexpand(W(host), 1)
         gtk_widget_set_vexpand(W(host), 1)
-        gtk_overlay_set_child(host, W(surface.glArea))
+        gtk_widget_add_css_class(W(header), "agterm-modal-header")
+        let decorationLayout = LinuxDesktopEnvironment.hidesClientSideWindowButtons() ? ":" : "close,minimize,maximize:"
+        decorationLayout.withCString { adw_header_bar_set_decoration_layout(header, $0) }
+        let title = LinuxModalTitle.normal(
+            sessionName: store.activeSession?.displayName,
+            window: library.windows.first(where: { $0.id == windowID }))
+        let titleLabel = OpaquePointer(gtk_label_new(title))
+        gtk_widget_add_css_class(W(titleLabel), "title")
+        adw_header_bar_set_title_widget(header, W(titleLabel))
 
-        let exit = OpaquePointer(gtk_button_new_from_icon_name("view-restore-symbolic"))
+        let exit = OpaquePointer(gtk_button_new_with_label("Exit Terminal Zoom"))
         gtk_widget_set_tooltip_text(W(exit), "Exit Terminal Zoom")
-        gtk_widget_set_halign(W(exit), GTK_ALIGN_END)
-        gtk_widget_set_valign(W(exit), GTK_ALIGN_START)
-        gtk_widget_set_margin_top(W(exit), 8)
-        gtk_widget_set_margin_end(W(exit), 8)
-        gtk_widget_add_css_class(W(exit), "circular")
-        connect(exit, "clicked", unsafeBitCast(onTerminalZoomExit, to: GCallback.self),
-                Unmanaged.passUnretained(self).toOpaque())
-        gtk_overlay_add_overlay(host, W(exit))
+        connect(exit, "clicked", unsafeBitCast(onTerminalZoomExit, to: GCallback.self))
+        adw_header_bar_pack_end(header, W(exit))
+        adw_toolbar_view_add_top_bar(host, W(header))
+        adw_toolbar_view_set_content(host, W(surface.glArea))
+        if linuxSettingsStore().load().effectiveToolbarMode == .hidden {
+            gtk_widget_set_visible(W(header), 0)
+        }
         gtk_overlay_add_overlay(deckOverlay, W(host))
         zoomHost = host
+        zoomHeader = header
+        zoomTitleLabel = titleLabel
         surface.grabFocus()
         surface.refresh()
         g_object_unref(RAW(surface.glArea))
@@ -92,9 +102,11 @@ extension AppController {
     private func restoreZoomedSurface(_ target: TerminalZoomTarget) {
         guard let surface = surface(for: target), let host = zoomHost, let deckOverlay else { return }
         _ = g_object_ref(RAW(surface.glArea))
-        gtk_overlay_set_child(host, nil)
+        adw_toolbar_view_set_content(host, nil)
         gtk_overlay_remove_overlay(deckOverlay, W(host))
         zoomHost = nil
+        zoomHeader = nil
+        zoomTitleLabel = nil
         reattach(surface.glArea, to: target)
         g_object_unref(RAW(surface.glArea))
         surface.refresh()
@@ -125,10 +137,8 @@ extension AppController {
     }
 }
 
-private let onTerminalZoomExit: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, data in
-    guard let data else { return }
+private let onTerminalZoomExit: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
     MainActor.assumeIsolated {
-        let controller = Unmanaged<AppController>.fromOpaque(data).takeUnretainedValue()
-        controller.setTerminalZoom(.off, target: nil)
+        controllerForWidget(button)?.setTerminalZoom(.off, target: nil)
     }
 }

@@ -920,6 +920,7 @@ extension AppController: ControlActions {
         case .failure(let response): return response
         case .success(let id):
             library.renameWindow(id, to: name)
+            gWindows[id]?.updateTitle()
             return ok(id)
         }
     }

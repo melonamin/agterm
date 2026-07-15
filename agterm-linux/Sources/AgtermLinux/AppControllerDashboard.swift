@@ -5,20 +5,39 @@ import agtermCore
 @MainActor
 final class DashboardRuntime {
     var host: OpaquePointer?
+    var header: OpaquePointer?
+    var titleLabel: OpaquePointer?
+    var keyController: OpaquePointer?
     var frames: [DashboardMember: OpaquePointer] = [:]
     var targets: [DashboardMember: TerminalZoomTarget] = [:]
     var statusIcons: [DashboardMember: OpaquePointer] = [:]
     var clickContexts: [DashboardClickContext] = []
+    var clickIntent = DashboardClickIntent()
+    var pendingClickSource: guint = 0
+    var pendingClickContext: DashboardDelayedClickContext?
 }
 
 @MainActor
 final class DashboardClickContext {
-    unowned let controller: AppController
+    weak var controller: AppController?
     let member: DashboardMember
 
     init(controller: AppController, member: DashboardMember) {
         self.controller = controller
         self.member = member
+    }
+}
+
+@MainActor
+final class DashboardDelayedClickContext {
+    weak var controller: AppController?
+    let member: DashboardMember
+    let generation: UInt64
+
+    init(controller: AppController, member: DashboardMember, generation: UInt64) {
+        self.controller = controller
+        self.member = member
+        self.generation = generation
     }
 }
 
@@ -50,8 +69,13 @@ extension AppController {
     }
 
     func closeDashboard(refocus: Bool = true) {
+        cancelPendingDashboardClick()
         guard dashboard.isOpen || dashboardRuntime.host != nil else { return }
         clearDashboardFontOverrides()
+        if let keys = dashboardRuntime.keyController {
+            gtk_widget_remove_controller(W(window), keys)
+            dashboardRuntime.keyController = nil
+        }
         for (member, target) in dashboardRuntime.targets {
             guard let surface = surface(for: target) else { continue }
             _ = g_object_ref(RAW(surface.glArea))
@@ -66,6 +90,8 @@ extension AppController {
             gtk_overlay_remove_overlay(deckOverlay, W(host))
         }
         dashboardRuntime.host = nil
+        dashboardRuntime.header = nil
+        dashboardRuntime.titleLabel = nil
         dashboardRuntime.frames = [:]
         dashboardRuntime.targets = [:]
         dashboardRuntime.statusIcons = [:]
@@ -78,6 +104,7 @@ extension AppController {
     }
 
     func selectDashboardMember(_ member: DashboardMember) {
+        cancelPendingDashboardClick()
         guard dashboard.members.contains(member) else { return }
         noteUserActivity()
         store.selectSession(member.session)
@@ -89,8 +116,14 @@ extension AppController {
     }
 
     func moveDashboardHighlight(_ direction: DashboardLayout.Direction) {
+        cancelPendingDashboardClick()
         dashboard.move(direction)
         updateDashboardHighlight()
+    }
+
+    func updateDashboardButton() {
+        guard let dashboardButton else { return }
+        gtk_widget_set_sensitive(W(dashboardButton), store.workspaces.contains { !$0.sessions.isEmpty } ? 1 : 0)
     }
 
     func revealSessionDirectory(_ id: UUID) -> Bool {
@@ -132,12 +165,28 @@ extension AppController {
 
     private func mountDashboard() {
         guard let deckOverlay else { return }
-        let host = OpaquePointer(gtk_overlay_new())
+        let host = OpaquePointer(adw_toolbar_view_new())
+        let header = OpaquePointer(adw_header_bar_new())
         let grid = OpaquePointer(gtk_grid_new())
         gtk_widget_add_css_class(W(host), "agterm-dashboard")
+        gtk_widget_add_css_class(W(header), "agterm-modal-header")
         gtk_widget_set_hexpand(W(host), 1)
         gtk_widget_set_vexpand(W(host), 1)
         gtk_widget_set_focusable(W(host), 1)
+        let decorationLayout = LinuxDesktopEnvironment.hidesClientSideWindowButtons() ? ":" : "close,minimize,maximize:"
+        decorationLayout.withCString { adw_header_bar_set_decoration_layout(header, $0) }
+        let title = LinuxModalTitle.dashboard(window: library.windows.first(where: { $0.id == windowID }))
+        let titleLabel = OpaquePointer(gtk_label_new(title))
+        gtk_widget_add_css_class(W(titleLabel), "title")
+        adw_header_bar_set_title_widget(header, W(titleLabel))
+        let exit = OpaquePointer(gtk_button_new_with_label("Exit Dashboard"))
+        gtk_widget_set_tooltip_text(W(exit), "Exit Dashboard")
+        connect(exit, "clicked", unsafeBitCast(onDashboardExit, to: GCallback.self))
+        adw_header_bar_pack_end(header, W(exit))
+        adw_toolbar_view_add_top_bar(host, W(header))
+        if linuxSettingsStore().load().effectiveToolbarMode == .hidden {
+            gtk_widget_set_visible(W(header), 0)
+        }
         gtk_grid_set_row_homogeneous(cast(grid), 1)
         gtk_grid_set_column_homogeneous(cast(grid), 1)
         gtk_grid_set_row_spacing(cast(grid), 8)
@@ -146,7 +195,7 @@ extension AppController {
                        gtk_widget_set_margin_start, gtk_widget_set_margin_end] {
             margin(W(grid), 10)
         }
-        gtk_overlay_set_child(host, W(grid))
+        adw_toolbar_view_set_content(host, W(grid))
 
         let (cols, _) = DashboardLayout.grid(count: dashboard.members.count)
         for (index, member) in dashboard.members.enumerated() {
@@ -162,6 +211,7 @@ extension AppController {
             gtk_overlay_set_child(cell, W(surface.glArea))
             let sessionName = store.session(withID: member.session)?.displayName ?? "Session"
             let paneName = member.surface == .split ? "Right" : "Left"
+            gtk_widget_set_tooltip_text(W(frame), "\(sessionName) · \(paneName)")
             let caption = OpaquePointer(gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6))
             gtk_widget_add_css_class(W(caption), "agterm-dashboard-caption")
             gtk_widget_set_halign(W(caption), GTK_ALIGN_START)
@@ -188,29 +238,57 @@ extension AppController {
             dashboardRuntime.targets[member] = target
         }
 
-        let exit = OpaquePointer(gtk_button_new_from_icon_name("window-close-symbolic"))
-        gtk_widget_set_tooltip_text(W(exit), "Exit Dashboard")
-        gtk_widget_set_halign(W(exit), GTK_ALIGN_END)
-        gtk_widget_set_valign(W(exit), GTK_ALIGN_START)
-        gtk_widget_set_margin_top(W(exit), 16)
-        gtk_widget_set_margin_end(W(exit), 16)
-        gtk_widget_add_css_class(W(exit), "circular")
-        connect(exit, "clicked", unsafeBitCast(onDashboardExit, to: GCallback.self),
-                Unmanaged.passUnretained(self).toOpaque())
-        gtk_overlay_add_overlay(host, W(exit))
-
         let keys = gtk_event_controller_key_new()
         gtk_event_controller_set_propagation_phase(keys, GTK_PHASE_CAPTURE)
         connect(keys, "key-pressed", unsafeBitCast(onDashboardKey as @convention(c)
             (OpaquePointer?, UInt32, UInt32, UInt32, gpointer?) -> gboolean, to: GCallback.self),
             Unmanaged.passUnretained(self).toOpaque())
-        gtk_widget_add_controller(W(host), keys)
+        // Capture on the window so native header focus, accessibility activation, and the view-only
+        // terminal cells all share the same keyboard navigation path.
+        gtk_widget_add_controller(W(window), keys)
         gtk_overlay_add_overlay(deckOverlay, W(host))
         dashboardRuntime.host = host
+        dashboardRuntime.header = header
+        dashboardRuntime.titleLabel = titleLabel
+        dashboardRuntime.keyController = keys
         gtk_widget_set_visible(W(splitView), 0)
         updateDashboardStatusIndicators()
         updateDashboardHighlight()
         _ = gtk_widget_grab_focus(W(host))
+    }
+
+    fileprivate func scheduleDashboardSelection(_ member: DashboardMember) {
+        cancelPendingDashboardClick()
+        dashboard.highlight(member)
+        updateDashboardHighlight()
+        let generation = dashboardRuntime.clickIntent.begin(member: member)
+        let context = DashboardDelayedClickContext(controller: self, member: member, generation: generation)
+        dashboardRuntime.pendingClickContext = context
+        let source = g_timeout_add_full(
+            G_PRIORITY_DEFAULT, DashboardClickIntent.delayMilliseconds, onDashboardClickDelay,
+            Unmanaged.passRetained(context).toOpaque(), releaseDashboardDelayedClickContext)
+        dashboardRuntime.pendingClickSource = source
+        if source == 0 {
+            dashboardRuntime.pendingClickContext = nil
+            dashboardRuntime.clickIntent.cancel()
+        }
+    }
+
+    private func cancelPendingDashboardClick() {
+        let source = dashboardRuntime.pendingClickSource
+        dashboardRuntime.pendingClickSource = 0
+        if source != 0 { _ = g_source_remove(source) }
+        dashboardRuntime.pendingClickContext = nil
+        dashboardRuntime.clickIntent.cancel()
+    }
+
+    fileprivate func completeDashboardSelection(_ context: DashboardDelayedClickContext) {
+        guard dashboardRuntime.pendingClickContext === context else { return }
+        dashboardRuntime.pendingClickSource = 0
+        dashboardRuntime.pendingClickContext = nil
+        guard dashboardRuntime.clickIntent.accepts(generation: context.generation, member: context.member),
+              dashboard.isOpen, dashboard.highlighted == context.member else { return }
+        selectDashboardMember(context.member)
     }
 
     func updateDashboardStatusIndicators() {
@@ -262,22 +340,33 @@ extension AppController {
     }
 }
 
-private let onDashboardExit: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, data in
-    guard let data else { return }
+private let onDashboardExit: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
     MainActor.assumeIsolated {
-        Unmanaged<AppController>.fromOpaque(data).takeUnretainedValue().closeDashboard()
+        controllerForWidget(button)?.closeDashboard()
     }
 }
 
 private let onDashboardCellPressed: @convention(c)
     (OpaquePointer?, Int32, Double, Double, gpointer?) -> Void = { _, presses, _, _, data in
-    guard let data else { return }
+    guard presses >= 1, let data else { return }
     MainActor.assumeIsolated {
         let context = Unmanaged<DashboardClickContext>.fromOpaque(data).takeUnretainedValue()
-        context.controller.dashboard.highlight(context.member)
-        context.controller.updateDashboardHighlightFromCallback()
-        if presses >= 2 { context.controller.selectDashboardMember(context.member) }
+        context.controller?.scheduleDashboardSelection(context.member)
     }
+}
+
+private let onDashboardClickDelay: @convention(c) (gpointer?) -> gboolean = { data in
+    guard let data else { return 0 }
+    return MainActor.assumeIsolated {
+        let context = Unmanaged<DashboardDelayedClickContext>.fromOpaque(data).takeUnretainedValue()
+        context.controller?.completeDashboardSelection(context)
+        return 0
+    }
+}
+
+private let releaseDashboardDelayedClickContext: @convention(c) (gpointer?) -> Void = { data in
+    guard let data else { return }
+    Unmanaged<DashboardDelayedClickContext>.fromOpaque(data).release()
 }
 
 private let onDashboardKey: @convention(c)
@@ -297,9 +386,4 @@ private let onDashboardKey: @convention(c)
         default: return 1
         }
     }
-}
-
-@MainActor
-extension AppController {
-    fileprivate func updateDashboardHighlightFromCallback() { updateDashboardHighlight() }
 }

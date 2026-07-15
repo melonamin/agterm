@@ -18,7 +18,6 @@ final class AppController {
     let windowID: UUID
     let library: WindowLibrary
     let customCommandOrigin: LinuxCustomCommandOrigin
-
     let window: OpaquePointer        // AdwApplicationWindow
     let deck: OpaquePointer          // GtkStack (one page per session)
     var contentBox: OpaquePointer?   // vertical box [search + deck-overlay]
@@ -37,10 +36,12 @@ final class AppController {
     var fullscreenTransitionInFlight = false
     var fullscreenTransitionTimeout: UInt32 = 0
     let terminalZoom = TerminalZoomController(); let dashboard = DashboardController(); let dashboardRuntime = DashboardRuntime(); var zoomHost: OpaquePointer?
+    var zoomHeader: OpaquePointer?; var zoomTitleLabel: OpaquePointer?
     var splitToggleBtn: OpaquePointer?    // title-bar split toggle (swaps to .fill when active)
     var scratchToggleBtn: OpaquePointer?  // title-bar scratch toggle (swaps to .fill when active)
     var recentSessionsButton: OpaquePointer? // title-bar MRU session picker
     var attentionButton: OpaquePointer?   // optional title-bar attention indicator button
+    var dashboardButton: OpaquePointer?   // title-bar MRU dashboard toggle
     var sessionPickerPopover: OpaquePointer?; var sessionPickerContexts: [SessionPickerRowContext] = []
     var sessionPickerSuppressesAutoFollow = false
     var sessionPickerShowsAttention = false
@@ -158,7 +159,6 @@ final class AppController {
         let store = library.store(for: windowID) ?? AppStore()
         self.store = store
         autoFollowCoordinator = LinuxAutoFollowCoordinator(store: store)
-
         window = OpaquePointer(adw_application_window_new(APPW(app)))
         attachControllerContext(to: window, windowID: windowID)
         // restore the window's last on-screen size (Wayland: size only — the compositor owns position),
@@ -168,14 +168,11 @@ final class AppController {
         } else {
             gtk_window_set_default_size(WIN(window), 1100, 700)
         }
-
         deck = OpaquePointer(gtk_stack_new())
         gtk_widget_set_hexpand(W(deck), 1)
         gtk_widget_set_vexpand(W(deck), 1)
-
         sidebarBox = OpaquePointer(gtk_box_new(GTK_ORIENTATION_VERTICAL, 2))
         gtk_widget_set_vexpand(W(sidebarBox), 1); installSidebarDirectoryDropTarget()
-
         // Sidebar header: regular GTK desktops keep left-side controls; Hyprland owns window actions.
         let sidebarHeader = OpaquePointer(adw_header_bar_new())
         self.sidebarHeader = sidebarHeader
@@ -227,21 +224,25 @@ final class AppController {
         installPreferencesShortcut()
         @discardableResult func headerToggle(_ icon: String, _ tip: String, _ cb: @escaping @convention(c) (OpaquePointer?, gpointer?) -> Void) -> OpaquePointer? {
             let b = OpaquePointer(gtk_button_new_from_icon_name(icon))
-            gtk_widget_set_tooltip_text(W(b), tip)
-            connect(b, "clicked", unsafeBitCast(cb, to: GCallback.self))
-            adw_header_bar_pack_end(contentHeader, W(b))
-            return b
+            gtk_widget_set_tooltip_text(W(b), tip); connect(b, "clicked", unsafeBitCast(cb, to: GCallback.self))
+            adw_header_bar_pack_end(contentHeader, W(b)); return b
         }
-        // This order yields left-to-right: Recent, Attention, Scratch, Split, Quick. Icons match the
-        // macOS actions; split/scratch swap to a .fill variant when active (updateToggleIcons).
+        func headerSeparator() {
+            let separator = OpaquePointer(gtk_separator_new(GTK_ORIENTATION_VERTICAL))
+            gtk_widget_set_margin_top(W(separator), 8); gtk_widget_set_margin_bottom(W(separator), 8)
+            adw_header_bar_pack_end(contentHeader, W(separator))
+        }
+        // Left-to-right: Recent, Attention | Scratch, Split | Dashboard, Quick; split/scratch gain fill when active.
         headerToggle("agterm-quick-symbolic", "Quick Terminal (Ctrl+`)", onQuickToggle)
+        dashboardButton = headerToggle("agterm-grid-symbolic", "Dashboard (Ctrl+Shift+M)", onDashboardToggle)
+        headerSeparator()
         splitToggleBtn = headerToggle("agterm-split-symbolic", "Toggle Split (Ctrl+Shift+D)", onSplitToggle)
         scratchToggleBtn = headerToggle("agterm-scratch-symbolic", "Scratch Terminal (Ctrl+Shift+J)", onScratchToggle)
-        attentionButton = headerToggle("emblem-important-symbolic", "Show sessions that need attention (Ctrl+Shift+I)",
-                                       onAttentionButton)
-        recentSessionsButton = headerToggle("document-open-recent-symbolic", "Recent Sessions (Ctrl+Tab)",
-                                            onRecentSessionsButton)
+        headerSeparator()
+        attentionButton = headerToggle("emblem-important-symbolic", "Show sessions that need attention (Ctrl+Shift+I)", onAttentionButton)
+        recentSessionsButton = headerToggle("document-open-recent-symbolic", "Recent Sessions (Ctrl+Tab)", onRecentSessionsButton)
         updateAttentionButton()
+        updateDashboardButton()
         let contentToolbar = OpaquePointer(adw_toolbar_view_new())
         adw_toolbar_view_add_top_bar(contentToolbar, W(contentHeader))
         let contentBox = OpaquePointer(gtk_box_new(GTK_ORIENTATION_VERTICAL, 0))
@@ -250,7 +251,6 @@ final class AppController {
         gtk_box_append(cast(contentBox), W(searchBar))
         gtk_box_append(cast(contentBox), W(deck))
         adw_toolbar_view_set_content(contentToolbar, W(contentBox))
-
         let split = buildSidebarSplit(sidebar: sidebarToolbar, content: contentToolbar)
         applyToolbarMode()
         applySidebarFontSize()

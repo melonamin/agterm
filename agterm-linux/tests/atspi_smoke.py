@@ -183,6 +183,39 @@ def press_return(process_id, window_title=None):
     Atspi.generate_keyboard_event(0xFF0D, None, Atspi.KeySynthType.PRESSRELEASE)
 
 
+def press_right(process_id, window_title=None):
+    if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE") and shutil.which("hyprctl"):
+        target = f"title:^({window_title})$" if window_title else f"pid:{process_id}"
+        subprocess.run(
+            ["hyprctl", "dispatch", "focuswindow", target],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        if shutil.which("dotool"):
+            keyboard = subprocess.Popen(
+                ["dotool"], stdin=subprocess.PIPE, text=True,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            try:
+                time.sleep(0.5)
+                keyboard.stdin.write("key right\n")
+                keyboard.stdin.flush()
+                time.sleep(0.2)
+            finally:
+                keyboard.stdin.close()
+                keyboard.wait(timeout=3)
+            return
+        subprocess.run(
+            ["hyprctl", "dispatch", "sendshortcut", f",right,{target}"],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return
+    Atspi.generate_keyboard_event(0xFF53, None, Atspi.KeySynthType.PRESSRELEASE)
+
+
 def focus_window(process_id):
     """Give the isolated app real keyboard focus before testing its shortcut."""
     if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE") and shutil.which("hyprctl"):
@@ -413,6 +446,137 @@ def verify_normal_toolbar(env, state, home):
             "Ctrl+, did not preserve the single Preferences dialog",
         )
         print("OK: menu-free toolbar and Ctrl+, Preferences shortcut")
+    except AssertionError:
+        describe_tree(app)
+        raise
+    finally:
+        stop(process)
+
+
+def verify_dashboard_modal(env):
+    process, app = launch(env)
+    try:
+        window_id = wait_for(
+            lambda: next((item["id"] for item in window_list(env) if item["open"]), None),
+            "initial window was not registered",
+        )
+        tree = window_tree(env, window_id)
+        session_id = tree["workspaces"][0]["sessions"][0]["id"]
+        control_json(env, "session", "rename", "modal-session", "--window", window_id, "--json")
+        control_json(env, "window", "rename", window_id, "release", "--json")
+        control_json(
+            env, "session", "split", "on", "--target", session_id,
+            "--window", window_id, "--json",
+        )
+        wait_for(lambda: named(app, "modal-session", role="frame"), "renamed modal window is missing")
+
+        dashboard_button = wait_for(
+            lambda: actionable(app, "Dashboard (Ctrl+Shift+M)"),
+            "Dashboard header button is not actionable",
+        )
+        activate(dashboard_button)
+        wait_for(
+            lambda: named(app, "Dashboard — release", role="label"),
+            "dashboard did not expose its custom-window title",
+        )
+        exit_dashboard = wait_for(
+            lambda: named(app, "Exit Dashboard", role="button"),
+            "dashboard close button is not actionable",
+        )
+        dashboard_tree = window_tree(env, window_id)
+        assert dashboard_tree.get("dashboardMembers") == [
+            f"{session_id}:left", f"{session_id}:right",
+        ], "Dashboard header button did not open the pane-exact MRU grid"
+        activate(exit_dashboard)
+        wait_for(
+            lambda: not window_tree(env, window_id).get("dashboardMembers"),
+            "Exit Dashboard did not close the dashboard",
+        )
+
+        # Keyboard navigation changes the already-visible highlight and Enter selects immediately.
+        activate(wait_for(
+            lambda: actionable(app, "Dashboard (Ctrl+Shift+M)"),
+            "Dashboard header button did not return after close",
+        ))
+        press_right(process.pid, window_title="modal-session")
+        wait_for(
+            lambda: window_tree(env, window_id).get("dashboardHighlighted") == f"{session_id}:right",
+            "Right Arrow did not move the dashboard highlight to the split pane",
+        )
+        press_return(process.pid, window_title="modal-session")
+        wait_for(
+            lambda: not window_tree(env, window_id).get("dashboardMembers"),
+            "Enter did not close the dashboard immediately",
+        )
+        assert window_tree(env, window_id)["workspaces"][0]["sessions"][0].get("splitFocused"), (
+            "keyboard dashboard entry did not focus the exact split pane"
+        )
+
+        # A real single pointer click flashes the split cell, then enters it after the 180 ms delay.
+        control_json(
+            env, "session", "focus", "left", "--target", session_id,
+            "--window", window_id, "--json",
+        )
+        activate(wait_for(
+            lambda: actionable(app, "Dashboard (Ctrl+Shift+M)"),
+            "Dashboard header button did not reopen for pointer coverage",
+        ))
+        wait_for(
+            lambda: named(app, "modal-session · Right", role="label"),
+            "dashboard split cell caption is missing",
+        )
+        mouse_click(
+            lambda: named(app, "modal-session · Right", role="label"),
+            process.pid,
+            window_title="modal-session",
+            button="left",
+        )
+        wait_for(
+            lambda: not window_tree(env, window_id).get("dashboardMembers"),
+            "single-click dashboard entry did not close after its highlight flash",
+        )
+        assert window_tree(env, window_id)["workspaces"][0]["sessions"][0].get("splitFocused"), (
+            "single-click dashboard entry did not focus the exact split pane"
+        )
+
+        # The zoom chrome carries the normal composite title. Opening either modal closes the other.
+        control_json(
+            env, "surface", "zoom", "show", "--target", "active",
+            "--window", window_id, "--json",
+        )
+        wait_for(
+            lambda: named(app, "modal-session — release", role="label"),
+            "terminal zoom did not expose its session/window title",
+        )
+        wait_for(
+            lambda: actionable(app, "Exit Terminal Zoom"),
+            "terminal zoom close button is not actionable",
+        )
+        control_json(env, "dashboard", "--mru", "--window", window_id, "--json")
+        wait_for(
+            lambda: window_tree(env, window_id).get("dashboardMembers")
+            and not window_tree(env, window_id).get("zoomedSurface"),
+            "opening Dashboard did not close Terminal Zoom",
+        )
+        control_json(
+            env, "surface", "zoom", "show", "--target", "active",
+            "--window", window_id, "--json",
+        )
+        wait_for(
+            lambda: window_tree(env, window_id).get("zoomedSurface")
+            and not window_tree(env, window_id).get("dashboardMembers"),
+            "opening Terminal Zoom did not close Dashboard",
+        )
+        wait_for(
+            lambda: named(app, "Exit Terminal Zoom", role="button"),
+            "Terminal Zoom exit button disappeared",
+        )
+        activate(named(app, "Exit Terminal Zoom", role="button"))
+        wait_for(
+            lambda: not window_tree(env, window_id).get("zoomedSurface"),
+            "Exit Terminal Zoom did not restore the normal window",
+        )
+        print("OK: dashboard single-click, modal titles, exact panes, and zoom exclusion")
     except AssertionError:
         describe_tree(app)
         raise
@@ -978,6 +1142,31 @@ def verify_hidden_toolbar(env, state):
     process, app = launch(env)
     try:
         assert not named(app, "Main Menu"), "hidden toolbar still exposes the header menu"
+        window_id = next(item["id"] for item in window_list(env) if item["open"])
+        control_json(env, "dashboard", "--mru", "--window", window_id, "--json")
+        wait_for(
+            lambda: window_tree(env, window_id).get("dashboardMembers"),
+            "hidden-toolbar dashboard did not open over control",
+        )
+        assert not named(app, "Exit Dashboard", role="button"), (
+            "hidden toolbar exposed the dashboard modal header"
+        )
+        control_json(env, "dashboard", "--close", "--window", window_id, "--json")
+        control_json(
+            env, "surface", "zoom", "show", "--target", "active",
+            "--window", window_id, "--json",
+        )
+        wait_for(
+            lambda: window_tree(env, window_id).get("zoomedSurface"),
+            "hidden-toolbar terminal zoom did not open",
+        )
+        assert not named(app, "Exit Terminal Zoom", role="button"), (
+            "hidden toolbar exposed the terminal-zoom modal header"
+        )
+        control_json(
+            env, "surface", "zoom", "hide", "--target", "active",
+            "--window", window_id, "--json",
+        )
         assert not named(app, "Preferences", role="dialog"), "Preferences was open before hidden-toolbar shortcut"
         focus_window(process.pid)
         press_ctrl_comma(process.pid)
@@ -985,7 +1174,7 @@ def verify_hidden_toolbar(env, state):
             lambda: named(app, "Preferences", role="dialog"),
             "Ctrl+, did not open Preferences with toolbar hidden",
         )
-        print("OK: Preferences remains keyboard-accessible with the toolbar hidden")
+        print("OK: hidden modal chrome stays hidden and Preferences remains keyboard-accessible")
     finally:
         stop(process)
 
@@ -1116,7 +1305,7 @@ def main():
     scenario = os.environ.get("AGTERM_ATSPI_SCENARIO")
     if scenario is None:
         for child_scenario in (
-            "normal", "context-menu", "window-ownership", "preferences-pages",
+            "normal", "dashboard-modal", "context-menu", "window-ownership", "preferences-pages",
             "notification-reveal", "notification-focus", "session-pickers",
             "custom-command-failures", "auto-follow", "hidden-toolbar",
         ):
@@ -1150,6 +1339,8 @@ def main():
         Atspi.init()
         if scenario == "normal":
             verify_normal_toolbar(env, state, home)
+        elif scenario == "dashboard-modal":
+            verify_dashboard_modal(env)
         elif scenario == "context-menu":
             verify_context_menu(env)
         elif scenario == "window-ownership":
