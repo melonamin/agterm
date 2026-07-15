@@ -39,11 +39,15 @@ struct IntegrationCommandTests {
         #expect(result.status == 0)
         let object = try #require(JSONSerialization.jsonObject(with: Data(result.output.utf8)) as? [String: Any])
         let items = try #require(object["items"] as? [[String: Any]])
-        #expect(items.count == 4)
+        #expect(items.count == 5)
         #expect(items.compactMap { $0["kind"] as? String } == [
-            "cli", "claude-hooks", "codex-hooks", "agent-skill",
+            "cli", "claude-hooks", "codex-hooks", "pi-hooks", "agent-skill",
         ])
         #expect(!result.output.contains("socket"))
+
+        let text = try fixture.run(["integration", "status"])
+        #expect(text.status == 0)
+        #expect(text.output.contains("Pi Extension: Unavailable"))
     }
 
     @Test("dry-run JSON previews without mutating HOME")
@@ -95,6 +99,21 @@ struct IntegrationCommandTests {
         #expect(FileManager.default.fileExists(atPath: fixture.home.appendingPathComponent(
             ".claude/skills/agterm/SKILL.md").path))
         #expect(try String(contentsOf: protected, encoding: .utf8) == "user authored")
+    }
+
+    @Test("hooks CLI installs Pi into isolated HOME")
+    func piHooksProcess() throws {
+        let fixture = try CLIFixture()
+        let piAgent = fixture.home.appendingPathComponent(".pi/agent", isDirectory: true)
+        try FileManager.default.createDirectory(at: piAgent, withIntermediateDirectories: true)
+
+        let result = try fixture.run(["integration", "install", "hooks", "--json"])
+
+        #expect(result.status == 0)
+        let extensionURL = piAgent.appendingPathComponent("extensions/agterm-status.ts")
+        let extensionContents = try String(contentsOf: extensionURL, encoding: .utf8)
+        #expect(extensionContents.contains("// agterm-pi-status-extension"))
+        #expect(!FileManager.default.fileExists(atPath: extensionURL.path + ".bak"))
     }
 }
 

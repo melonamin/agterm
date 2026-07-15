@@ -111,6 +111,55 @@ extension IntegrationService {
                                   shell: shellRCStatus())
     }
 
+    func piHooksStatus() -> IntegrationItemStatus {
+        let home = environment.homeDirectory.path
+        let base = environment.homeDirectory.appendingPathComponent(".pi/agent", isDirectory: true)
+        let path = URL(fileURLWithPath: AgentHooksInstall.piExtensionPath(home: home))
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: base.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            return IntegrationItemStatus(
+                kind: .piHooks, state: .unavailable, path: path.path,
+                detail: "No ~/.pi/agent directory was detected."
+            )
+        }
+        guard let package = environment.resource(named: "agent-status") else {
+            return IntegrationItemStatus(kind: .piHooks, state: .unavailable, path: path.path,
+                                         detail: "The bundled Pi extension is unavailable.")
+        }
+        let source = package.appendingPathComponent(AgentHooksInstall.piExtensionRelativePath)
+        guard let bundled = try? String(contentsOf: source, encoding: .utf8),
+              bundled.contains(AgentHooksInstall.piExtensionMarker) else {
+            return IntegrationItemStatus(kind: .piHooks, state: .unavailable, path: path.path,
+                                         detail: "The bundled Pi extension is invalid.")
+        }
+        let exists = IntegrationFilesystem.fingerprint(path).value != "missing"
+        guard exists else {
+            return IntegrationItemStatus(kind: .piHooks, state: .notInstalled, path: path.path,
+                                         detail: "Pi's agterm extension is not installed.")
+        }
+        let existing: String
+        do {
+            existing = try IntegrationFilesystem.read(path) ?? ""
+        } catch {
+            return IntegrationItemStatus(kind: .piHooks, state: .conflict, path: path.path,
+                                         detail: "The Pi extension could not be read.")
+        }
+        guard AgentHooksInstall.mayOverwritePiExtension(
+            fileExists: true, existingContents: existing
+        ) else {
+            return IntegrationItemStatus(kind: .piHooks, state: .conflict, path: path.path,
+                                         detail: "A user-owned Pi extension already uses this path.")
+        }
+        let state: IntegrationState = bundled == existing ? .installed : .updateAvailable
+        return IntegrationItemStatus(
+            kind: .piHooks, state: state, path: path.path,
+            detail: state == .installed
+                ? "Pi's agterm extension is installed and current."
+                : "Pi's managed agterm extension can be updated."
+        )
+    }
+
     func skillStatus() -> IntegrationItemStatus {
         let fm = FileManager.default
         guard let source = environment.resource(named: "agent-skill") else {

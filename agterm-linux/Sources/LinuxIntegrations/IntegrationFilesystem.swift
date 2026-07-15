@@ -18,6 +18,11 @@ enum IntegrationFilesystem {
             if let expectedBackup {
                 try check(backupURL(forTarget: target), expected: expectedBackup)
             }
+        case .copyFile(let source, let path, let target, let expectedSource, let expectedPath,
+                       let expectedTarget):
+            try check(URL(fileURLWithPath: source), expected: expectedSource)
+            try check(URL(fileURLWithPath: path), expected: expectedPath)
+            try check(URL(fileURLWithPath: target), expected: expectedTarget)
         case .symlink(let path, let target, let expectedPath, let expectedTarget):
             try check(URL(fileURLWithPath: path), expected: expectedPath)
             try check(URL(fileURLWithPath: target), expected: expectedTarget)
@@ -239,6 +244,55 @@ enum IntegrationFilesystem {
                                             posixMode: AgentHooksInstall.posixMode(ofFile: url.path))
             return IntegrationOperationResult(action: "Write", path: path, success: true,
                                               message: backup && existing != nil ? "updated with backup" : "updated")
+
+        case .copyFile(let sourcePath, let path, let targetPath, let expectedSource,
+                       let expectedPath, let expectedTarget):
+            let source = URL(fileURLWithPath: sourcePath)
+            let displayURL = URL(fileURLWithPath: path)
+            let target = URL(fileURLWithPath: targetPath)
+            try check(source, expected: expectedSource)
+            try check(displayURL, expected: expectedPath)
+            try check(target, expected: expectedTarget)
+            guard itemType(source) == .typeRegular else {
+                throw IntegrationServiceError.invalidResource(
+                    "The bundled Pi extension is not a regular file: \(source.path)"
+                )
+            }
+            let fm = FileManager.default
+            let parent = target.deletingLastPathComponent()
+            try fm.createDirectory(at: parent, withIntermediateDirectories: true)
+            let token = UUID().uuidString
+            let staged = parent.appendingPathComponent(".\(target.lastPathComponent).agterm-new-\(token)")
+            let previous = parent.appendingPathComponent(".\(target.lastPathComponent).agterm-old-\(token)")
+            var preservePrevious = false
+            defer {
+                if itemExists(staged) { try? fm.removeItem(at: staged) }
+                if !preservePrevious, itemExists(previous) { try? fm.removeItem(at: previous) }
+            }
+            try fm.copyItem(at: source, to: staged)
+            let hadPrevious = itemExists(target)
+            if hadPrevious { try moveItem(target, previous) }
+            do {
+                try moveItem(staged, target)
+            } catch let installError {
+                if hadPrevious {
+                    do {
+                        try moveItem(previous, target)
+                    } catch let rollbackError {
+                        preservePrevious = true
+                        throw IntegrationServiceError.rollbackFailed(
+                            destination: path,
+                            backup: previous.path,
+                            detail: "install failed: \(installError.localizedDescription); "
+                                + "rollback failed: \(rollbackError.localizedDescription)"
+                        )
+                    }
+                }
+                throw installError
+            }
+            if hadPrevious { try? fm.removeItem(at: previous) }
+            return IntegrationOperationResult(action: "Copy", path: path, success: true,
+                                              message: "installed bundled Pi extension")
 
         case .symlink(let path, let target, let expectedPath, let expectedTarget):
             let url = URL(fileURLWithPath: path)

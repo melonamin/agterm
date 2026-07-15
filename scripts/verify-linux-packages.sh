@@ -32,6 +32,16 @@ done
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
+verify_pi_extension() {
+  local extension="$1"
+  test -f "$extension"
+  grep -Fq '// agterm-pi-status-extension' "$extension"
+  grep -Fq 'pi.on("agent_start"' "$extension"
+  grep -Fq 'report(["active", "--blink"])' "$extension"
+  grep -Fq 'pi.on("agent_settled"' "$extension"
+  grep -Fq 'report(["completed", "--auto-reset"])' "$extension"
+}
+
 verify_payload() {
   local payload="$1"
   test -x "$payload/bin/agterm-linux"
@@ -42,6 +52,7 @@ verify_payload() {
   "$ROOT/scripts/verify-linux-resources.sh" "$payload/share"
   test -x "$payload/share/agterm/agent-status/agterm-agent-status.sh"
   test -x "$payload/share/agterm/agent-status/agterm-codex-status.sh"
+  verify_pi_extension "$payload/share/agterm/agent-status/pi/agterm-status.ts"
   test -f "$payload/share/agterm/agent-skill/SKILL.md"
   [[ "$(<"$payload/share/agterm/VERSION")" == "$VERSION" ]]
   test -f "$payload/share/applications/io.github.melonamin.agterm.desktop"
@@ -99,6 +110,7 @@ test -x "$APPROOT/usr/bin/agtermctl"
 test -x "$APPROOT/usr/bin/agtermctl.bin"
 test -x "$APPROOT/usr/share/agterm/agent-status/agterm-agent-status.sh"
 test -x "$APPROOT/usr/share/agterm/agent-status/agterm-codex-status.sh"
+verify_pi_extension "$APPROOT/usr/share/agterm/agent-status/pi/agterm-status.ts"
 test -f "$APPROOT/usr/share/agterm/agent-skill/SKILL.md"
 [[ "$(<"$APPROOT/usr/share/agterm/VERSION")" == "$VERSION" ]]
 find "$APPROOT/usr/lib" -name 'libgtk-4.so.1' -print -quit | grep -q .

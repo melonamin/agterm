@@ -898,12 +898,39 @@ def verify_preferences_pages(env, home):
         wait_for(lambda: actionable(app, "Right-click pastes"), "Right-click switch is not actionable")
         stop(process)
         process = None
+        os.makedirs(os.path.join(home, ".pi/agent"))
         env = dict(
             env,
             AGTERM_APP_ID=env["AGTERM_APP_ID"] + ".integrations",
             AGTERM_ATSPI_OPEN_PREFERENCES="integrations",
         )
         process, app = launch(env)
+        window_title = wait_for(
+            lambda: next((item.get_name() for item in collect(app, role="frame") if item.get_name()), None),
+            "integration test window title is missing",
+        )
+        pi_row = wait_for(lambda: named(app, "Pi Extension"), "Pi integration row is missing")
+        pi_install = wait_for(
+            lambda: next((item for item in descendants(pi_row) if item.get_name() == "Install"), None),
+            "Pi extension did not become installable",
+        )
+        activate(pi_install)
+        wait_for(lambda: named(app, "Apply Integration Changes?"), "Pi hooks preflight was not shown")
+        pi_extension = os.path.join(home, ".pi/agent/extensions/agterm-status.ts")
+        assert not os.path.exists(pi_extension), "Pi preflight mutated HOME"
+        wait_for(lambda: actionable(app, "Apply"), "Pi hooks preflight has no Apply action")
+        press_return(process.pid, window_title=window_title)
+        wait_for(lambda: os.path.exists(pi_extension), "Pi extension was not installed")
+        with open(pi_extension, encoding="utf-8") as source:
+            assert "// agterm-pi-status-extension" in source.read(), "Pi ownership marker is missing"
+        wait_for(lambda: named(app, "Integration Updated"), "Pi hooks result was not shown")
+        wait_for(lambda: actionable(app, "OK"), "Pi hooks result has no OK action")
+        press_escape(process.pid, window_title=window_title)
+        wait_for(
+            lambda: next((item for item in descendants(pi_row) if item.get_name() == "Current"), None),
+            "Pi row did not refresh to Current",
+        )
+
         skill_row = wait_for(lambda: named(app, "Agent Skill"), "Agent Skill integration row is missing")
         install = wait_for(
             lambda: next((item for item in descendants(skill_row) if item.get_name() == "Install"), None),
@@ -929,7 +956,7 @@ def verify_preferences_pages(env, home):
             "safe skill installation did not write both isolated destinations",
         )
         assert os.path.realpath(home) not in os.path.realpath(os.path.expanduser("~/.claude")), "test HOME is not isolated"
-        print("OK: Preferences pages, preflight cancellation, and safe install")
+        print("OK: Preferences pages, Pi hooks preflight/apply, and safe skill install")
     except AssertionError:
         describe_tree(app)
         raise

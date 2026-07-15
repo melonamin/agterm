@@ -183,6 +183,8 @@ Each row shows its status and target, and every install, update, or repair prese
   A relocatable tar or development build can create an agterm-owned launcher at `~/.local/bin/agtermctl`.
   AppImage mounts and Flatpak application paths are sandbox-local, so the app does not create a host launcher into either one; install a native package, extract the AppImage, or use the tar archive for a persistent CLI.
 - **Agent Status Hooks** safely installs Claude Code, Codex, Pi, and shell lifecycle hooks, preserves existing settings and file modes, and reports malformed or user-owned conflicts for manual resolution.
+  The Preferences action and `agtermctl integration install hooks` intentionally operate offline on host configuration.
+  They do not use the control socket or add a `Command` case because requiring a running agterm instance would be less reliable and would put filesystem ownership in the wrong boundary.
 - **Agent Skill** installs or updates the bundled skill for detected Claude Code and Codex directories, while refusing to overwrite an unrelated skill named `agterm`.
 
 The macOS upstream app exposes the equivalent one-time actions in its **Help** menu.

@@ -4,6 +4,7 @@ public enum IntegrationKind: String, Codable, CaseIterable, Sendable {
     case commandLineTool = "cli"
     case claudeHooks = "claude-hooks"
     case codexHooks = "codex-hooks"
+    case piHooks = "pi-hooks"
     case agentSkill = "agent-skill"
 
     public var title: String {
@@ -11,6 +12,7 @@ public enum IntegrationKind: String, Codable, CaseIterable, Sendable {
         case .commandLineTool: return "Command Line Tool"
         case .claudeHooks: return "Claude Code Hooks"
         case .codexHooks: return "Codex Hooks"
+        case .piHooks: return "Pi Extension"
         case .agentSkill: return "Agent Skill"
         }
     }
@@ -170,6 +172,9 @@ enum IntegrationOperation: Sendable {
     case writeText(path: String, target: String, contents: String, backup: Bool,
                    expectedPath: FileFingerprint, expectedTarget: FileFingerprint,
                    expectedBackup: FileFingerprint?)
+    case copyFile(source: String, path: String, target: String,
+                  expectedSource: FileFingerprint, expectedPath: FileFingerprint,
+                  expectedTarget: FileFingerprint)
     case symlink(path: String, target: String, expectedPath: FileFingerprint,
                  expectedTarget: FileFingerprint)
 }

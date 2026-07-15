@@ -9,7 +9,9 @@ public struct IntegrationService: Sendable {
     }
 
     public func status() -> IntegrationSnapshot {
-        IntegrationSnapshot(items: [cliStatus(), claudeHooksStatus(), codexHooksStatus(), skillStatus()])
+        IntegrationSnapshot(items: [
+            cliStatus(), claudeHooksStatus(), codexHooksStatus(), piHooksStatus(), skillStatus(),
+        ])
     }
 
     public func apply(_ plan: IntegrationPlan) throws -> IntegrationApplyResult {
@@ -41,6 +43,7 @@ private extension IntegrationOperation {
         case .validate(let path, _): return ("Verify", path)
         case .replaceDirectory(_, let destination, _, _, _, _, _): return ("Copy", destination)
         case .writeText(let path, _, _, _, _, _, _): return ("Write", path)
+        case .copyFile(_, let path, _, _, _, _): return ("Copy", path)
         case .symlink(let path, _, _, _): return ("Link", path)
         }
     }

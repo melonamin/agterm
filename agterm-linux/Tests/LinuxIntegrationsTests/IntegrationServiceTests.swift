@@ -929,5 +929,9 @@ final class Fixture {
                   mode: 0o755)
         try write("# agterm shell", to: root.appendingPathComponent("shell/integration.sh"))
         try write("# agterm fish", to: root.appendingPathComponent("shell/integration.fish"))
+        try write(
+            "// agterm-pi-status-extension\nexport default () => {}\n",
+            to: root.appendingPathComponent("pi/agterm-status.ts")
+        )
     }
 }
