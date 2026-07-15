@@ -14,18 +14,21 @@ final class DirectoryChooserContext {
     }
 }
 
-let onWindowActive: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { _, _, data in
-    guard let data else { return }
+let onWindowActive: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { window, _, _ in
+    guard let window else { return }
     MainActor.assumeIsolated {
-        let ctl = Unmanaged<AppController>.fromOpaque(data).takeUnretainedValue()
-        if gtk_window_is_active(WIN(ctl.windowPointer)) != 0 { ctl.becameFrontmost() }
+        // GTK emits is-active while unmapping a closing window. windowWillClose removes its controller
+        // from gWindows before that notification, so resolve through the live registry instead of
+        // dereferencing unretained signal data that may already be deallocated.
+        guard let ctl = gWindows.values.first(where: { $0.windowPointer == window }) else { return }
+        if gtk_window_is_active(WIN(window)) != 0 { ctl.becameFrontmost() }
     }
 }
 
-let onWindowFullscreened: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { _, _, data in
-    guard let data else { return }
+let onWindowFullscreened: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { window, _, _ in
+    guard let window else { return }
     MainActor.assumeIsolated {
-        Unmanaged<AppController>.fromOpaque(data).takeUnretainedValue().fullscreenStateDidChange()
+        gWindows.values.first(where: { $0.windowPointer == window })?.fullscreenStateDidChange()
     }
 }
 

@@ -276,8 +276,8 @@ final class AppController {
         // Become frontmost on activation (routes global shortcuts + control to this window);
         // tear down + deregister when the window closes.
         let me = Unmanaged.passUnretained(self).toOpaque()
-        connect(window, "notify::is-active", unsafeBitCast(onWindowActive as @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void, to: GCallback.self), me)
-        connect(window, "notify::fullscreened", unsafeBitCast(onWindowFullscreened as @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void, to: GCallback.self), me)
+        connect(window, "notify::is-active", unsafeBitCast(onWindowActive as @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void, to: GCallback.self))
+        connect(window, "notify::fullscreened", unsafeBitCast(onWindowFullscreened as @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void, to: GCallback.self))
         connect(window, "close-request", unsafeBitCast(onWindowCloseRequest as @convention(c) (OpaquePointer?, gpointer?) -> gboolean, to: GCallback.self), me)
 
         applyWindowTranslucency()

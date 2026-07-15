@@ -241,6 +241,13 @@ def verify_normal_toolbar(env, state, home):
             "session.new did not update the accessibility tree",
         )
 
+        # Closing a native window removes its AppController before GTK finishes unmapping it. Exercise
+        # the late notify::is-active callback and prove it cannot dereference the retired controller.
+        created = control_json(env, "window", "new", "teardown-check", "--json")["result"]["id"]
+        control_json(env, "window", "close", created, "--json")
+        assert process.poll() is None, "closing a secondary window terminated the application"
+        control_json(env, "tree", "--json")
+
         assert not named(app, "Main Menu"), "toolbar still exposes the removed Main Menu button"
 
         assert not named(app, "Preferences", role="dialog"), "Preferences was open before shortcut verification"
