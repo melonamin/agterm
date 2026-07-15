@@ -239,7 +239,7 @@ final class GhosttyApp: @unchecked Sendable {
             case GHOSTTY_ACTION_CONFIG_CHANGE:
                 // ghostty reloaded its config (e.g. an external edit it picked up) — re-tint the sidebar in
                 // case the theme changed; the surface re-renders itself.
-                gController?.applySidebarThemeColor()
+                Self.wrapper(fromTarget: target)?.applyHostConfigChange()
                 return true
             case GHOSTTY_ACTION_COLOR_CHANGE:
                 // a program changed the terminal palette/fg/bg (OSC 4/10/11); ghostty repaints via RENDER.

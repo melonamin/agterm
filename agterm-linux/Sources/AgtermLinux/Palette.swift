@@ -24,52 +24,52 @@ extension AppController {
                                             hasPendingClose: store.pendingCloseSummary != nil,
                                             hasRecentClosed: !library.recentClosedItems.isEmpty)
         var items: [(String, () -> Void)] = PaletteCommand.allCases.filter { $0.isVisible(in: paletteContext) }.map { cmd in
-            let entry = Self.entry(for: cmd)
+            let entry = entry(for: cmd)
             let chord = entry.builtin.flatMap { a in resolvedBuiltinChords.first(where: { $0.value == a })?.key }
             let suffix = chord.map { "   \($0.displayString)" } ?? ""
             return (cmd.title + suffix, entry.run)
         }
         // Open Directory… (Linux exposes it via the palette; macOS has it in the File menu).
-        items.append(("Open Directory…", { gController?.openDirectory() }))
+        items.append(("Open Directory…", { self.openDirectory() }))
         // Preferences… (the Linux Settings surface; macOS uses the Settings scene / Cmd+,).
-        items.append(("Preferences…", { gController?.showSettings() }))
-        items.append(("Manage Integrations…", { gController?.showSettings(page: .integrations) }))
-        items.append(("Keyboard Shortcuts", { gController?.showKeyboardShortcuts() }))
-        items.append(("About agterm", { gController?.showAbout() }))
+        items.append(("Preferences…", { self.showSettings() }))
+        items.append(("Manage Integrations…", { self.showSettings(page: .integrations) }))
+        items.append(("Keyboard Shortcuts", { self.showKeyboardShortcuts() }))
+        items.append(("About agterm", { self.showAbout() }))
         // Linux has no global macOS-style Edit menu; expose the same terminal actions in the command palette.
-        items.append(("Copy Selection", { gController?.activeSurface()?.performBindingAction("copy_to_clipboard") }))
-        items.append(("Paste", { gController?.activeSurface()?.performBindingAction("paste_from_clipboard") }))
-        items.append(("Select All", { gController?.activeSurface()?.performBindingAction("select_all") }))
+        items.append(("Copy Selection", { self.activeSurface()?.performBindingAction("copy_to_clipboard") }))
+        items.append(("Paste", { self.activeSurface()?.performBindingAction("paste_from_clipboard") }))
+        items.append(("Select All", { self.activeSurface()?.performBindingAction("select_all") }))
         // Dynamic: switch to (open/raise) any other window — the Linux window-menu equivalent. New Window
         // is a fixed command above; rename/delete live on the window itself.
         for w in gLibrary.windows where w.id != windowID {
             let target = w.id
             items.append(("Switch to Window: \(w.name)", { openWindow(target) }))
-            items.append(("Rename Window: \(w.name)", { gController?.renameWindowDialog(target) }))
+            items.append(("Rename Window: \(w.name)", { self.renameWindowDialog(target) }))
             if gLibrary.canRemoveWindow {
-                items.append(("Delete Window: \(w.name)", { gController?.confirmDeleteWindow(target) }))
+                items.append(("Delete Window: \(w.name)", { self.confirmDeleteWindow(target) }))
             }
         }
         // Dynamic: move the active session to any OTHER workspace.
         if let sid = store.selectedSessionID, let current = store.workspace(forSession: sid) {
             for ws in store.workspaces where ws.id != current.id {
                 let target = ws.id
-                items.append(("Move Session to \(ws.name)", { gController?.moveActiveSession(to: target) }))
+                items.append(("Move Session to \(ws.name)", { self.moveActiveSession(to: target) }))
             }
         }
         // Dynamic: custom shell commands from keymap.conf (run via the palette; built-in chord dispatch
         // is a separate item).
-        for cmd in (gController?.loadKeymapCommands().commands ?? []) {
+        for cmd in loadKeymapCommands().commands {
             let command = cmd
-            items.append((cmd.name + "  (custom)", { gController?.runCustomCommand(command) }))
+            items.append((cmd.name + "  (custom)", { self.runCustomCommand(command) }))
         }
         // Dynamic: focus a single workspace, or clear an active focus.
         if store.focusedWorkspaceID != nil {
-            items.append(("Clear Workspace Focus", { gController?.focusWorkspace(nil) }))
+            items.append(("Clear Workspace Focus", { self.focusWorkspace(nil) }))
         } else if store.workspaces.count > 1 {
             for ws in store.workspaces {
                 let target = ws.id
-                items.append(("Focus Workspace \(ws.name)", { gController?.focusWorkspace(target) }))
+                items.append(("Focus Workspace \(ws.name)", { self.focusWorkspace(target) }))
             }
         }
         return items
@@ -79,51 +79,51 @@ extension AppController {
     /// rebindable built-in) PAIRED with its Linux closure. ONE exhaustive switch: adding a catalog case
     /// fails to compile until it's wired here, so the compiler keeps the palette in sync with the shared
     /// catalog — and the two halves can't drift from each other.
-    private static func entry(for cmd: PaletteCommand) -> (builtin: BuiltinAction?, run: () -> Void) {
+    private func entry(for cmd: PaletteCommand) -> (builtin: BuiltinAction?, run: () -> Void) {
         switch cmd {
-        case .newSession: return (.newSession, { gController?.newSession() })
-        case .newWorkspace: return (.newWorkspace, { gController?.newWorkspace() })
-        case .openDirectory: return (.openDirectory, { gController?.openDirectory() })
-        case .renameSession: return (.renameSession, { gController?.startRenameActive() })
-        case .renameWorkspace: return (.renameWorkspace, { if let ws = gController?.store.currentWorkspaceID { gController?.beginRename(id: ws, isWorkspace: true) } })
-        case .closeSession: return (.closeSession, { if let id = gController?.store.selectedSessionID { gController?.requestCloseSession(id) } })
-        case .reopenRecent: return (.reopenRecent, { gController?.reopenRecentClosed() })
-        case .undoClose: return (.undoClose, { gController?.undoPendingClose() })
-        case .clearStatus: return (.clearStatus, { gController?.clearActiveStatus() })
-        case .previousSession: return (.previousSession, { gController?.navigate(.previous) })
-        case .nextSession: return (.nextSession, { gController?.navigate(.next) })
-        case .previousAttentionSession: return (.previousAttentionSession, { gController?.navigate(.previousAttention) })
-        case .nextAttentionSession: return (.nextAttentionSession, { gController?.navigate(.nextAttention) })
-        case .firstSession: return (.firstSession, { gController?.navigate(.first) })
-        case .lastSession: return (.lastSession, { gController?.navigate(.last) })
-        case .showAttention: return (.showAttention, { gController?.showAttentionPalette() })
-        case .toggleSplit: return (.toggleSplit, { gController?.toggleSplit() })
-        case .toggleScratch: return (.toggleScratch, { gController?.toggleScratch() })
-        case .toggleTerminalZoom: return (.toggleTerminalZoom, { gController?.toggleTerminalZoom() })
-        case .dashboard: return (.dashboard, { gController?.toggleDashboard() })
-        case .toggleSidebar: return (.toggleSidebar, { gController?.toggleSidebar() })
-        case .toggleFlag: return (.toggleFlag, { gController?.toggleFlagActive() })
-        case .focusWorkspace: return (.focusWorkspace, { gController?.focusActiveWorkspace() })
-        case .find: return (.toggleSearch, { gController?.toggleSearch() })
-        case .quickTerminal: return (.quickTerminal, { gController?.toggleQuick() })
-        case .toggleFullscreen: return (.toggleFullscreen, { gController?.toggleWindowFullscreen() })
-        case .increaseFontSize: return (.increaseFontSize, { gController?.activeSurface()?.performBindingAction(FontBindingAction.increase) })
-        case .decreaseFontSize: return (.decreaseFontSize, { gController?.activeSurface()?.performBindingAction(FontBindingAction.decrease) })
-        case .resetFontSize: return (.resetFontSize, { gController?.activeSurface()?.performBindingAction(FontBindingAction.reset) })
-        case .selectTheme: return (.selectTheme, { gController?.showThemePicker() })
-        case .deleteWorkspace: return (.deleteWorkspace, { if let ws = gController?.store.currentWorkspaceID { gController?.store.removeWorkspace(ws); gController?.reconcile() } })
-        case .toggleFlaggedView: return (.toggleFlaggedView, { gController?.toggleFlaggedView() })
-        case .focusLeftPane: return (.focusLeftPane, { gController?.focusPane(left: true) })
-        case .focusRightPane: return (.focusRightPane, { gController?.focusPane(left: false) })
+        case .newSession: return (.newSession, { self.newSession() })
+        case .newWorkspace: return (.newWorkspace, { self.newWorkspace() })
+        case .openDirectory: return (.openDirectory, { self.openDirectory() })
+        case .renameSession: return (.renameSession, { self.startRenameActive() })
+        case .renameWorkspace: return (.renameWorkspace, { if let id = self.store.currentWorkspaceID { self.beginRename(id: id, isWorkspace: true) } })
+        case .closeSession: return (.closeSession, { if let id = self.store.selectedSessionID { self.requestCloseSession(id) } })
+        case .reopenRecent: return (.reopenRecent, { self.reopenRecentClosed() })
+        case .undoClose: return (.undoClose, { self.undoPendingClose() })
+        case .clearStatus: return (.clearStatus, { self.clearActiveStatus() })
+        case .previousSession: return (.previousSession, { self.navigate(.previous) })
+        case .nextSession: return (.nextSession, { self.navigate(.next) })
+        case .previousAttentionSession: return (.previousAttentionSession, { self.navigate(.previousAttention) })
+        case .nextAttentionSession: return (.nextAttentionSession, { self.navigate(.nextAttention) })
+        case .firstSession: return (.firstSession, { self.navigate(.first) })
+        case .lastSession: return (.lastSession, { self.navigate(.last) })
+        case .showAttention: return (.showAttention, { self.showAttentionPalette() })
+        case .toggleSplit: return (.toggleSplit, { self.toggleSplit() })
+        case .toggleScratch: return (.toggleScratch, { self.toggleScratch() })
+        case .toggleTerminalZoom: return (.toggleTerminalZoom, { self.toggleTerminalZoom() })
+        case .dashboard: return (.dashboard, { self.toggleDashboard() })
+        case .toggleSidebar: return (.toggleSidebar, { self.toggleSidebar() })
+        case .toggleFlag: return (.toggleFlag, { self.toggleFlagActive() })
+        case .focusWorkspace: return (.focusWorkspace, { self.focusActiveWorkspace() })
+        case .find: return (.toggleSearch, { self.toggleSearch() })
+        case .quickTerminal: return (.quickTerminal, { self.toggleQuick() })
+        case .toggleFullscreen: return (.toggleFullscreen, { self.toggleWindowFullscreen() })
+        case .increaseFontSize: return (.increaseFontSize, { self.activeSurface()?.performBindingAction(FontBindingAction.increase) })
+        case .decreaseFontSize: return (.decreaseFontSize, { self.activeSurface()?.performBindingAction(FontBindingAction.decrease) })
+        case .resetFontSize: return (.resetFontSize, { self.activeSurface()?.performBindingAction(FontBindingAction.reset) })
+        case .selectTheme: return (.selectTheme, { self.showThemePicker() })
+        case .deleteWorkspace: return (.deleteWorkspace, { if let id = self.store.currentWorkspaceID { self.store.removeWorkspace(id); self.reconcile() } })
+        case .toggleFlaggedView: return (.toggleFlaggedView, { self.toggleFlaggedView() })
+        case .focusLeftPane: return (.focusLeftPane, { self.focusPane(left: true) })
+        case .focusRightPane: return (.focusRightPane, { self.focusPane(left: false) })
         // palette-only (no rebindable built-in)
-        case .expandWorkspaces: return (nil, { gController?.expandWorkspaces() })
-        case .collapseWorkspaces: return (nil, { gController?.collapseOtherWorkspaces() })
-        case .editKeymap: return (nil, { gController?.editKeymap() })
-        case .reloadKeymap: return (nil, { _ = gController?.reloadKeymapDiagnostics() })
-        case .editGhosttyConfig: return (nil, { gController?.editGhosttyConfig() })
-        case .reloadConfig: return (nil, { gController?.reloadConfig() })
-        case .clearFlagged: return (nil, { gController?.clearFlagged() })
-        case .clearFocus: return (nil, { gController?.focusWorkspace(nil) })
+        case .expandWorkspaces: return (nil, { self.expandWorkspaces() })
+        case .collapseWorkspaces: return (nil, { self.collapseOtherWorkspaces() })
+        case .editKeymap: return (nil, { self.editKeymap() })
+        case .reloadKeymap: return (nil, { _ = self.reloadKeymapDiagnostics() })
+        case .editGhosttyConfig: return (nil, { self.editGhosttyConfig() })
+        case .reloadConfig: return (nil, { self.reloadConfig() })
+        case .clearFlagged: return (nil, { self.clearFlagged() })
+        case .clearFocus: return (nil, { self.focusWorkspace(nil) })
         }
     }
 
@@ -138,20 +138,21 @@ extension AppController {
     private func sessionPaletteList() -> [(String, () -> Void)] {
         store.navigableSessions.map { s in
             let ws = store.workspace(forSession: s.id)?.name ?? ""
-            return ("\(s.displayName)  —  \(ws)", { gController?.selectSession(s.id) })
+            return ("\(s.displayName)  —  \(ws)", { self.selectSession(s.id) })
         }
     }
 
     private func attentionPaletteList() -> [(String, () -> Void)] {
         store.attentionSessions.map { s in
             let ws = store.workspace(forSession: s.id)?.name ?? ""
-            return ("\(s.displayName)  —  \(ws)", { gController?.selectSession(s.id) })
+            return ("\(s.displayName)  —  \(ws)", { self.selectSession(s.id) })
         }
     }
 
     func showPalette(sessions: Bool = false, attention: Bool = false) {
         if paletteWindow != nil { closePalette(); return }   // re-invoking toggles the palette closed
         guard let win = op(gtk_window_new()) else { return }
+        attachControllerContext(to: win, windowID: windowID)
         paletteWindow = win
         suppressAutoFollow()
         connect(win, "destroy", unsafeBitCast(onPaletteDestroyed, to: GCallback.self),
@@ -236,6 +237,7 @@ extension AppController {
         paletteWindow = nil
         paletteList = nil
         paletteItems = []
+        paletteAll = []
         resumeAutoFollow()
         gtk_window_destroy(WIN(win))
     }
@@ -245,6 +247,7 @@ extension AppController {
         paletteWindow = nil
         paletteList = nil
         paletteItems = []
+        paletteAll = []
         resumeAutoFollow()
     }
 
@@ -288,20 +291,20 @@ extension AppController {
 private let onPaletteSearch: @convention(c) (OpaquePointer?, gpointer?) -> Void = { entry, _ in
     MainActor.assumeIsolated {
         let text = gtk_editable_get_text(entry).map { String(cString: $0) } ?? ""
-        gController?.filterPalette(text)
+        controllerForWidget(entry)?.filterPalette(text)
     }
 }
-private let onPaletteActivate: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _ in
-    MainActor.assumeIsolated { gController?.runPaletteSelected() }
+private let onPaletteActivate: @convention(c) (OpaquePointer?, gpointer?) -> Void = { entry, _ in
+    MainActor.assumeIsolated { controllerForWidget(entry)?.runPaletteSelected() }
 }
-private let onPaletteRow: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { _, row, _ in
-    MainActor.assumeIsolated { gController?.runPaletteRow(row) }
+private let onPaletteRow: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { list, row, _ in
+    MainActor.assumeIsolated { controllerForWidget(list)?.runPaletteRow(row) }
 }
-private let onPaletteKey: @convention(c) (OpaquePointer?, UInt32, UInt32, UInt32, gpointer?) -> gboolean = { _, keyval, _, _, _ in
+private let onPaletteKey: @convention(c) (OpaquePointer?, UInt32, UInt32, UInt32, gpointer?) -> gboolean = { keys, keyval, _, _, _ in
     switch keyval {
-    case 0xFF1B: MainActor.assumeIsolated { gController?.closePalette() }; return 1        // Esc
-    case 0xFF52: MainActor.assumeIsolated { gController?.paletteMove(down: false) }; return 1  // Up
-    case 0xFF54: MainActor.assumeIsolated { gController?.paletteMove(down: true) }; return 1   // Down
+    case 0xFF1B: MainActor.assumeIsolated { controllerForEventController(keys)?.closePalette() }; return 1
+    case 0xFF52: MainActor.assumeIsolated { controllerForEventController(keys)?.paletteMove(down: false) }; return 1
+    case 0xFF54: MainActor.assumeIsolated { controllerForEventController(keys)?.paletteMove(down: true) }; return 1
     default: return 0
     }
 }

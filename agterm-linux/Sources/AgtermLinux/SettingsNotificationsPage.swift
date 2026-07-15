@@ -35,16 +35,16 @@ extension AppController {
 
 private let onSettingsNotificationBanners: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
     MainActor.assumeIsolated {
-        gController?.setNotificationsEnabled(adw_switch_row_get_active(row) != 0)
+        controllerForWidget(row)?.setNotificationsEnabled(adw_switch_row_get_active(row) != 0)
     }
 }
 private let onSettingsNotificationBadges: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
     MainActor.assumeIsolated {
-        gController?.setNotificationBadge(adw_switch_row_get_active(row) != 0)
+        controllerForWidget(row)?.setNotificationBadge(adw_switch_row_get_active(row) != 0)
     }
 }
 private let onSettingsAttentionIndicator: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
     MainActor.assumeIsolated {
-        gController?.setAttentionButtonEnabled(adw_switch_row_get_active(row) != 0)
+        controllerForWidget(row)?.setAttentionButtonEnabled(adw_switch_row_get_active(row) != 0)
     }
 }

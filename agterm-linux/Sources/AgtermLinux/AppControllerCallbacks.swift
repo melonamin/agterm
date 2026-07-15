@@ -49,88 +49,90 @@ let onWindowCloseRequest: @convention(c) (OpaquePointer?, gpointer?) -> gboolean
     return 0
 }
 
-let onQuitResponse: @convention(c) (OpaquePointer?, UnsafePointer<CChar>?, gpointer?) -> Void = { _, response, _ in
+let onQuitResponse: @convention(c) (OpaquePointer?, UnsafePointer<CChar>?, gpointer?) -> Void = { dialog, response, _ in
     let id = response.map { String(cString: $0) } ?? "cancel"
-    MainActor.assumeIsolated { gController?.confirmQuit(id) }
+    MainActor.assumeIsolated { controllerForWidget(dialog)?.confirmQuit(id) }
 }
 
-let onCloseSessionResponse: @convention(c) (OpaquePointer?, UnsafePointer<CChar>?, gpointer?) -> Void = { _, response, data in
-    guard let data else { return }
+let onCloseSessionResponse: @convention(c) (OpaquePointer?, UnsafePointer<CChar>?, gpointer?) -> Void = { dialog, response, _ in
     let id = response.map { String(cString: $0) } ?? "cancel"
-    MainActor.assumeIsolated {
-        Unmanaged<AppController>.fromOpaque(data).takeUnretainedValue().confirmSessionClose(id)
-    }
+    MainActor.assumeIsolated { controllerForWidget(dialog)?.confirmSessionClose(id) }
 }
 
-let onNewSession: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _ in
-    MainActor.assumeIsolated { gController?.newSession() }
+let onNewSession: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
+    MainActor.assumeIsolated { controllerForWidget(button)?.newSession() }
 }
 
-let onNewWorkspace: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _ in
-    MainActor.assumeIsolated { gController?.newWorkspace() }
+let onNewWorkspace: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
+    MainActor.assumeIsolated { controllerForWidget(button)?.newWorkspace() }
 }
 
-let onSidebarToggle: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _ in
-    MainActor.assumeIsolated { gController?.toggleSidebar() }
+let onSidebarToggle: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
+    MainActor.assumeIsolated { controllerForWidget(button)?.toggleSidebar() }
 }
 
-let onSplitToggle: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _ in
-    MainActor.assumeIsolated { gController?.toggleSplit() }
+let onSplitToggle: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
+    MainActor.assumeIsolated { controllerForWidget(button)?.toggleSplit() }
 }
 
-let onScratchToggle: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _ in
-    MainActor.assumeIsolated { gController?.toggleScratch() }
+let onScratchToggle: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
+    MainActor.assumeIsolated { controllerForWidget(button)?.toggleScratch() }
 }
 
-let onQuickToggle: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _ in
-    MainActor.assumeIsolated { gController?.toggleQuick() }
+let onQuickToggle: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
+    MainActor.assumeIsolated { controllerForWidget(button)?.toggleQuick() }
 }
 
-let onNewWindow: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _ in
-    MainActor.assumeIsolated { gController?.openNewWindow() }
+let onNewWindow: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
+    MainActor.assumeIsolated { controllerForWidget(button)?.openNewWindow() }
 }
 
-let onFlaggedToggle: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _ in
-    MainActor.assumeIsolated { gController?.toggleFlaggedView() }
+let onFlaggedToggle: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
+    MainActor.assumeIsolated { controllerForWidget(button)?.toggleFlaggedView() }
 }
 
 let onAttentionButton: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
-    MainActor.assumeIsolated { gController?.showSessionPicker(attention: true, anchor: button) }
+    MainActor.assumeIsolated { controllerForWidget(button)?.showSessionPicker(attention: true, anchor: button) }
 }
 
 let onRecentSessionsButton: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
-    MainActor.assumeIsolated { gController?.showSessionPicker(attention: false, anchor: button) }
+    MainActor.assumeIsolated { controllerForWidget(button)?.showSessionPicker(attention: false, anchor: button) }
 }
 
-let onRowActivated: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { _, row, _ in
+let onRowActivated: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { list, row, _ in
     MainActor.assumeIsolated {
-        if let id = gController?.session(forRow: row) { gController?.selectSession(id) }
+        guard let controller = controllerForWidget(list), let id = controller.session(forRow: row) else { return }
+        controller.selectSession(id)
     }
 }
 
 let onSessionRowClick: @convention(c) (OpaquePointer?, Int32, Double, Double, gpointer?) -> Void = { gesture, presses, _, _, data in
     guard presses == 1, let gesture, let data else { return }
     MainActor.assumeIsolated {
-        guard let id = gController?.session(forRow: OpaquePointer(data)) else { return }
+        guard let controller = controllerForEventController(gesture),
+              let id = controller.session(forRow: OpaquePointer(data)) else { return }
         let modifiers = gtk_event_controller_get_current_event_state(gesture).rawValue
         gtk_gesture_set_state(gesture, GTK_EVENT_SEQUENCE_CLAIMED)
-        gController?.handleSessionRowClick(id, modifiers: modifiers)
+        controller.handleSessionRowClick(id, modifiers: modifiers)
     }
 }
 
 let onRowRightClick: @convention(c) (OpaquePointer?, Int32, Double, Double, gpointer?) -> Void = { _, _, x, y, data in
     guard let data else { return }
-    MainActor.assumeIsolated { gController?.showRowContextMenu(listBox: OpaquePointer(data), x: x, y: y) }
+    MainActor.assumeIsolated {
+        controllerForWidget(OpaquePointer(data))?.showRowContextMenu(listBox: OpaquePointer(data), x: x, y: y)
+    }
 }
 
-let onWorkspaceDisclosure: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, data in
-    MainActor.assumeIsolated { gController?.toggleWorkspaceCollapse(data) }
+let onWorkspaceDisclosure: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, data in
+    MainActor.assumeIsolated { controllerForWidget(button)?.toggleWorkspaceCollapse(data) }
 }
 
 let onWorkspaceRowClick: @convention(c) (OpaquePointer?, Int32, Double, Double, gpointer?) -> Void = { gesture, nPress, x, y, data in
     MainActor.assumeIsolated {
+        let controller = controllerForEventController(gesture)
         guard nPress == 1 else {
-            gController?.cancelPendingWorkspaceToggle()
+            controller?.cancelPendingWorkspaceToggle()
             return
         }
         if let gesture, let row = gtk_event_controller_get_widget(gesture),
@@ -138,7 +140,7 @@ let onWorkspaceRowClick: @convention(c) (OpaquePointer?, Int32, Double, Double, 
            gtk_widget_get_ancestor(picked, gtk_button_get_type()) != nil {
             return
         }
-        gController?.scheduleWorkspaceToggle(data)
+        controller?.scheduleWorkspaceToggle(data)
     }
 }
 
@@ -152,7 +154,7 @@ let onWorkspaceToggleTimeout: @convention(c) (gpointer?) -> gboolean = { data in
 let onRowDragPrepare: @convention(c) (OpaquePointer?, Double, Double, gpointer?) -> OpaquePointer? = { source, _, _, _ in
     let uuid: String? = MainActor.assumeIsolated {
         guard let w = gtk_event_controller_get_widget(source) else { return nil }
-        return gController?.session(forRow: OpaquePointer(w))?.uuidString
+        return controllerForEventController(source)?.session(forRow: OpaquePointer(w))?.uuidString
     }
     guard let uuid else { return nil }
     var v = GValue()
@@ -167,18 +169,19 @@ let onRowDrop: @convention(c) (OpaquePointer?, UnsafePointer<GValue>?, Double, D
     MainActor.assumeIsolated {
         guard let value, let cstr = g_value_get_string(value),
               let w = gtk_event_controller_get_widget(target),
-              let targetSid = gController?.session(forRow: OpaquePointer(w)),
+              let controller = controllerForEventController(target),
+              let targetSid = controller.session(forRow: OpaquePointer(w)),
               let sourceSid = UUID(uuidString: String(cString: cstr)) else { return 0 }
-        gController?.handleSessionDrop(source: sourceSid, onto: targetSid)
+        controller.handleSessionDrop(source: sourceSid, onto: targetSid)
         return 1
     }
 }
 
 let onHeaderDragPrepare: @convention(c) (OpaquePointer?, Double, Double, gpointer?) -> OpaquePointer? = { source, _, _, _ in
-    MainActor.assumeIsolated { gController?.cancelPendingWorkspaceToggle() }
+    MainActor.assumeIsolated { controllerForEventController(source)?.cancelPendingWorkspaceToggle() }
     let payload: String? = MainActor.assumeIsolated {
         guard let w = gtk_event_controller_get_widget(source) else { return nil }
-        return gController?.workspaceForHeader(OpaquePointer(w)).map { "w:\($0.uuidString)" }
+        return controllerForEventController(source)?.workspaceForHeader(OpaquePointer(w)).map { "w:\($0.uuidString)" }
     }
     guard let payload else { return nil }
     var v = GValue()
@@ -193,12 +196,13 @@ let onHeaderDrop: @convention(c) (OpaquePointer?, UnsafePointer<GValue>?, Double
     MainActor.assumeIsolated {
         guard let value, let cstr = g_value_get_string(value),
               let w = gtk_event_controller_get_widget(target),
-              let targetWS = gController?.workspaceForHeader(OpaquePointer(w)) else { return 0 }
+              let controller = controllerForEventController(target),
+              let targetWS = controller.workspaceForHeader(OpaquePointer(w)) else { return 0 }
         let s = String(cString: cstr)
         if s.hasPrefix("w:"), let src = UUID(uuidString: String(s.dropFirst(2))) {
-            gController?.handleWorkspaceDrop(source: src, onto: targetWS)
+            controller.handleWorkspaceDrop(source: src, onto: targetWS)
         } else if let src = UUID(uuidString: s) {
-            gController?.handleSessionToWorkspace(session: src, workspace: targetWS)
+            controller.handleSessionToWorkspace(session: src, workspace: targetWS)
         }
         return 1
     }
@@ -221,27 +225,28 @@ let onSidebarDirectoryDrop: @convention(c)
             }
             node = current.pointee.next
         }
-        return gController?.handleDirectoryDrop(paths, onto: OpaquePointer(widget)) == true ? 1 : 0
+        return controllerForEventController(target)?.handleDirectoryDrop(
+            paths, onto: OpaquePointer(widget)) == true ? 1 : 0
     }
 }
 
-let onDeleteWorkspaceResponse: @convention(c) (OpaquePointer?, UnsafePointer<CChar>?, gpointer?) -> Void = { _, response, _ in
+let onDeleteWorkspaceResponse: @convention(c) (OpaquePointer?, UnsafePointer<CChar>?, gpointer?) -> Void = { dialog, response, _ in
     let id = response.map { String(cString: $0) } ?? "cancel"
-    MainActor.assumeIsolated { gController?.confirmWorkspaceDelete(id) }
+    MainActor.assumeIsolated { controllerForWidget(dialog)?.confirmWorkspaceDelete(id) }
 }
 
-let onDeleteWindowResponse: @convention(c) (OpaquePointer?, UnsafePointer<CChar>?, gpointer?) -> Void = { _, response, _ in
+let onDeleteWindowResponse: @convention(c) (OpaquePointer?, UnsafePointer<CChar>?, gpointer?) -> Void = { dialog, response, _ in
     let id = response.map { String(cString: $0) } ?? "cancel"
-    MainActor.assumeIsolated { gController?.confirmWindowDelete(id) }
+    MainActor.assumeIsolated { controllerForWidget(dialog)?.confirmWindowDelete(id) }
 }
 
-let onRenameWindowResponse: @convention(c) (OpaquePointer?, UnsafePointer<CChar>?, gpointer?) -> Void = { _, response, _ in
+let onRenameWindowResponse: @convention(c) (OpaquePointer?, UnsafePointer<CChar>?, gpointer?) -> Void = { dialog, response, _ in
     let id = response.map { String(cString: $0) } ?? "cancel"
-    MainActor.assumeIsolated { gController?.confirmWindowRename(id) }
+    MainActor.assumeIsolated { controllerForWidget(dialog)?.confirmWindowRename(id) }
 }
 
-let onClearFocusPill: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _ in
-    MainActor.assumeIsolated { gController?.focusWorkspace(nil) }
+let onClearFocusPill: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
+    MainActor.assumeIsolated { controllerForWidget(button)?.focusWorkspace(nil) }
 }
 
 let onDirectoryChosen: @convention(c) (UnsafeMutablePointer<GObject>?, OpaquePointer?, gpointer?) -> Void = { source, result, data in
@@ -260,69 +265,84 @@ let onDirectoryChosen: @convention(c) (UnsafeMutablePointer<GObject>?, OpaquePoi
     }
 }
 
-let onCtxFlag: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _ in
-    MainActor.assumeIsolated { gController?.contextFlag() }
+let onCtxFlag: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
+    MainActor.assumeIsolated { controllerForWidget(button)?.contextFlag() }
 }
 
-let onCtxFocus: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _ in
-    MainActor.assumeIsolated { gController?.contextFocusWorkspace() }
+let onCtxFocus: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
+    MainActor.assumeIsolated { controllerForWidget(button)?.contextFocusWorkspace() }
 }
 
-let onCtxMove: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, data in
-    MainActor.assumeIsolated { gController?.contextMoveToWorkspace(data) }
+let onCtxMove: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, data in
+    MainActor.assumeIsolated { controllerForWidget(button)?.contextMoveToWorkspace(data) }
 }
 
-let onCtxRename: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _ in
-    MainActor.assumeIsolated { gController?.contextRename() }
+let onCtxRename: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
+    MainActor.assumeIsolated { controllerForWidget(button)?.contextRename() }
 }
 
-let onCtxRevealDirectory: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _ in
-    MainActor.assumeIsolated { gController?.contextRevealDirectory() }
+let onCtxRevealDirectory: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
+    MainActor.assumeIsolated { controllerForWidget(button)?.contextRevealDirectory() }
 }
 
-let onCtxClearStatus: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _ in
-    MainActor.assumeIsolated { gController?.contextClearStatus() }
+let onCtxClearStatus: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
+    MainActor.assumeIsolated { controllerForWidget(button)?.contextClearStatus() }
 }
 
-let onCtxClose: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _ in
-    MainActor.assumeIsolated { gController?.contextCloseSession() }
+let onCtxClose: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
+    MainActor.assumeIsolated { controllerForWidget(button)?.contextCloseSession() }
 }
 
-let onMenuButton: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _ in
-    MainActor.assumeIsolated { gController?.showPalette() }
+let onMenuButton: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
+    MainActor.assumeIsolated { controllerForWidget(button)?.showPalette() }
 }
 
-let onNameDoubleClick: @convention(c) (OpaquePointer?, Int32, Double, Double, gpointer?) -> Void = { _, nPress, _, _, data in
+let onNameDoubleClick: @convention(c) (OpaquePointer?, Int32, Double, Double, gpointer?) -> Void = { gesture, nPress, _, _, data in
     guard nPress == 2 else { return }
-    MainActor.assumeIsolated { gController?.beginRenameFromLabel(data) }
+    MainActor.assumeIsolated { controllerForEventController(gesture)?.beginRenameFromLabel(data) }
 }
 
 let onRenameCommit: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, data in
-    MainActor.assumeIsolated { gController?.commitInlineRename(data) }
+    MainActor.assumeIsolated {
+        controllerForWidget(data.map { OpaquePointer($0) })?.commitInlineRename(data)
+    }
 }
 
-let onRenameKey: @convention(c) (OpaquePointer?, UInt32, UInt32, UInt32, gpointer?) -> gboolean = { _, keyval, _, _, _ in
+let onRenameKey: @convention(c) (OpaquePointer?, UInt32, UInt32, UInt32, gpointer?) -> gboolean = { keys, keyval, _, _, _ in
     guard keyval == 0xFF1B else { return 0 }
-    MainActor.assumeIsolated { gController?.cancelInlineRename() }
+    MainActor.assumeIsolated { controllerForEventController(keys)?.cancelInlineRename() }
     return 1
 }
 
-let onWorkspaceRightClick: @convention(c) (OpaquePointer?, Int32, Double, Double, gpointer?) -> Void = { _, _, x, y, data in
-    MainActor.assumeIsolated { gController?.showWorkspaceContextMenu(data, x: x, y: y) }
+let onWorkspaceRightClick: @convention(c) (OpaquePointer?, Int32, Double, Double, gpointer?) -> Void = { gesture, _, x, y, data in
+    MainActor.assumeIsolated {
+        controllerForEventController(gesture)?.showWorkspaceContextMenu(data, x: x, y: y)
+    }
 }
 
-let onCtxWorkspaceRename: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _ in
-    MainActor.assumeIsolated { gController?.contextWorkspaceRename() }
+let onCtxWorkspaceRename: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
+    MainActor.assumeIsolated { controllerForWidget(button)?.contextWorkspaceRename() }
 }
 
-let onCtxWorkspaceDelete: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _ in
-    MainActor.assumeIsolated { gController?.contextWorkspaceDelete() }
+let onCtxWorkspaceDelete: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
+    MainActor.assumeIsolated { controllerForWidget(button)?.contextWorkspaceDelete() }
 }
 
 let onPanedPosition: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { paned, _, _ in
-    MainActor.assumeIsolated { gController?.capturePanedRatio(paned) }
+    MainActor.assumeIsolated { controllerForWidget(paned)?.capturePanedRatio(paned) }
 }
 
 let restorePanedRatioTick: @convention(c) (gpointer?) -> gboolean = { data in
-    MainActor.assumeIsolated { gController?.tryRestorePanedRatio(data.map { OpaquePointer($0) }) ?? 0 }
+    guard let data else { return 0 }
+    return MainActor.assumeIsolated {
+        let context = Unmanaged<SplitRatioRestoreTickContext>.fromOpaque(data).takeUnretainedValue()
+        return context.controller?.tryRestorePanedRatio(
+            windowID: context.windowID, sessionID: context.sessionID,
+            paned: context.paned, generation: context.generation) ?? 0
+    }
+}
+
+let releaseSplitRatioRestoreTick: GDestroyNotify = { data in
+    guard let data else { return }
+    Unmanaged<SplitRatioRestoreTickContext>.fromOpaque(data).release()
 }

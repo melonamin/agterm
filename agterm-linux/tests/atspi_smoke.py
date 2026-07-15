@@ -89,6 +89,16 @@ def descendants(node, role=None, name=None):
     return [item for item in result if item != node]
 
 
+def editable_descendant(node):
+    for item in descendants(node):
+        try:
+            if item.get_editable_text_iface():
+                return item
+        except Exception:
+            pass
+    return None
+
+
 def describe_tree(node, depth=0):
     """Print a compact tree on failure so toolkit accessibility changes are diagnosable."""
     try:
@@ -101,15 +111,16 @@ def describe_tree(node, depth=0):
         pass
 
 
-def press_ctrl_comma(process_id):
+def press_ctrl_comma(process_id, window_title=None):
     # AT-SPI's device-event controller cannot inject keys on non-Mutter Wayland.
     # Hyprland's compositor dispatcher sends the real shortcut to this test PID;
     # X11 and other environments continue through AT-SPI below.
     if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE") and shutil.which("hyprctl"):
+        target = f"title:^({window_title})$" if window_title else f"pid:{process_id}"
         subprocess.run(
             [
                 "hyprctl", "dispatch", "sendshortcut",
-                f"CTRL,comma,pid:{process_id}",
+                f"CTRL,comma,{target}",
             ],
             check=True,
             stdout=subprocess.DEVNULL,
@@ -126,6 +137,39 @@ def press_ctrl_comma(process_id):
     )
 
 
+def press_ctrl_shift_p(process_id, window_title=None):
+    """Open the command palette in the focused isolated window."""
+    if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE") and shutil.which("hyprctl"):
+        target = f"title:^({window_title})$" if window_title else f"pid:{process_id}"
+        subprocess.run(
+            [
+                "hyprctl", "dispatch", "sendshortcut",
+                f"CTRL SHIFT,P,{target}",
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return
+    modifiers = (1 << int(Atspi.ModifierType.CONTROL)) | (1 << int(Atspi.ModifierType.SHIFT))
+    Atspi.generate_keyboard_event(modifiers, None, Atspi.KeySynthType.LOCKMODIFIERS)
+    Atspi.generate_keyboard_event(ord("p"), None, Atspi.KeySynthType.PRESSRELEASE)
+    Atspi.generate_keyboard_event(modifiers, None, Atspi.KeySynthType.UNLOCKMODIFIERS)
+
+
+def press_escape(process_id, window_title=None):
+    if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE") and shutil.which("hyprctl"):
+        target = f"title:^({window_title})$" if window_title else f"pid:{process_id}"
+        subprocess.run(
+            ["hyprctl", "dispatch", "sendshortcut", f",escape,{target}"],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return
+    Atspi.generate_keyboard_event(0xFF1B, None, Atspi.KeySynthType.PRESSRELEASE)
+
+
 def focus_window(process_id):
     """Give the isolated app real keyboard focus before testing its shortcut."""
     if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE") and shutil.which("hyprctl"):
@@ -137,8 +181,23 @@ def focus_window(process_id):
         )
 
 
-def right_click(node_provider, process_id):
-    """Open a GTK row context menu with a real secondary-button event."""
+def focus_accessible_window(window, process_id):
+    """Focus one exact window when the isolated process owns more than one."""
+    if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE") and shutil.which("hyprctl"):
+        title = window.get_name() or ""
+        subprocess.run(
+            ["hyprctl", "dispatch", "focuswindow", f"title:^({title})$"],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return
+    component = window.get_component_iface()
+    assert component and component.grab_focus(), "could not focus the requested accessible window"
+
+
+def mouse_click(node_provider, process_id, window_title=None, button="right"):
+    """Send a real pointer click to an accessible in one exact GTK window."""
     focus_window(process_id)
     deadline = time.monotonic() + 8
     bounds = None
@@ -158,8 +217,21 @@ def right_click(node_provider, process_id):
         # WINDOW coordinates remain valid. Combine those with Hyprland's own client origin.
         local = component.get_extents(Atspi.CoordType.WINDOW)
         clients = json.loads(subprocess.check_output(["hyprctl", "-j", "clients"], text=True))
-        client = next((item for item in clients if item.get("pid") == process_id), None)
+        client = next(
+            (
+                item for item in clients
+                if item.get("pid") == process_id
+                and (window_title is None or item.get("title") == window_title)
+            ),
+            None,
+        )
         assert client, "Hyprland did not expose the isolated agterm client"
+        subprocess.run(
+            ["hyprctl", "dispatch", "focuswindow", f"address:{client['address']}"],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
         x = client["at"][0] + local.x + max(1, local.width // 2)
         y = client["at"][1] + local.y + max(1, local.height // 2)
         if shutil.which("dotool"):
@@ -176,18 +248,24 @@ def right_click(node_provider, process_id):
                     stderr=subprocess.DEVNULL,
                 )
                 time.sleep(0.2)
-                pointer.stdin.write("click right\n")
+                pointer.stdin.write(f"click {button}\n")
                 pointer.stdin.flush()
                 time.sleep(0.2)
             finally:
                 pointer.stdin.close()
                 pointer.wait(timeout=3)
             return
-        assert Atspi.generate_mouse_event(x, y, "b3c"), "AT-SPI secondary click failed"
+        number = 3 if button == "right" else 1
+        assert Atspi.generate_mouse_event(x, y, f"b{number}c"), "AT-SPI click failed"
         return
     x = bounds.x + max(1, bounds.width // 2)
     y = bounds.y + max(1, bounds.height // 2)
-    assert Atspi.generate_mouse_event(x, y, "b3c"), "AT-SPI secondary click failed"
+    number = 3 if button == "right" else 1
+    assert Atspi.generate_mouse_event(x, y, f"b{number}c"), "AT-SPI click failed"
+
+
+def right_click(node_provider, process_id, window_title=None):
+    mouse_click(node_provider, process_id, window_title=window_title, button="right")
 
 
 def launch(env):
@@ -221,6 +299,28 @@ def control_json(env, *arguments):
         timeout=5,
     )
     return json.loads(output)
+
+
+def window_list(env):
+    return control_json(env, "window", "list", "--json")["result"]["windows"]
+
+
+def select_window(env, window_id):
+    control_json(env, "window", "select", window_id, "--json")
+    wait_for(
+        lambda: next(
+            (item for item in window_list(env) if item["id"] == window_id), {}
+        ).get("active"),
+        f"window {window_id} did not become active",
+    )
+
+
+def window_tree(env, window_id):
+    return control_json(env, "tree", "--window", window_id, "--json")["result"]["tree"]
+
+
+def session_count(tree):
+    return sum(len(workspace["sessions"]) for workspace in tree["workspaces"])
 
 
 def verify_normal_toolbar(env, state, home):
@@ -284,6 +384,9 @@ def verify_context_menu(env):
                 pass
         assert flag, "session context menu did not open"
         assert process.poll() is None, "session context menu terminated the app"
+        created = control_json(env, "window", "new", "context-background", "--json")["result"]["id"]
+        assert process.poll() is None, "backgrounding a window with a context menu terminated the app"
+        control_json(env, "window", "close", created, "--json")
         activate(wait_for(lambda: actionable(app, "New Session"), "New Session button is not actionable"))
         wait_for(
             lambda: len(collect(app, role="list item")) == len(rows) + 1,
@@ -291,6 +394,147 @@ def verify_context_menu(env):
         )
         control_json(env, "tree", "--json")
         print("OK: session context menu survives a sidebar rebuild")
+    except AssertionError:
+        describe_tree(app)
+        raise
+    finally:
+        stop(process)
+
+
+def verify_window_callback_ownership(env):
+    process, app = launch(env)
+    try:
+        primary_id = wait_for(
+            lambda: next((item["id"] for item in window_list(env) if item["open"]), None),
+            "primary window was not registered",
+        )
+        control_json(env, "session", "rename", "primary-session", "--window", primary_id, "--json")
+        secondary_id = control_json(env, "window", "new", "secondary", "--json")["result"]["id"]
+        control_json(env, "session", "rename", "secondary-session", "--window", secondary_id, "--json")
+
+        primary = wait_for(
+            lambda: named(app, "primary-session", role="frame"),
+            "primary window did not expose its unique session title",
+        )
+        wait_for(
+            lambda: named(app, "secondary-session", role="frame"),
+            "secondary window did not expose its unique session title",
+        )
+        select_window(env, secondary_id)
+        before_primary = session_count(window_tree(env, primary_id))
+        before_secondary = session_count(window_tree(env, secondary_id))
+        activate(wait_for(
+            lambda: actionable(primary, "New Session"),
+            "background primary window's New Session button is not actionable",
+        ))
+        wait_for(
+            lambda: session_count(window_tree(env, primary_id)) == before_primary + 1,
+            "background-window action did not mutate its owning window",
+        )
+        assert session_count(window_tree(env, secondary_id)) == before_secondary, (
+            "background-window action mutated the frontmost window"
+        )
+        control_json(env, "session", "rename", "primary-session", "--window", primary_id, "--json")
+        primary = wait_for(
+            lambda: named(app, "primary-session", role="frame"),
+            "primary frame title did not follow its new active session",
+        )
+
+        # Open an auxiliary palette from the primary window, then make the secondary window frontmost
+        # before editing its search. The callback must filter the originating palette, not look for a
+        # nonexistent palette on the newly frontmost controller.
+        select_window(env, primary_id)
+        focus_accessible_window(primary, process.pid)
+        wait_for(
+            lambda: next(
+                (item for item in window_list(env) if item["id"] == primary_id), {}
+            ).get("active"),
+            "primary window did not receive keyboard focus",
+        )
+        press_ctrl_shift_p(process.pid, window_title="primary-session")
+        palette = wait_for(
+            lambda: named(app, "Command Palette", role="frame"),
+            "primary command palette did not open",
+        )
+        select_window(env, secondary_id)
+        palette_search = wait_for(
+            lambda: editable_descendant(palette),
+            "background command palette did not expose an editable search",
+        )
+        assert palette_search.get_editable_text_iface().set_text_contents("New Session")
+        wait_for(
+            lambda: named(palette, "New Session   ctrl+shift+t") and not named(palette, "About agterm"),
+            "background command palette search routed to the frontmost window",
+        )
+        press_escape(process.pid, window_title="Command Palette")
+        wait_for(
+            lambda: not named(app, "Command Palette", role="frame"),
+            "background command palette did not close through its owner-bound key callback",
+        )
+
+        # Exercise a pending split restore while another window becomes active, then prove the original
+        # session still accepts and persists a divider resize through its explicit window address.
+        primary_session = window_tree(env, primary_id)["workspaces"][0]["sessions"][0]["id"]
+        select_window(env, primary_id)
+        control_json(
+            env, "session", "split", "on", "--target", primary_session,
+            "--window", primary_id, "--json",
+        )
+        select_window(env, secondary_id)
+        control_json(
+            env, "session", "resize", "--split-ratio", "0.31", "--target", primary_session,
+            "--window", primary_id, "--json",
+        )
+        wait_for(
+            lambda: abs(
+                window_tree(env, primary_id)["workspaces"][0]["sessions"][0].get("splitRatio", 0) - 0.31
+            ) < 0.001,
+            "background split ratio was not persisted after its restore timer",
+        )
+
+        # Keep Preferences open on the primary, move focus away, and toggle a setting through the
+        # background dialog. This covers both the GAction root context and settings widget ancestry.
+        select_window(env, primary_id)
+        primary = wait_for(
+            lambda: named(app, "primary-session", role="frame"),
+            "primary frame disappeared before Preferences coverage",
+        )
+        focus_accessible_window(primary, process.pid)
+        press_ctrl_comma(process.pid, window_title="primary-session")
+        preferences = wait_for(
+            lambda: named(app, "Preferences", role="dialog"),
+            "primary Preferences dialog did not open",
+        )
+        select_window(env, secondary_id)
+        right_click_switch = wait_for(
+            lambda: actionable(preferences, "Right-click pastes"),
+            "background Preferences switch is not actionable",
+        )
+        activate(right_click_switch)
+        assert process.poll() is None, "background Preferences activity terminated the application"
+        select_window(env, primary_id)
+        press_escape(process.pid, window_title="primary-session")
+        wait_for(
+            lambda: not named(app, "Preferences", role="dialog"),
+            "background Preferences dialog did not close through its owning window",
+        )
+
+        # Repeatedly close secondary windows with a fresh split restore and palette/window callbacks in
+        # flight. The application and the surviving primary controller must remain usable.
+        for index in range(4):
+            transient_id = control_json(
+                env, "window", "new", f"teardown-{index}", "--json"
+            )["result"]["id"]
+            transient_session = window_tree(env, transient_id)["workspaces"][0]["sessions"][0]["id"]
+            control_json(
+                env, "session", "split", "on", "--target", transient_session,
+                "--window", transient_id, "--json",
+            )
+            control_json(env, "window", "close", transient_id, "--json")
+            assert process.poll() is None, "closing a secondary window terminated the application"
+        control_json(env, "tree", "--window", primary_id, "--json")
+
+        print("OK: background callbacks and pending secondary-window teardown keep their owners")
     except AssertionError:
         describe_tree(app)
         raise
@@ -504,7 +748,8 @@ def main():
     scenario = os.environ.get("AGTERM_ATSPI_SCENARIO")
     if scenario is None:
         for child_scenario in (
-            "normal", "context-menu", "preferences-pages", "session-pickers", "auto-follow", "hidden-toolbar",
+            "normal", "context-menu", "window-ownership", "preferences-pages",
+            "session-pickers", "auto-follow", "hidden-toolbar",
         ):
             child_env = dict(os.environ, AGTERM_ATSPI_SCENARIO=child_scenario)
             result = subprocess.run([sys.executable, __file__], env=child_env)
@@ -538,6 +783,8 @@ def main():
             verify_normal_toolbar(env, state, home)
         elif scenario == "context-menu":
             verify_context_menu(env)
+        elif scenario == "window-ownership":
+            verify_window_callback_ownership(env)
         elif scenario == "preferences-pages":
             verify_preferences_pages(env, home)
         elif scenario == "auto-follow":

@@ -21,6 +21,7 @@ extension AppController {
 
         let settings = linuxSettingsStore().load()
         let dialog = OpaquePointer(adw_preferences_dialog_new())
+        attachControllerContext(to: dialog, windowID: windowID)
         settingsDialog = dialog
         "preferences".withCString { gtk_widget_set_name(W(dialog), $0) }
         adw_preferences_dialog_set_search_enabled(cast(dialog), 1)

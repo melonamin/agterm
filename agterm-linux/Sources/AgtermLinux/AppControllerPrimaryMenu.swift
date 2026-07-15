@@ -15,9 +15,9 @@ private final class AuxiliaryDialogContext {
 @MainActor
 extension AppController {
     func installPreferencesShortcut() {
-        let data = Unmanaged.passUnretained(self).toOpaque()
         let action = "preferences".withCString { g_simple_action_new($0, nil) }
-        connect(action, "activate", unsafeBitCast(onPreferencesShortcut, to: GCallback.self), data)
+        attachControllerContext(to: action, windowID: windowID)
+        connect(action, "activate", unsafeBitCast(onPreferencesShortcut, to: GCallback.self))
         g_action_map_add_action(window, action)
 
         guard let app = gApp else { return }
@@ -88,6 +88,7 @@ extension AppController {
     }
 
     private func prepareAuxiliaryDialog(_ dialog: OpaquePointer?) -> UnsafeMutableRawPointer {
+        attachControllerContext(to: dialog, windowID: windowID)
         let context = AuxiliaryDialogContext(controller: self, dialog: dialog)
         let data = Unmanaged.passRetained(context).toOpaque()
         connect(
@@ -119,11 +120,8 @@ private let fixedShortcutCatalog: [(title: String, shortcut: String)] = [
     ("Reset font size", "ctrl+0"),
 ]
 
-private let onPreferencesShortcut: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { _, _, data in
-    guard let data else { return }
-    MainActor.assumeIsolated {
-        Unmanaged<AppController>.fromOpaque(data).takeUnretainedValue().showSettings()
-    }
+private let onPreferencesShortcut: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { action, _, _ in
+    MainActor.assumeIsolated { controllerForObject(action)?.showSettings() }
 }
 private let onShortcutPreferences: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, data in
     guard let data else { return }

@@ -90,31 +90,32 @@ extension AppController {
     }
 }
 
-private let onChooseConfigDirectory: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _ in
-    MainActor.assumeIsolated { gController?.chooseConfigDirectory() }
+private let onChooseConfigDirectory: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
+    MainActor.assumeIsolated { controllerForWidget(button)?.chooseConfigDirectory() }
 }
-private let onOpenKeymapConfig: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _ in
+private let onOpenKeymapConfig: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
     MainActor.assumeIsolated {
-        guard let controller = gController else { return }
+        guard let controller = controllerForWidget(button) else { return }
         controller.dismissSettings()
         controller.editKeymap()
     }
 }
-private let onOpenKeymapDirectory: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _ in
-    MainActor.assumeIsolated { gController?.openConfigDirectory() }
+private let onOpenKeymapDirectory: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
+    MainActor.assumeIsolated { controllerForWidget(button)?.openConfigDirectory() }
 }
-private let onUseDefaultConfigDirectory: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _ in
+private let onUseDefaultConfigDirectory: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
     MainActor.assumeIsolated {
-        gController?.setConfigDirectory(nil)
-        gController?.rebuildSettings(page: .keyMapping)
+        controllerForWidget(button)?.setConfigDirectory(nil)
+        controllerForWidget(button)?.rebuildSettings(page: .keyMapping)
     }
 }
-private let onReloadKeymapSettings: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _ in
+private let onReloadKeymapSettings: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
     MainActor.assumeIsolated {
+        let controller = controllerForWidget(button)
         let count = gWindows.values.map { $0.reloadKeymapDiagnostics() }.max() ?? 0
-        gController?.showToast(
+        controller?.showToast(
             count == 0 ? "keymap.conf reloaded" : "keymap.conf: \(count) diagnostic(s)")
-        gController?.rebuildSettings(page: .keyMapping)
+        controller?.rebuildSettings(page: .keyMapping)
     }
 }
 private let onConfigDirectoryChosen: @convention(c) (UnsafeMutablePointer<GObject>?, OpaquePointer?, gpointer?) -> Void = { dialog, result, data in

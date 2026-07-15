@@ -13,6 +13,7 @@ extension AppController {
         if themeWindow != nil { return }
         themeCommitted = currentTheme
         guard let win = op(gtk_window_new()) else { return }
+        attachControllerContext(to: win, windowID: windowID)
         themeWindow = win
         noteUserActivity()
         suppressAutoFollow()
@@ -148,24 +149,25 @@ private let onThemeDestroyed: @convention(c) (OpaquePointer?, gpointer?) -> Void
 private let onThemeSearch: @convention(c) (OpaquePointer?, gpointer?) -> Void = { entry, _ in
     MainActor.assumeIsolated {
         let text = gtk_editable_get_text(entry).map { String(cString: $0) } ?? ""
-        gController?.filterThemes(text)
+        controllerForWidget(entry)?.filterThemes(text)
     }
 }
-private let onThemeSelected: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { _, row, _ in
-    MainActor.assumeIsolated { gController?.themePreviewSelected(row) }
+private let onThemeSelected: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { list, row, _ in
+    MainActor.assumeIsolated { controllerForWidget(list)?.themePreviewSelected(row) }
 }
-private let onThemeActivated: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { _, _, _ in
-    MainActor.assumeIsolated { gController?.commitTheme() }
+private let onThemeActivated: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { list, _, _ in
+    MainActor.assumeIsolated { controllerForWidget(list)?.commitTheme() }
 }
-private let onThemeActivateEnter: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _ in
-    MainActor.assumeIsolated { gController?.commitTheme() }
+private let onThemeActivateEnter: @convention(c) (OpaquePointer?, gpointer?) -> Void = { entry, _ in
+    MainActor.assumeIsolated { controllerForWidget(entry)?.commitTheme() }
 }
-private let onThemeKey: @convention(c) (OpaquePointer?, UInt32, UInt32, UInt32, gpointer?) -> gboolean = { _, keyval, _, _, _ in
+private let onThemeKey: @convention(c) (OpaquePointer?, UInt32, UInt32, UInt32, gpointer?) -> gboolean = { keys, keyval, _, _, _ in
+    let controller = MainActor.assumeIsolated { controllerForEventController(keys) }
     switch keyval {
-    case 0xFF1B: MainActor.assumeIsolated { gController?.cancelTheme() }; return 1            // Esc
-    case 0xFF0D, 0xFF8D: MainActor.assumeIsolated { gController?.commitTheme() }; return 1    // Enter
-    case 0xFF52: MainActor.assumeIsolated { gController?.moveThemeSelection(-1) }; return 1   // Up
-    case 0xFF54: MainActor.assumeIsolated { gController?.moveThemeSelection(1) }; return 1    // Down
+    case 0xFF1B: MainActor.assumeIsolated { controller?.cancelTheme() }; return 1
+    case 0xFF0D, 0xFF8D: MainActor.assumeIsolated { controller?.commitTheme() }; return 1
+    case 0xFF52: MainActor.assumeIsolated { controller?.moveThemeSelection(-1) }; return 1
+    case 0xFF54: MainActor.assumeIsolated { controller?.moveThemeSelection(1) }; return 1
     default: return 0
     }
 }

@@ -92,10 +92,27 @@ func loadLinuxKeymap(configDirectory: URL) -> (keymap: Keymap, diagnostics: [Key
     return (Keymap(builtinOverrides: overrides, commands: commands), diagnostics)
 }
 
+@MainActor
+private final class LeaderTimeoutContext {
+    weak var controller: AppController?
+
+    init(controller: AppController) {
+        self.controller = controller
+    }
+}
+
+private let releaseLeaderTimeoutContext: GDestroyNotify = { data in
+    guard let data else { return }
+    Unmanaged<LeaderTimeoutContext>.fromOpaque(data).release()
+}
+
 /// The custom-command leader deadline fired on the main loop — abandon the half-typed sequence.
-/// Returns G_SOURCE_REMOVE (one-shot).
-private let onLeaderTimeout: @convention(c) (gpointer?) -> gboolean = { _ in
-    MainActor.assumeIsolated { gController?.leaderDeadlineFired() }
+/// The source owns a weak-controller context until it fires or is cancelled.
+private let onLeaderTimeout: @convention(c) (gpointer?) -> gboolean = { data in
+    guard let data else { return 0 }
+    MainActor.assumeIsolated {
+        Unmanaged<LeaderTimeoutContext>.fromOpaque(data).takeUnretainedValue().controller?.leaderDeadlineFired()
+    }
     return 0
 }
 
@@ -193,11 +210,18 @@ extension AppController {
     private func syncLeaderDeadline() {
         cancelLeaderDeadline()
         if customCommandEngine.isArmed {
-            leaderTimeout = g_timeout_add(1500, onLeaderTimeout, nil)
+            let context = LeaderTimeoutContext(controller: self)
+            leaderTimeout = g_timeout_add_full(
+                G_PRIORITY_DEFAULT, 1500, onLeaderTimeout,
+                Unmanaged.passRetained(context).toOpaque(), releaseLeaderTimeoutContext)
         }
     }
     private func cancelLeaderDeadline() {
         if leaderTimeout != 0 { g_source_remove(leaderTimeout); leaderTimeout = 0 }
+    }
+    func cancelLeaderDeadlineForWindowClose() {
+        cancelLeaderDeadline()
+        resetLeader()
     }
     /// The leader timer fired (no completing chord in time): abandon the half-typed sequence. The source
     /// auto-removes (the callback returns G_SOURCE_REMOVE), so just clear the id + reset the matcher.

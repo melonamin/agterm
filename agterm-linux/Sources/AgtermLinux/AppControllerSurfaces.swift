@@ -241,7 +241,9 @@ extension AppController {
         proc.terminationHandler = { p in
             let code = p.terminationStatus
             guard code != 0 else { return }
-            runOnMain { MainActor.assumeIsolated { gController?.showToast("command failed (exit \(code)): \(name)") } }
+            runOnMain { [weak self] in
+                MainActor.assumeIsolated { self?.showToast("command failed (exit \(code)): \(name)") }
+            }
         }
         try? proc.run()
     }
@@ -328,7 +330,7 @@ extension AppController {
 
     func capturePanedRatio(_ paned: OpaquePointer?) {
         guard let paned, let (sid, _) = sessionPanes.first(where: { $0.value == paned }),
-              !splitCaptureSuppressed.contains(sid) else { return }
+              !splitRatioRestore.isSuppressed(sid) else { return }
         let width = gtk_widget_get_width(W(paned))
         guard width > 0 else { return }
         let ratio = Double(gtk_paned_get_position(paned)) / Double(width)
@@ -341,34 +343,49 @@ extension AppController {
 
     private func restoreSplitRatio(_ s: Session) {
         guard let paned = sessionPanes[s.id], s.splitRatio != nil else { return }
-        splitCaptureSuppressed.insert(s.id)
-        if tryRestorePanedRatio(paned) != 0 {
-            _ = g_timeout_add(50, restorePanedRatioTick, UnsafeMutableRawPointer(paned))
-        }
+        scheduleSplitRatioRestore(sessionID: s.id, paned: paned)
     }
 
-    @discardableResult func tryRestorePanedRatio(_ paned: OpaquePointer?) -> gboolean {
-        guard let paned, let (sid, _) = sessionPanes.first(where: { $0.value == paned }) else { return 0 }
-        guard let ratio = store.session(withID: sid)?.splitRatio else { splitCaptureSuppressed.remove(sid); return 0 }
+    func scheduleSplitRatioRestore(sessionID: UUID, paned: OpaquePointer) {
+        let generation = splitRatioRestore.begin(windowID: windowID, sessionID: sessionID, paned: paned)
+        guard tryRestorePanedRatio(
+            windowID: windowID, sessionID: sessionID, paned: paned, generation: generation) != 0 else { return }
+        let context = SplitRatioRestoreTickContext(
+            controller: self, sessionID: sessionID, paned: paned, generation: generation)
+        let sourceID = g_timeout_add_full(
+            G_PRIORITY_DEFAULT, 50, restorePanedRatioTick,
+            Unmanaged.passRetained(context).toOpaque(), releaseSplitRatioRestoreTick)
+        splitRatioRestore.setSource(sourceID, sessionID: sessionID, generation: generation)
+    }
+
+    @discardableResult
+    func tryRestorePanedRatio(
+        windowID: UUID, sessionID: UUID, paned: OpaquePointer, generation: UInt64
+    ) -> gboolean {
+        guard self.windowID == windowID,
+              splitRatioRestore.matches(
+                windowID: windowID, sessionID: sessionID, paned: paned, generation: generation),
+              sessionPanes[sessionID] == paned,
+              let ratio = store.session(withID: sessionID)?.splitRatio else {
+            splitRatioRestore.complete(sessionID: sessionID, generation: generation)
+            return 0
+        }
         let width = gtk_widget_get_width(W(paned))
         guard width > 0 else { return 1 }
         gtk_paned_set_position(paned, Int32(ratio * Double(width)))
-        splitCaptureSuppressed.remove(sid)
+        splitRatioRestore.complete(sessionID: sessionID, generation: generation)
         return 0
     }
 
     func applySplitRatio(to session: Session) {
         store.save()
         guard let paned = sessionPanes[session.id], session.splitRatio != nil else { return }
-        splitCaptureSuppressed.insert(session.id)
-        if tryRestorePanedRatio(paned) != 0 {
-            _ = g_timeout_add(50, restorePanedRatioTick, UnsafeMutableRawPointer(paned))
-        }
+        scheduleSplitRatioRestore(sessionID: session.id, paned: paned)
     }
 
     private func removeSession(_ id: UUID) {
         abandonSearch(ownedBy: id)
-        splitCaptureSuppressed.remove(id)
+        splitRatioRestore.cancel(sessionID: id)
         scratchSurfaces[id]?.teardown()
         scratchSurfaces[id] = nil
         if let frame = floatingOverlayFrames[id], let overlay = deckOverlay {

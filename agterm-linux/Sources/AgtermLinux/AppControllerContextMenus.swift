@@ -21,6 +21,7 @@ extension AppController {
         dismissContextMenu()
         contextMenuSession = sid
         guard let popover = op(gtk_popover_new()) else { return }
+        attachControllerContext(to: popover, windowID: windowID)
         contextMenuPopover = popover
         gtk_widget_set_parent(W(popover), W(listBox))
         var rect = GdkRectangle(x: Int32(x), y: Int32(y), width: 1, height: 1)
@@ -122,6 +123,7 @@ extension AppController {
         dismissContextMenu()
         contextMenuWorkspace = wsID
         guard let popover = op(gtk_popover_new()) else { return }
+        attachControllerContext(to: popover, windowID: windowID)
         contextMenuPopover = popover
         gtk_widget_set_parent(W(popover), W(parent))
         var rect = GdkRectangle(x: Int32(x), y: Int32(y), width: 1, height: 1)
@@ -150,6 +152,7 @@ extension AppController {
         let heading = "Delete Workspace?"
         let body = DeletePrompt.workspaceMessage(name: ws?.name ?? "this workspace", sessions: ws?.sessions.count ?? 0)
         let dialog = OpaquePointer(heading.withCString { h in body.withCString { b in adw_alert_dialog_new(h, b) } })
+        attachControllerContext(to: dialog, windowID: windowID)
         "cancel".withCString { i in "Cancel".withCString { l in adw_alert_dialog_add_response(cast(dialog), i, l) } }
         "delete".withCString { i in "Delete".withCString { l in adw_alert_dialog_add_response(cast(dialog), i, l) } }
         "delete".withCString { adw_alert_dialog_set_response_appearance(cast(dialog), $0, ADW_RESPONSE_DESTRUCTIVE) }
@@ -170,6 +173,7 @@ extension AppController {
         pendingDeleteWindow = id
         let name = gLibrary.windows.first(where: { $0.id == id })?.name ?? "this window"
         let dialog = OpaquePointer("Delete Window?".withCString { h in DeletePrompt.windowMessage(name: name).withCString { b in adw_alert_dialog_new(h, b) } })
+        attachControllerContext(to: dialog, windowID: windowID)
         "cancel".withCString { i in "Cancel".withCString { l in adw_alert_dialog_add_response(cast(dialog), i, l) } }
         "delete".withCString { i in "Delete".withCString { l in adw_alert_dialog_add_response(cast(dialog), i, l) } }
         "delete".withCString { adw_alert_dialog_set_response_appearance(cast(dialog), $0, ADW_RESPONSE_DESTRUCTIVE) }
@@ -192,6 +196,7 @@ extension AppController {
         pendingRenameWindow = id
         let cur = gLibrary.windows.first(where: { $0.id == id })?.name ?? ""
         let dialog = OpaquePointer("Rename Window".withCString { adw_alert_dialog_new($0, nil) })
+        attachControllerContext(to: dialog, windowID: windowID)
         let entry = OpaquePointer(gtk_entry_new())
         cur.withCString { gtk_editable_set_text(entry, $0) }
         pendingRenameEntry = entry

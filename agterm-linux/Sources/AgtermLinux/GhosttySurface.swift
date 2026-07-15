@@ -157,9 +157,9 @@ final class GhosttySurface: TerminalSurface {
         gtk_gl_area_make_current(GLA(glArea))
         guard gtk_gl_area_get_error(GLA(glArea)) == nil else {
             FileHandle.standardError.write(Data("agterm: GtkGLArea failed to create a GL context\n".utf8))
-            // Deferred: realize fires DURING window build, before gController is set (becameFrontmost runs
-            // after present), so show the message on the next main-loop turn when the controller exists.
-            runOnMain { MainActor.assumeIsolated { gController?.showGLError() } }
+            // Defer until window construction completes, but retain the surface's owner rather than
+            // whichever window becomes frontmost before the main-loop hop runs.
+            runOnMain { [weak controller] in MainActor.assumeIsolated { controller?.showGLError() } }
             return
         }
         createSurface()
@@ -167,6 +167,10 @@ final class GhosttySurface: TerminalSurface {
 
     func realizeWidgetIfNeeded() {
         gtk_widget_realize(W(glArea))
+    }
+
+    func applyHostConfigChange() {
+        controller?.applySidebarThemeColor()
     }
 
     private func createSurface() {
@@ -687,9 +691,9 @@ private let surfaceKeyPressed: @convention(c) (OpaquePointer?, UInt32, UInt32, U
 }
 /// Ctrl release commits the Ctrl-Tab session-switch cycle (the only key release agterm reacts to; ghostty
 /// tracks its own key state internally).
-private let surfaceKeyReleased: @convention(c) (OpaquePointer?, UInt32, UInt32, UInt32, gpointer?) -> Void = { _, keyval, _, _, _ in
+private let surfaceKeyReleased: @convention(c) (OpaquePointer?, UInt32, UInt32, UInt32, gpointer?) -> Void = { _, keyval, _, _, data in
     if keyval == 0xFFE3 || keyval == 0xFFE4 {   // Control_L / Control_R
-        MainActor.assumeIsolated { gController?.endSessionSwitch() }
+        MainActor.assumeIsolated { wrap(data)?.controller?.endSessionSwitch() }
     }
 }
 private let surfaceFocusEnter: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, data in

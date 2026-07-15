@@ -127,33 +127,34 @@ extension AppController {
 private let onSearchChanged: @convention(c) (OpaquePointer?, gpointer?) -> Void = { entry, _ in
     MainActor.assumeIsolated {
         let text = gtk_editable_get_text(entry).map { String(cString: $0) } ?? ""
-        gController?.searchQueryChanged(text)
+        controllerForWidget(entry)?.searchQueryChanged(text)
     }
 }
-private let onSearchKey: @convention(c) (OpaquePointer?, UInt32, UInt32, UInt32, gpointer?) -> gboolean = { _, keyval, _, state, _ in
+private let onSearchKey: @convention(c) (OpaquePointer?, UInt32, UInt32, UInt32, gpointer?) -> gboolean = { keys, keyval, _, state, _ in
     let shift = (state & (1 << 0)) != 0
-    MainActor.assumeIsolated { gController?.noteSearchUserActivity() }
+    let controller = MainActor.assumeIsolated { controllerForEventController(keys) }
+    MainActor.assumeIsolated { controller?.noteSearchUserActivity() }
     switch keyval {
-    case 0xFF1B: MainActor.assumeIsolated { gController?.searchClose() }; return 1                       // Esc
-    case 0xFF0D, 0xFF8D: MainActor.assumeIsolated { gController?.searchNavigate(shift ? .previous : .next) }; return 1   // Enter / KP Enter
+    case 0xFF1B: MainActor.assumeIsolated { controller?.searchClose() }; return 1
+    case 0xFF0D, 0xFF8D: MainActor.assumeIsolated { controller?.searchNavigate(shift ? .previous : .next) }; return 1
     default: return 0
     }
 }
-private let onSearchPrev: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _ in
+private let onSearchPrev: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
     MainActor.assumeIsolated {
-        gController?.noteSearchUserActivity()
-        gController?.searchNavigate(.previous)
+        controllerForWidget(button)?.noteSearchUserActivity()
+        controllerForWidget(button)?.searchNavigate(.previous)
     }
 }
-private let onSearchNext: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _ in
+private let onSearchNext: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
     MainActor.assumeIsolated {
-        gController?.noteSearchUserActivity()
-        gController?.searchNavigate(.next)
+        controllerForWidget(button)?.noteSearchUserActivity()
+        controllerForWidget(button)?.searchNavigate(.next)
     }
 }
-private let onSearchClose: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _ in
+private let onSearchClose: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
     MainActor.assumeIsolated {
-        gController?.noteSearchUserActivity()
-        gController?.searchClose()
+        controllerForWidget(button)?.noteSearchUserActivity()
+        controllerForWidget(button)?.searchClose()
     }
 }

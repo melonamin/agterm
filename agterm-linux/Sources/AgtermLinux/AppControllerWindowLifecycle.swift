@@ -30,6 +30,7 @@ extension AppController {
         guard counts.windows <= 1, counts.sessions > 0 else { return true }
         let body = QuitPrompt.message(windows: counts.windows, sessions: counts.sessions)
         let dialog = OpaquePointer("Quit agterm?".withCString { h in body.withCString { b in adw_alert_dialog_new(h, b) } })
+        attachControllerContext(to: dialog, windowID: windowID)
         "cancel".withCString { i in "Cancel".withCString { l in adw_alert_dialog_add_response(cast(dialog), i, l) } }
         "quit".withCString { i in "Quit".withCString { l in adw_alert_dialog_add_response(cast(dialog), i, l) } }
         "quit".withCString { adw_alert_dialog_set_response_appearance(cast(dialog), $0, ADW_RESPONSE_DESTRUCTIVE) }
@@ -52,6 +53,8 @@ extension AppController {
         commitBackgroundOpacity()
         dismissSessionPicker()
         cancelPendingWorkspaceToggle()
+        cancelLeaderDeadlineForWindowClose()
+        splitRatioRestore.cancelAll()
         cancelFullscreenTransitionTimeout()
         setTerminalZoom(.off, target: nil)
         TerminalZoomRegistry.shared.unregister(windowID)

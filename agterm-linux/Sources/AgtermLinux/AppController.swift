@@ -1,17 +1,14 @@
-// Drives the GTK UI from agtermCore's AppStore (the host-free model the macOS app
-// also uses): an AdwNavigationSplitView with a workspace -> session sidebar and a
-// GtkStack deck of per-session terminal surfaces. The UI is reconciled from the
-// store after each mutation (GTK has no SwiftUI-style observation).
-//
-// GTK type note: the Swift importer maps GObject types inconsistently — some are
-// typed pointers (GtkWidget/GtkWindow/GtkBox/GtkListBoxRow/AdwNavigationPage/
-// AdwApplicationWindow), some opaque (GtkStack/GtkListBox/GtkLabel/GtkScrolledWindow/
-// AdwHeaderBar/AdwToolbarView/AdwNavigationSplitView). Typed ones use W/WIN/GLBR/cast;
-// opaque ones take the stored OpaquePointer directly.
+// Drives the GTK UI from agtermCore's AppStore: an AdwNavigationSplitView with a
+// workspace/session sidebar and a GtkStack deck reconciled from the shared model.
+// The Swift importer maps GObject types inconsistently. Typed GTK pointers use the W/WIN/GLBR/cast
+// helpers; opaque GTK objects take the stored OpaquePointer directly.
 import CGtk
 import LinuxIntegrations
 import agtermCore
 import Foundation
+/// Frontmost-controller resolver for deliberately app-global actions only: unaddressed control commands,
+/// fallback clipboard prompts, and the status-sound error-bell fallback.
+/// Per-window callbacks use ControllerWidgetContext or a source-owned weak context.
 @MainActor var gController: AppController?
 
 @MainActor
@@ -76,9 +73,8 @@ final class AppController {
     static let themePreviewDebounceInterval: TimeInterval = 0.07
     /// Coalesces sidebar/session divider drag ticks into one persist (~0.4 s after settle).
     let layoutSaveDebouncer = Debouncer()
-    /// Sessions whose split is mid-restore: the capture is suppressed for them so the initial 50/50 layout's
-    /// `notify::position` can't clobber the persisted ratio before the restore applies it (cleared once set).
-    var splitCaptureSuppressed: Set<UUID> = []
+    /// Owner-scoped, cancellable retries for persisted split divider restoration.
+    let splitRatioRestore = SplitRatioRestoreCoordinator()
 
     var surfaces: [UUID: GhosttySurface] = [:]        // primary pane per session
     var splitSurfaces: [UUID: GhosttySurface] = [:]   // second pane (when split)
@@ -162,6 +158,7 @@ final class AppController {
         autoFollowCoordinator = LinuxAutoFollowCoordinator(store: store)
 
         window = OpaquePointer(adw_application_window_new(APPW(app)))
+        attachControllerContext(to: window, windowID: windowID)
         // restore the window's last on-screen size (Wayland: size only — the compositor owns position),
         // else the default. set BEFORE present so the window maps at the saved size.
         if let geo = library.geometry(forWindow: windowID), geo.width > 0, geo.height > 0 {
@@ -416,12 +413,13 @@ final class AppController {
         let dialog = OpaquePointer("Close Session?".withCString { h in
             "This closes \(name), ending its running shell.".withCString { b in adw_alert_dialog_new(h, b) }
         })
+        attachControllerContext(to: dialog, windowID: windowID)
         "cancel".withCString { i in "Cancel".withCString { l in adw_alert_dialog_add_response(cast(dialog), i, l) } }
         "close".withCString { i in "Close".withCString { l in adw_alert_dialog_add_response(cast(dialog), i, l) } }
         "close".withCString { adw_alert_dialog_set_response_appearance(cast(dialog), $0, ADW_RESPONSE_DESTRUCTIVE) }
         "cancel".withCString { adw_alert_dialog_set_close_response(cast(dialog), $0) }
-        connect(dialog, "response", unsafeBitCast(onCloseSessionResponse as @convention(c) (OpaquePointer?, UnsafePointer<CChar>?, gpointer?) -> Void, to: GCallback.self),
-                Unmanaged.passUnretained(self).toOpaque())
+        connect(dialog, "response", unsafeBitCast(onCloseSessionResponse as @convention(c) (
+            OpaquePointer?, UnsafePointer<CChar>?, gpointer?) -> Void, to: GCallback.self))
         adw_dialog_present(cast(dialog), W(window))
     }
 
@@ -666,7 +664,7 @@ final class AppController {
         if !text.isEmpty {
             if target.isWorkspace { store.renameWorkspace(target.id, to: text) } else { store.renameSession(target.id, to: text) }
         }
-        runOnMain { MainActor.assumeIsolated { gController?.rebuildAfterRename() } }
+        runOnMain { [weak self] in MainActor.assumeIsolated { self?.rebuildAfterRename() } }
     }
     func rebuildAfterRename() { rebuildSidebar(); syncSidebarSelection(); updateTitle() }
 

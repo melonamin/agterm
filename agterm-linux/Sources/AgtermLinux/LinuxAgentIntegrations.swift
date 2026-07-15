@@ -145,6 +145,7 @@ extension AppController {
             "Apply Integration Changes?".withCString { title in
                 plan.summary.withCString { body in adw_alert_dialog_new(title, body) }
             })
+        attachControllerContext(to: dialog, windowID: windowID)
         "cancel".withCString { id in
             "Cancel".withCString { label in adw_alert_dialog_add_response(cast(dialog), id, label) }
         }
@@ -154,8 +155,7 @@ extension AppController {
         "apply".withCString { adw_alert_dialog_set_default_response(cast(dialog), $0) }
         "cancel".withCString { adw_alert_dialog_set_close_response(cast(dialog), $0) }
         connect(
-            dialog, "response", unsafeBitCast(onIntegrationPlanResponse, to: GCallback.self),
-            Unmanaged.passRetained(self).toOpaque())
+            dialog, "response", unsafeBitCast(onIntegrationPlanResponse, to: GCallback.self))
         adw_dialog_present(cast(dialog), W(window))
     }
 
@@ -203,6 +203,7 @@ extension AppController {
             title.withCString { heading in
                 text.withCString { body in adw_alert_dialog_new(heading, body) }
             })
+        attachControllerContext(to: dialog, windowID: windowID)
         "ok".withCString { id in
             "OK".withCString { label in adw_alert_dialog_add_response(cast(dialog), id, label) }
         }
@@ -211,20 +212,19 @@ extension AppController {
     }
 }
 
-private let onRefreshIntegrations: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _ in
-    MainActor.assumeIsolated { gController?.refreshIntegrationStatus() }
+private let onRefreshIntegrations: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
+    MainActor.assumeIsolated { controllerForWidget(button)?.refreshIntegrationStatus() }
 }
 private let onIntegrationAction: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
     MainActor.assumeIsolated {
-        guard let button, let kind = gController?.integrationButtons[button] else { return }
-        gController?.prepareIntegration(kind)
+        guard let button, let controller = controllerForWidget(button),
+              let kind = controller.integrationButtons[button] else { return }
+        controller.prepareIntegration(kind)
     }
 }
-private let onIntegrationPlanResponse: @convention(c) (OpaquePointer?, UnsafePointer<CChar>?, gpointer?) -> Void = { _, response, data in
-    guard let data else { return }
+private let onIntegrationPlanResponse: @convention(c) (OpaquePointer?, UnsafePointer<CChar>?, gpointer?) -> Void = { dialog, response, _ in
     let value = response.map { String(cString: $0) } ?? "cancel"
     MainActor.assumeIsolated {
-        Unmanaged<AppController>.fromOpaque(data).takeRetainedValue().respondToIntegrationPlan(
-            value)
+        controllerForObject(dialog)?.respondToIntegrationPlan(value)
     }
 }

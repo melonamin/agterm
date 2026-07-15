@@ -134,47 +134,47 @@ extension AppController {
 
 private let onSettingsFontFamily: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
     MainActor.assumeIsolated {
-        gController?.setFontFamilyAtIndex(Int(adw_combo_row_get_selected(cast(row))))
+        controllerForWidget(row)?.setFontFamilyAtIndex(Int(adw_combo_row_get_selected(cast(row))))
     }
 }
 private let onSettingsFontSize: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
-    MainActor.assumeIsolated { gController?.setFontSize(adw_spin_row_get_value(row)) }
+    MainActor.assumeIsolated { controllerForWidget(row)?.setFontSize(adw_spin_row_get_value(row)) }
 }
 private let onSettingsTheme: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
     MainActor.assumeIsolated {
-        gController?.applyThemeAtIndex(Int(adw_combo_row_get_selected(cast(row))))
+        controllerForWidget(row)?.applyThemeAtIndex(Int(adw_combo_row_get_selected(cast(row))))
     }
 }
 private let onSettingsFollowAppearance: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
     MainActor.assumeIsolated {
-        gController?.setFollowSystemAppearance(adw_switch_row_get_active(row) != 0)
+        controllerForWidget(row)?.setFollowSystemAppearance(adw_switch_row_get_active(row) != 0)
     }
 }
 private let onSettingsAlternateTheme: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
     MainActor.assumeIsolated {
-        gController?.setAlternateThemeAtIndex(Int(adw_combo_row_get_selected(cast(row))))
+        controllerForWidget(row)?.setAlternateThemeAtIndex(Int(adw_combo_row_get_selected(cast(row))))
     }
 }
 private let onSettingsToolbarMode: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
     MainActor.assumeIsolated {
-        gController?.setToolbarModeAtIndex(Int(adw_combo_row_get_selected(cast(row))))
+        controllerForWidget(row)?.setToolbarModeAtIndex(Int(adw_combo_row_get_selected(cast(row))))
     }
 }
 private let onSettingsBackgroundOpacity: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
-    MainActor.assumeIsolated { gController?.setBackgroundOpacity(adw_spin_row_get_value(row)) }
+    MainActor.assumeIsolated { controllerForWidget(row)?.setBackgroundOpacity(adw_spin_row_get_value(row)) }
 }
 private let onSettingsSidebarTint: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
-    MainActor.assumeIsolated { gController?.setSidebarTint(adw_spin_row_get_value(row)) }
+    MainActor.assumeIsolated { controllerForWidget(row)?.setSidebarTint(adw_spin_row_get_value(row)) }
 }
 private let onSettingsSidebarFont: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
-    MainActor.assumeIsolated { gController?.setSidebarFontSize(adw_spin_row_get_value(row)) }
+    MainActor.assumeIsolated { controllerForWidget(row)?.setSidebarFontSize(adw_spin_row_get_value(row)) }
 }
 private let onSettingsInactivePaneMute: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
-    MainActor.assumeIsolated { gController?.setInactivePaneMute(adw_spin_row_get_value(row)) }
+    MainActor.assumeIsolated { controllerForWidget(row)?.setInactivePaneMute(adw_spin_row_get_value(row)) }
 }
-private let onResetTerminalAppearance: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _ in
-    MainActor.assumeIsolated { gController?.resetTerminalAppearance() }
+private let onResetTerminalAppearance: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
+    MainActor.assumeIsolated { controllerForWidget(button)?.resetTerminalAppearance() }
 }
-private let onResetWindowAppearance: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _ in
-    MainActor.assumeIsolated { gController?.resetWindowAppearance() }
+private let onResetWindowAppearance: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
+    MainActor.assumeIsolated { controllerForWidget(button)?.resetWindowAppearance() }
 }
