@@ -201,10 +201,8 @@ final class GhosttyApp: @unchecked Sendable {
                 let n = action.action.desktop_notification
                 let title = n.title.map { String(cString: $0) } ?? ""
                 let body = n.body.map { String(cString: $0) } ?? ""
-                if let surface = Self.wrapper(fromTarget: target) {
-                    // route through the shared delivery policy: bump the badge + suppress when focused.
-                    routeTerminalNotification(sessionID: surface.sessionID,
-                                              pane: surface.isSplitPane ? .split : .main, title: title, body: body)
+                if let origin = Self.wrapper(fromTarget: target)?.terminalNotificationOrigin() {
+                    routeTerminalNotification(origin: origin, title: title, body: body)
                 } else {
                     NotificationManager.send(title: title, body: body)
                 }

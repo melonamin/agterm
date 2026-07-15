@@ -57,36 +57,24 @@ extension WindowLibrary {
     func setGeometry(_ size: WindowGeometry.Size, forWindow id: UUID) { LinuxWindowGeometryStore.save(size, for: id) }
 }
 
-/// Route a terminal-originated desktop notification (OSC 9/777) through the shared delivery policy:
-/// bump the firing session's unseen badge and post the banner UNLESS you are already looking at the
-/// pane (the firing session is selected in the frontmost, GTK-active window). Falls back to a plain
-/// banner when the session/window can't be resolved.
-@MainActor func routeTerminalNotification(sessionID: UUID, pane: PaneRole, title: String, body: String) {
-    guard let library = gLibrary,
-          let store = library.store(forSession: sessionID),
-          let windowID = library.windowID(forSession: sessionID) else {
+/// Route an OSC notification from the exact GTK surface that fired it. Suppression happens before the
+/// unseen bump, so a pane the user is actively viewing gets neither a banner nor a badge.
+@MainActor func routeTerminalNotification(
+    origin: LinuxTerminalNotificationOrigin, title: String, body: String
+) {
+    guard let controller = gWindows[origin.windowID],
+          controller.store.session(withID: origin.sessionID) != nil else {
         NotificationManager.send(title: title, body: body)
         return
     }
-    let isFrontmostWindow = library.frontmostWindowID == windowID
-    let windowActive = gWindows[windowID].map { gtk_window_is_active(WIN($0.windowPointer)) != 0 } ?? false
-    let firingPaneIsFocused = store.session(withID: sessionID).map { session in
-        switch pane {
-        case .main: return !session.splitFocused
-        case .split: return session.splitFocused
-        case .overlay: return session.overlayActive
-        }
-    } ?? false
-    let firingIsFocused = isFrontmostWindow && store.selectedSessionID == sessionID && firingPaneIsFocused
-    // recordTerminalNotification bumps the unseen badge regardless of suppression; refresh the owning
-    // window's sidebar so the count pill updates even when the banner is suppressed.
-    let delivery = store.recordTerminalNotification(TerminalNotificationRecord(sessionID: sessionID, windowID: windowID, pane: pane,
-                                                                               title: title, body: body,
-                                                                               firingIsFocused: firingIsFocused,
-                                                                               appActive: windowActive))
-    gWindows[windowID]?.refreshSidebar()
-    if let delivery, NotificationManager.bannersEnabled {
-        NotificationManager.send(title: delivery.title, body: delivery.body, sessionID: sessionID, target: delivery.identity)
+    let delivery = controller.store.recordTerminalNotification(TerminalNotificationRecord(
+        sessionID: origin.sessionID, windowID: origin.windowID, pane: origin.pane,
+        title: title, body: body, firingIsFocused: origin.firingIsFocused,
+        appActive: origin.appActive))
+    guard let delivery else { return }
+    controller.refreshSidebar()
+    if NotificationManager.bannersEnabled {
+        NotificationManager.send(title: delivery.title, body: delivery.body, target: delivery.identity)
     }
 }
 

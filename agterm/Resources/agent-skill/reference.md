@@ -524,10 +524,12 @@ Workspaces and the ⌃⇧P palette "Collapse Workspaces".
 
 ## notify
 
-`agtermctl notify <body> [--title T] [--target] [--window W]` — post a macOS desktop notification
+`agtermctl notify <body> [--title T] [--target] [--window W]` — post a desktop notification
 attributed to a session (default: the active session of the frontmost window). `--title` defaults to
-the session name. Clicking the banner reveals that session. This is the only app-level way to post a
-banner (the terminal's own OSC 9/777 is the other source). Control-native (no GUI/menu equivalent).
+the session name. Clicking the banner reveals that session and reopens its encoded window if needed.
+An explicit control notification bypasses focused-pane suppression; the terminal's own OSC 9/777 is
+suppressed when its exact surface is already focused in the active window. Control-native (no
+GUI/menu equivalent).
 
 For agentic attention (waiting on input, or a finished result), prefer `session status` over `notify`
 and OSC 9/777. The two overlap, either can raise an "I need you" signal, but a notification is a

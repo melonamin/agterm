@@ -323,6 +323,16 @@ def session_count(tree):
     return sum(len(workspace["sessions"]) for workspace in tree["workspaces"])
 
 
+def activate_reveal_action(env, identity):
+    subprocess.run(
+        ["gapplication", "action", env["AGTERM_APP_ID"], "reveal", f"'{identity}'"],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        env=env,
+    )
+
+
 def verify_normal_toolbar(env, state, home):
     process, app = launch(env)
     try:
@@ -542,6 +552,200 @@ def verify_window_callback_ownership(env):
         stop(process)
 
 
+def verify_notification_reveal(env):
+    process, app = launch(env)
+    try:
+        primary_id = wait_for(
+            lambda: next((item["id"] for item in window_list(env) if item["open"]), None),
+            "primary notification window was not registered",
+        )
+        primary_tree = window_tree(env, primary_id)
+        session_id = primary_tree["workspaces"][0]["sessions"][0]["id"]
+        control_json(
+            env, "session", "split", "on", "--target", session_id,
+            "--window", primary_id, "--json",
+        )
+        control_json(
+            env, "session", "focus", "right", "--target", session_id,
+            "--window", primary_id, "--json",
+        )
+        secondary_id = control_json(env, "window", "new", "reveal-survivor", "--json")["result"]["id"]
+        control_json(env, "window", "close", primary_id, "--json")
+        wait_for(
+            lambda: not next(
+                (item for item in window_list(env) if item["id"] == primary_id), {"open": True}
+            )["open"],
+            "source notification window did not close",
+        )
+
+        identity = f"{primary_id}:{session_id}:split"
+        activate_reveal_action(env, identity)
+        wait_for(
+            lambda: next(
+                (item for item in window_list(env) if item["id"] == primary_id), {}
+            ).get("open"),
+            "notification reveal did not reopen its encoded window",
+        )
+
+        def revealed_split():
+            tree = window_tree(env, primary_id)
+            sessions = [session for workspace in tree["workspaces"] for session in workspace["sessions"]]
+            target = next((session for session in sessions if session["id"] == session_id), None)
+            return target and target.get("active") and target.get("splitFocused")
+
+        wait_for(revealed_split, "notification reveal did not select the encoded split pane")
+        assert next(
+            item for item in window_list(env) if item["id"] == secondary_id
+        )["open"], "notification reveal disturbed the surviving window"
+        assert process.poll() is None, "notification reveal terminated the application"
+        print("OK: notification action reopens its encoded window and split pane")
+    except AssertionError:
+        describe_tree(app)
+        raise
+    finally:
+        stop(process)
+
+
+def verify_notification_focus_policy(env):
+    with open(os.path.join(env["AGTERM_STATE_DIR"], "settings.json"), "w", encoding="utf-8") as target:
+        json.dump({"notificationsEnabled": False}, target)
+    process, app = launch(env)
+    try:
+        focus_window(process.pid)
+        tree = control_json(env, "tree", "--json")["result"]["tree"]
+        initial = tree["workspaces"][0]["sessions"][0]
+        window_id = next(item["id"] for item in window_list(env) if item["open"])
+        time.sleep(1.0)  # let the initial login shell reach its prompt before injecting printf
+
+        def unseen(session_id):
+            current = window_tree(env, window_id)
+            sessions = [session for workspace in current["workspaces"] for session in workspace["sessions"]]
+            return next(session for session in sessions if session["id"] == session_id).get("unseen", 0)
+
+        def emit_osc(session_id, title):
+            command = f"printf '\\033]9;{title} Body\\007'\n"
+            control_json(
+                env, "session", "type", command, "--target", session_id,
+                "--window", window_id, "--json",
+            )
+
+        emit_osc(initial["id"], "Focused")
+        time.sleep(0.6)
+        assert unseen(initial["id"]) == 0, "focused pane OSC notification created an unseen badge"
+
+        foreground_id = control_json(
+            env, "session", "new", "--name", "foreground", "--window", window_id, "--json"
+        )["result"]["id"]
+        wait_for(
+            lambda: window_tree(env, window_id)["workspaces"][0]["sessions"][-1].get("active"),
+            "new foreground session did not become active",
+        )
+        wait_for(
+            lambda: named(app, "foreground", role="frame"),
+            "new foreground session did not become the visible GTK surface",
+        )
+        time.sleep(0.5)
+        emit_osc(initial["id"], "Hidden")
+        wait_for(
+            lambda: unseen(initial["id"]) == 1,
+            "hidden pane OSC notification did not create an unseen badge",
+        )
+
+        control_json(
+            env, "notify", "--title", "Explicit", "--target", foreground_id,
+            "control bypass", "--window", window_id, "--json",
+        )
+        wait_for(
+            lambda: unseen(foreground_id) == 1,
+            "explicit control notification did not bypass focused-pane suppression",
+        )
+        assert process.poll() is None, "notification focus policy terminated the application"
+        print("OK: focused OSC suppresses badge while hidden and explicit notifications deliver")
+    except AssertionError:
+        describe_tree(app)
+        raise
+    finally:
+        stop(process)
+
+
+def verify_notification_banner_round_trip(env):
+    assert shutil.which("makoctl"), "makoctl is required for the desktop-banner round trip"
+    notification_id = None
+    process, app = launch(env)
+    try:
+        focus_window(process.pid)
+        tree = control_json(env, "tree", "--json")["result"]["tree"]
+        initial = tree["workspaces"][0]["sessions"][0]
+        window_id = next(item["id"] for item in window_list(env) if item["open"])
+        time.sleep(1.0)
+
+        def unseen(session_id):
+            current = window_tree(env, window_id)
+            sessions = [session for workspace in current["workspaces"] for session in workspace["sessions"]]
+            return next(session for session in sessions if session["id"] == session_id).get("unseen", 0)
+
+        def emit_osc(session_id, body):
+            control_json(
+                env, "session", "type", f"printf '\\033]9;{body}\\007'\n",
+                "--target", session_id, "--window", window_id, "--json",
+            )
+
+        test_suffix = os.path.basename(env["AGTERM_STATE_DIR"])
+        suppressed_body = f"Focused banner must suppress {test_suffix}"
+        delivered_body = f"Hidden banner must deliver {test_suffix}"
+        emit_osc(initial["id"], suppressed_body)
+        time.sleep(0.8)
+        assert unseen(initial["id"]) == 0
+        assert not any(
+            item.get("body") == suppressed_body
+            for item in json.loads(subprocess.check_output(["makoctl", "list", "-j"], text=True))
+        ), "focused pane posted a desktop banner"
+
+        control_json(env, "session", "new", "--name", "banner-foreground", "--window", window_id, "--json")
+        wait_for(lambda: named(app, "banner-foreground", role="frame"), "foreground banner session not visible")
+        time.sleep(0.5)
+        emit_osc(initial["id"], delivered_body)
+        wait_for(lambda: unseen(initial["id"]) == 1, "hidden pane did not raise its badge")
+        notification = wait_for(
+            lambda: next((
+                item for item in json.loads(subprocess.check_output(["makoctl", "list", "-j"], text=True))
+                if item.get("body") == delivered_body
+            ), None),
+            "hidden pane did not post a desktop banner",
+        )
+        notification_id = notification["id"]
+
+        survivor = control_json(env, "window", "new", "banner-survivor", "--json")["result"]["id"]
+        control_json(env, "window", "close", window_id, "--json")
+        wait_for(
+            lambda: not next(item for item in window_list(env) if item["id"] == window_id)["open"],
+            "banner source window did not close",
+        )
+        subprocess.run(["makoctl", "invoke", "-n", str(notification_id)], check=True)
+        wait_for(
+            lambda: next(item for item in window_list(env) if item["id"] == window_id)["open"],
+            "desktop banner action did not reopen the source window",
+        )
+        wait_for(
+            lambda: next(
+                session for workspace in window_tree(env, window_id)["workspaces"]
+                for session in workspace["sessions"] if session["id"] == initial["id"]
+            ).get("active"),
+            "desktop banner action did not select its source session",
+        )
+        assert next(item for item in window_list(env) if item["id"] == survivor)["open"]
+        print("OK: real desktop banner suppresses, delivers, and reopens its source window")
+    except AssertionError:
+        describe_tree(app)
+        raise
+    finally:
+        if notification_id is not None:
+            subprocess.run(
+                ["makoctl", "dismiss", "-n", str(notification_id), "-h"], check=False
+            )
+        stop(process)
+
+
 def verify_preferences_pages(env, home):
     process, app = launch(env)
     try:
@@ -749,7 +953,8 @@ def main():
     if scenario is None:
         for child_scenario in (
             "normal", "context-menu", "window-ownership", "preferences-pages",
-            "session-pickers", "auto-follow", "hidden-toolbar",
+            "notification-reveal", "notification-focus", "session-pickers",
+            "auto-follow", "hidden-toolbar",
         ):
             child_env = dict(os.environ, AGTERM_ATSPI_SCENARIO=child_scenario)
             result = subprocess.run([sys.executable, __file__], env=child_env)
@@ -771,7 +976,7 @@ def main():
         AGTERM_STATE_DIR=state,
         AGTERM_CONTROL_SOCKET=socket,
         AGTERM_RESOURCE_ROOT=RESOURCE_ROOT,
-        AGTERM_APP_ID="io.github.melonamin.agterm.atspi",
+        AGTERM_APP_ID=f"io.github.melonamin.agterm.atspi.{scenario.replace('-', '_')}",
         PATH="/usr/bin:/bin",
     )
     if scenario in ("preferences-pages", "auto-follow"):
@@ -785,6 +990,12 @@ def main():
             verify_context_menu(env)
         elif scenario == "window-ownership":
             verify_window_callback_ownership(env)
+        elif scenario == "notification-reveal":
+            verify_notification_reveal(env)
+        elif scenario == "notification-focus":
+            verify_notification_focus_policy(env)
+        elif scenario == "notification-banner":
+            verify_notification_banner_round_trip(env)
         elif scenario == "preferences-pages":
             verify_preferences_pages(env, home)
         elif scenario == "auto-follow":

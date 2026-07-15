@@ -572,7 +572,7 @@ extension AppController: ControlActions {
         }
         let notificationTarget = id.map { TerminalNotification.identity(windowID: windowID, sessionID: $0, pane: .main) }
         if NotificationManager.bannersEnabled {
-            NotificationManager.send(title: title ?? "", body: body, sessionID: id, target: notificationTarget)
+            NotificationManager.send(title: title ?? "", body: body, target: notificationTarget)
         }
         return ok(id)
     }

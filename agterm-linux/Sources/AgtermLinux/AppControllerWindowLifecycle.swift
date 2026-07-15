@@ -13,7 +13,7 @@ extension AppController {
             let hadUnseen = session.unseenCount > 0
             store.clearUnseen(id)
             if hadUnseen {
-                NotificationManager.withdraw(sessionID: id)
+                NotificationManager.withdraw(windowID: windowID, sessionID: id)
                 rebuildSidebar()
             }
             showActive()

@@ -277,7 +277,7 @@ back from the tree's top-level `sidebarMode`) · `expand [--window W]` (expand e
 Visibility/mode act on the frontmost window; `expand`/`collapse` default to the frontmost but take a
 `--window` selector to target any open window.
 
-**notify** — `notify <body> [--title T]` — post a desktop notification attributed to a session. To signal that you need the user, prefer `session status` (`blocked`/`completed`), a persistent typed attention state rather than a one-shot banner; keep `notify` for a one-off nudge.
+**notify** — `notify <body> [--title T]` — post a desktop notification attributed to a session. Explicit control notifications deliver even when that session is focused; clicking one can reopen its encoded window. To signal that you need the user, prefer `session status` (`blocked`/`completed`), a persistent typed attention state rather than a one-shot banner; keep `notify` for a one-off nudge.
 
 **font** — `font inc|dec|reset [--pane left|right|scratch]` — change a session pane's font size (omitted/`left` = main pane, `right` = the split pane, `scratch` = the scratch terminal). Read the resulting size back from `tree` (`fontSize`/`splitFontSize`/`scratchFontSize` per pane).
 

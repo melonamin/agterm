@@ -115,4 +115,61 @@ struct LinuxPolicyTests {
             pane: .split
         ))
     }
+
+    @Test("focused OSC suppression precedes unseen mutation while explicit control delivery bypasses it")
+    @MainActor
+    func notificationSuppressionOrdering() {
+        let session = Session(initialCwd: "/tmp")
+        let store = AppStore(workspaces: [Workspace(name: "work", sessions: [session])])
+        let windowID = UUID()
+
+        let suppressed = store.recordTerminalNotification(TerminalNotificationRecord(
+            sessionID: session.id, windowID: windowID, pane: .main,
+            title: "focused", body: "ignored", firingIsFocused: true, appActive: true))
+        #expect(suppressed == nil)
+        #expect(session.unseenCount == 0)
+
+        let inactive = store.recordTerminalNotification(TerminalNotificationRecord(
+            sessionID: session.id, windowID: windowID, pane: .main,
+            title: "inactive", body: "delivered", firingIsFocused: true, appActive: false))
+        #expect(inactive != nil)
+        #expect(session.unseenCount == 1)
+
+        let explicitControl = store.recordTerminalNotification(TerminalNotificationRecord(
+            sessionID: session.id, windowID: windowID, pane: .main,
+            title: "control", body: "requested", firingIsFocused: false, appActive: true))
+        #expect(explicitControl != nil)
+        #expect(session.unseenCount == 2)
+    }
+
+    @Test("Linux surface roles map every terminal kind deliberately")
+    func surfaceNotificationRoles() {
+        #expect(LinuxSurfaceRole.main.notificationPane == .main)
+        #expect(LinuxSurfaceRole.split.notificationPane == .split)
+        #expect(LinuxSurfaceRole.overlay.notificationPane == .overlay)
+        #expect(LinuxSurfaceRole.scratch.notificationPane == .overlay)
+        #expect(LinuxSurfaceRole.quick.notificationPane == nil)
+        #expect(LinuxSurfaceRole.scratch.statusPane == .scratch)
+    }
+
+    @Test("pane identities coalesce independently and stale reveal panes fall back safely")
+    func notificationIdentityAndReveal() {
+        let windowID = UUID()
+        let sessionID = UUID()
+        let main = TerminalNotification.identity(windowID: windowID, sessionID: sessionID, pane: .main)
+        let split = TerminalNotification.identity(windowID: windowID, sessionID: sessionID, pane: .split)
+        let overlay = TerminalNotification.identity(windowID: windowID, sessionID: sessionID, pane: .overlay)
+        #expect(Set([main, split, overlay]).count == 3)
+        #expect(NotificationManager.notificationID(main) != NotificationManager.notificationID(split))
+        #expect(LinuxNotificationRevealFocus.resolve(
+            pane: .split, sessionExists: true, hasSplit: true, coverActive: false) == .split)
+        #expect(LinuxNotificationRevealFocus.resolve(
+            pane: .split, sessionExists: true, hasSplit: false, coverActive: false) == .primary)
+        #expect(LinuxNotificationRevealFocus.resolve(
+            pane: .overlay, sessionExists: true, hasSplit: false, coverActive: true) == .overlay)
+        #expect(LinuxNotificationRevealFocus.resolve(
+            pane: .overlay, sessionExists: true, hasSplit: false, coverActive: false) == .primary)
+        #expect(LinuxNotificationRevealFocus.resolve(
+            pane: .main, sessionExists: false, hasSplit: false, coverActive: false) == nil)
+    }
 }

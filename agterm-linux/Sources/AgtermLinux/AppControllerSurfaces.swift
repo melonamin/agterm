@@ -77,6 +77,7 @@ extension AppController {
                 s.scratchCommand = nil
                 let sc = GhosttySurface(sessionID: s.id, cwd: s.effectiveCwd, command: command,
                                         env: sessionEnv(for: s, pane: .scratch), controller: self,
+                                        role: .scratch,
                                         reportsPaneState: false)
                 let sid = s.id
                 sc.onExit = { [weak self] in self?.closeScratch(sid) }
@@ -106,6 +107,7 @@ extension AppController {
                 let ov = GhosttySurface(sessionID: s.id, cwd: s.overlayCwd ?? s.effectiveCwd,
                                         command: "sh -c " + Self.singleQuoted(OverlayCapture.shellLine),
                                         env: ovlEnv, controller: self, waitAfterCommand: s.overlayWait,
+                                        role: .overlay,
                                         reportsPaneState: false)
                 let sid = s.id
                 let owner = windowID
@@ -278,7 +280,7 @@ extension AppController {
         if s.isSplit, splitSurfaces[s.id] == nil {
             let split = GhosttySurface(sessionID: s.id, cwd: s.initialSplitCwd ?? s.effectiveCwd,
                                        env: sessionEnv(for: s, pane: .right), controller: self,
-                                       isSplitPane: true, fontSize: s.fontSize,
+                                       role: .split, fontSize: s.fontSize,
                                        initialInput: consumeRestoreInput(&s.splitForegroundCommand))
             let sid = s.id
             split.onExit = { [weak self] in self?.closeSplitPane(sid) }

@@ -216,26 +216,43 @@ private let onRevealAction: @convention(c) (OpaquePointer?, OpaquePointer?, gpoi
     let target = String(cString: cstr)
     MainActor.assumeIsolated {
         if let parsed = TerminalNotification.parseIdentity(target) {
-            revealSession(parsed.sessionID, pane: parsed.pane)
+            revealSession(parsed.sessionID, windowID: parsed.windowID, pane: parsed.pane)
         } else if let id = UUID(uuidString: target) {
             revealSession(id)
         }
     }
 }
 
-/// Reveal a session a notification points at: raise its (open) window, select it, and focus the firing
-/// pane. A session whose window is closed isn't found here (best-effort; the badge still tracks it).
-@MainActor func revealSession(_ id: UUID, pane: PaneRole = .main) {
-    for ctl in gWindows.values where ctl.store.session(withID: id) != nil {
-        if let session = ctl.store.session(withID: id), session.hasSplit {
-            session.splitFocused = pane == .split
-        }
-        gtk_window_present(WIN(ctl.windowPointer))
-        ctl.selectSession(id)
-        if let session = ctl.store.session(withID: id), session.hasSplit {
-            ctl.focusPane(left: !session.splitFocused)
-        }
-        return
+/// Reveal a notification target, reopening its encoded window when needed. Legacy session-only targets
+/// still search open windows. Unknown windows, sessions, and vanished split/overlay panes are safe no-ops
+/// or fall back to the primary pane.
+@MainActor func revealSession(_ id: UUID, windowID: UUID? = nil, pane: PaneRole = .main) {
+    let controller: AppController?
+    if let windowID {
+        guard gLibrary.windows.contains(where: { $0.id == windowID }) else { return }
+        openWindow(windowID)
+        controller = gWindows[windowID]
+    } else {
+        controller = gWindows.values.first { $0.store.session(withID: id) != nil }
+    }
+    guard let controller else { return }
+    let session = controller.store.session(withID: id)
+    guard let focus = LinuxNotificationRevealFocus.resolve(
+        pane: pane, sessionExists: session != nil,
+        hasSplit: session?.hasSplit ?? false,
+        coverActive: (session?.overlayActive ?? false) || (session?.scratchActive ?? false)
+    ), let session else { return }
+    let wantSplit = focus == .split
+    session.splitFocused = wantSplit
+    gtk_window_present(WIN(controller.windowPointer))
+    controller.selectSession(id)
+    if focus == .overlay,
+       let cover = session.overlayActive ? controller.overlaySurfaces[id] : controller.scratchSurfaces[id] {
+        cover.grabFocus()
+    } else if session.hasSplit {
+        controller.focusPane(left: !wantSplit)
+    } else {
+        controller.surfaces[id]?.grabFocus()
     }
 }
 

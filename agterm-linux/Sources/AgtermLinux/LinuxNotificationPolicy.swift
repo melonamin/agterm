@@ -17,15 +17,40 @@ struct TerminalNotificationRecord: Sendable, Equatable {
     let appActive: Bool
 }
 
+struct LinuxTerminalNotificationOrigin: Sendable, Equatable {
+    let windowID: UUID
+    let sessionID: UUID
+    let pane: PaneRole
+    let firingIsFocused: Bool
+    let appActive: Bool
+}
+
+enum LinuxNotificationRevealFocus: Sendable, Equatable {
+    case primary
+    case split
+    case overlay
+
+    static func resolve(
+        pane: PaneRole, sessionExists: Bool, hasSplit: Bool, coverActive: Bool
+    ) -> LinuxNotificationRevealFocus? {
+        guard sessionExists else { return nil }
+        switch pane {
+        case .split where hasSplit: return .split
+        case .overlay where coverActive: return .overlay
+        default: return .primary
+        }
+    }
+}
+
 extension AppStore {
     @discardableResult
     func recordTerminalNotification(_ record: TerminalNotificationRecord) -> NotificationDelivery? {
         guard let session = session(withID: record.sessionID) else { return nil }
-        session.unseenCount += 1
         guard TerminalNotification.shouldDeliver(
             firingIsFocused: record.firingIsFocused,
             appActive: record.appActive
         ) else { return nil }
+        session.unseenCount += 1
         return NotificationDelivery(
             title: record.title,
             body: record.body,

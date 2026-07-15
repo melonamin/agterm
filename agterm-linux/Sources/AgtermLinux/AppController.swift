@@ -317,7 +317,7 @@ final class AppController {
         if userInitiated { noteUserActivity() }
         store.selectSession(id)
         let focusFilterChanged = focusedWorkspace != store.focusedWorkspaceID
-        NotificationManager.withdraw(sessionID: id)   // clear any delivered banner now the session is seen
+        NotificationManager.withdraw(windowID: windowID, sessionID: id)
         showActive()
         syncSidebarSelection()
         updateTitle()
@@ -482,7 +482,7 @@ final class AppController {
                                    env: SurfaceEnvironment.quickTerminal(windowID: windowID,
                                                                          socketPath: gControlServer.boundSocketPath ?? ControlServer.defaultSocketPath(),
                                                                          programVersion: LinuxAppMetadata.version),
-                                   controller: self, reportsPaneState: false)
+                                   controller: self, role: .quick, reportsPaneState: false)
             q.onExit = { [weak self] in self?.closeQuick() }
             // A floating card panel over the FULL window content: rounded + shadowed (Adwaita "card"),
             // inset from the window edges (sidebar + deck visible around it), with a larger top inset to

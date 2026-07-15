@@ -19,9 +19,10 @@ final class GhosttySurface: TerminalSurface {
     /// The owning session's id (so the host can route close/title back to the model).
     let sessionID: UUID
     fileprivate weak var controller: AppController?
-    /// True for the split (right) pane, so reported pwd/title and focus changes route to the split
-    /// fields (`splitCwd`/`splitTitle`/`splitFocused`) instead of clobbering the primary's.
-    private(set) var isSplitPane: Bool
+    /// Concrete host role; unlike a split boolean this distinguishes notification and focus behavior
+    /// for main, split, overlay, scratch, and quick surfaces.
+    private(set) var role: LinuxSurfaceRole
+    var isSplitPane: Bool { role == .split }
     /// The shell's working directory.
     private let cwd: String
     /// Optional explicit command; nil runs the user's default login shell.
@@ -78,11 +79,11 @@ final class GhosttySurface: TerminalSurface {
 
     init(sessionID: UUID, cwd: String, command: String? = nil, env: [String: String] = [:],
          controller: AppController? = nil, waitAfterCommand: Bool = false,
-         isSplitPane: Bool = false, reportsPaneState: Bool = true,
+         role: LinuxSurfaceRole = .main, reportsPaneState: Bool = true,
          fontSize: Double? = nil, initialInput: String? = nil) {
         self.sessionID = sessionID
         self.controller = controller
-        self.isSplitPane = isSplitPane
+        self.role = role
         self.cwd = cwd
         self.command = command
         self.waitAfterCommand = waitAfterCommand
@@ -504,8 +505,9 @@ final class GhosttySurface: TerminalSurface {
         let hasOtherModifiers = (state & ((1 << 0) | (1 << 3) | (1 << 26))) != 0
         let baseScalar = Unicode.Scalar(gdk_keyval_to_unicode(gdk_keyval_to_lower(keyval)))
         let isInterrupt = keyval == 0xFF1B || (control && !hasOtherModifiers && baseScalar?.value == 0x63)
-        controller?.clearAttentionStatus(sessionID, pane: isSplitPane ? .right : .left,
-                                         isInterrupt: isInterrupt)
+        if let pane = role.statusPane {
+            controller?.clearAttentionStatus(sessionID, pane: pane, isInterrupt: isInterrupt)
+        }
 
         // App-level shortcuts run first via the shared keymap (rebindable built-ins + custom commands +
         // the fixed arrow/page/font fallback). All the dispatch logic lives in AppController.handleKey so
@@ -625,12 +627,23 @@ final class GhosttySurface: TerminalSurface {
     var shouldCloseOnChildExitAction: Bool { command != nil && !waitAfterCommand }
 
     func promoteToPrimary(onExit: (() -> Void)?) {
-        isSplitPane = false
+        role = .main
         self.onExit = onExit
     }
 
     func promoteToPrimaryPane() {
-        isSplitPane = false
+        role = .main
+    }
+
+    func terminalNotificationOrigin() -> LinuxTerminalNotificationOrigin? {
+        guard let controller, let pane = role.notificationPane else { return nil }
+        let appActive = gtk_window_is_active(WIN(controller.windowPointer)) != 0
+        let firingIsFocused = appActive
+            && gtk_widget_get_mapped(W(glArea)) != 0
+            && gtk_widget_has_focus(W(glArea)) != 0
+        return LinuxTerminalNotificationOrigin(
+            windowID: controller.windowID, sessionID: sessionID, pane: pane,
+            firingIsFocused: firingIsFocused, appActive: appActive)
     }
 
     /// Stable spawn identity shared with the shell as `AGTERM_PANE_ID`. The session model resolves this
