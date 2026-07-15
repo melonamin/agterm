@@ -1109,6 +1109,13 @@ struct CommandsTests {
         #expect(throws: (any Error).self) { try Agtermctl.parseAsRoot(["bogus"]) }
     }
 
+    @Test func sharedCatalogCanAppendAHostCommandWithoutChangingAgtermctl() throws {
+        #expect(try ExtendedAgtermctl.parseAsRoot(["host-command"]) is HostCommand)
+        #expect(throws: (any Error).self) { try Agtermctl.parseAsRoot(["host-command"]) }
+        #expect(AgtermctlCommandCatalog.subcommands.count + 1
+            == ExtendedAgtermctl.configuration.subcommands.count)
+    }
+
     @Test func sessionTypeWithoutTextOrStdinFails() throws {
         // parses fine (text is optional), but makeRequest validates it needs TEXT or --stdin.
         let parsed = try Agtermctl.parseAsRoot(["session", "type"])
@@ -1121,24 +1128,36 @@ struct CommandsTests {
     @Test func socketPathExplicitFlagWins() throws {
         let command = try Tree.parse(["--socket", "/tmp/explicit.sock"])
         let env = ["AGTERM_STATE_DIR": "/tmp/state", "HOME": "/Users/x"]
-        #expect(command.options.socketPath(env: env) == "/tmp/explicit.sock")
+        #expect(command.options.basic.socketPath(
+            env: env, applicationSupportDirectory: "/ignored") == "/tmp/explicit.sock")
     }
 
     @Test func socketPathStateDirOverHome() throws {
         let command = try Tree.parse([])
         let env = ["AGTERM_STATE_DIR": "/tmp/state", "HOME": "/Users/x"]
-        #expect(command.options.socketPath(env: env) == "/tmp/state/agterm.sock")
+        #expect(command.options.basic.socketPath(
+            env: env, applicationSupportDirectory: "/ignored") == "/tmp/state/agterm.sock")
     }
 
-    @Test func socketPathFallsBackToHome() throws {
+    @Test func socketPathPreservesMacOSApplicationSupportLocation() throws {
         let command = try Tree.parse([])
         let env = ["HOME": "/Users/x"]
-        #expect(command.options.socketPath(env: env) == "/Users/x/Library/Application Support/agterm/agterm.sock")
+        #expect(command.options.basic.socketPath(
+            env: env, applicationSupportDirectory: "/Users/x/Library/Application Support/agterm")
+            == "/Users/x/Library/Application Support/agterm/agterm.sock")
     }
 
-    @Test func socketPathFallsBackToTmpWithoutHome() throws {
+    @Test func socketPathUsesLinuxFoundationApplicationSupportLocation() throws {
         let command = try Tree.parse([])
-        #expect(command.options.socketPath(env: [:]) == "/tmp/agterm/agterm.sock")
+        #expect(command.options.basic.socketPath(
+            env: ["HOME": "/home/x", "XDG_DATA_HOME": "/xdg/data"],
+            applicationSupportDirectory: "/xdg/data/agterm") == "/xdg/data/agterm/agterm.sock")
+    }
+
+    @Test func socketPathFallsBackToTmpWithoutFoundationLocation() throws {
+        let command = try Tree.parse([])
+        #expect(command.options.basic.socketPath(
+            env: [:], applicationSupportDirectory: nil) == "/tmp/agterm/agterm.sock")
     }
 
     // MARK: - session background
@@ -1217,4 +1236,13 @@ struct CommandsTests {
         // per-surface overlay. Caught CLI-side (matching the server boundary) before any round-trip.
         #expect(validationMessage(["session", "background", "image", "x.png\nclipboard-read = allow\ny.png"]) != nil)
     }
+}
+
+private struct ExtendedAgtermctl: ParsableCommand {
+    static let configuration = AgtermctlCommandCatalog.rootConfiguration(
+        appending: [HostCommand.self])
+}
+
+private struct HostCommand: ParsableCommand {
+    static let configuration = CommandConfiguration(commandName: "host-command")
 }
