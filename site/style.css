@@ -128,7 +128,7 @@ a {
   height: 100%;
   object-fit: cover;
   opacity: 0;
-  animation: heroGallery 35s infinite;
+  animation: heroGallery 40s infinite;
 }
 .hero-gallery img:first-child {
   opacity: 1;
@@ -155,14 +155,17 @@ a {
 .hero-gallery img:nth-child(7) {
   animation-delay: 30s;
 }
+.hero-gallery img:nth-child(8) {
+  animation-delay: 35s;
+}
 @keyframes heroGalleryFirst {
   0% {
     opacity: 1;
   }
-  14% {
+  12.5% {
     opacity: 1;
   }
-  17% {
+  15.5% {
     opacity: 0;
   }
   97% {
@@ -179,10 +182,10 @@ a {
   3% {
     opacity: 1;
   }
-  14% {
+  12.5% {
     opacity: 1;
   }
-  17% {
+  15.5% {
     opacity: 0;
   }
   100% {
@@ -198,5 +201,31 @@ a {
   }
   .hero-gallery img:not(:first-child) {
     opacity: 0;
+  }
+}
+
+/* === surfaces grid: four cards on row 1, Dashboard + Windows callout aligned on row 2 === */
+.surfaces-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+}
+.surfaces-grid .surfaces-wide {
+  grid-column: span 3;
+}
+@media (max-width: 980px) {
+  .surfaces-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .surfaces-grid .surfaces-wide {
+    grid-column: span 2;
+  }
+}
+@media (max-width: 620px) {
+  .surfaces-grid {
+    grid-template-columns: 1fr;
+  }
+  .surfaces-grid .surfaces-wide {
+    grid-column: span 1;
   }
 }
