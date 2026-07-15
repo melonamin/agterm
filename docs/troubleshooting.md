@@ -63,6 +63,30 @@ Hook installation preserves existing settings and writes a backup before changin
 Malformed settings and pre-existing custom hook definitions are reported as conflicts for manual resolution.
 The skill installer updates only an agterm-managed `~/.claude/skills/agterm` or `~/.codex/skills/agterm` directory and refuses an unrelated directory with the same name.
 
+Pi integration is available only after Pi has created `~/.pi/agent`.
+After installing or updating hooks, restart Pi or run `/reload` so it loads
+`~/.pi/agent/extensions/agterm-status.ts`.
+An unmarked file at that path is user-owned and is reported as a conflict rather than replaced.
+
+## Checking packaged Ghostty resources on Linux
+
+Release artifacts contain the pinned Ghostty themes, shell integration, and an `xterm-ghostty` terminfo entry.
+Run `scripts/verify-linux-resources.sh <payload>/share` from a checkout to validate an extracted tar, DEB, or RPM
+payload; `scripts/verify-linux-packages.sh VERSION DIRECTORY` checks all four release formats.
+The app uses `TERM=xterm-ghostty` only when it resolves both the shell-integration tree and sibling terminfo entry.
+If either is missing, it uses the portable `TERM=xterm-256color` fallback instead of advertising an unavailable
+terminal definition.
+
+## Dashboard or notification navigation looks wrong on Linux
+
+The dashboard opens from **Ctrl+Shift+M**, the command palette, or the grid button beside Quick Terminal.
+A single click briefly highlights a cell before entering its exact pane; keyboard Enter enters immediately.
+Dashboard and terminal-zoom headers show `Dashboard` or the active session title plus a custom window name.
+
+A desktop notification is suppressed only when its exact terminal surface is focused in the active window.
+Clicking a delivered notification selects its encoded pane and reopens its source window if that window was closed.
+An explicit `agtermctl notify` request deliberately bypasses focus suppression.
+
 ## Checking the keymap
 
 After editing `keymap.conf`, nothing changes until you reload it.

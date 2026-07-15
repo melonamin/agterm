@@ -190,6 +190,7 @@ Each row shows its status and target, and every install, update, or repair prese
 - **Agent Status Hooks** safely installs Claude Code, Codex, Pi, and shell lifecycle hooks, preserves existing settings and file modes, and reports malformed or user-owned conflicts for manual resolution.
   The Preferences action and `agtermctl integration install hooks` intentionally operate offline on host configuration.
   They do not use the control socket or add a `Command` case because requiring a running agterm instance would be less reliable and would put filesystem ownership in the wrong boundary.
+  Pi must have created `~/.pi/agent` first; restart Pi or run `/reload` after installation so it loads the managed extension.
 - **Agent Skill** installs or updates the bundled skill for detected Claude Code and Codex directories, while refusing to overwrite an unrelated skill named `agterm`.
 
 The macOS upstream app exposes the equivalent one-time actions in its **Help** menu.
@@ -213,6 +214,12 @@ scripts/setup-linux.sh
 cd agterm-linux && swift build
 ```
 
+`scripts/setup-linux.sh` builds the pinned libghostty revision and stages its exact theme dependency,
+shell integration, and compiled `xterm-ghostty` terminfo.
+It verifies the complete resource set before replacing the vendored cache; release staging rejects a partial cache.
+At runtime Linux advertises `TERM=xterm-ghostty` only when both shell integration and the sibling terminfo database
+resolve, and safely uses `TERM=xterm-256color` when they do not.
+
 This builds the GTK app and the Linux-local `agtermctl` executable from `agterm-linux/`.
 The Linux CLI intentionally lives in the Linux package so Glibc/socket portability code does not leak into
 upstream macOS-owned `agtermCore`.
@@ -231,12 +238,14 @@ It additionally requires nFPM, linuxdeploy with `linuxdeploy-plugin-gtk.sh`, Ima
 and `cpio`:
 
 ```sh
-scripts/package-linux.sh 0.11.0
-scripts/verify-linux-packages.sh 0.11.0
+scripts/package-linux.sh 0.14.0
+scripts/verify-linux-packages.sh 0.14.0
 ```
 
 The GitHub release workflow pins and verifies nFPM, linuxdeploy, the GTK plugin, and the AppImage
 runtime before packaging.
+Branch and release CI compile the GTK package in Swift 6 language mode and run the complete real GTK
+accessibility smoke suite in an isolated HOME, state directory, control socket, D-Bus session, and X display.
 
 Local helper scripts:
 
@@ -343,7 +352,7 @@ agterm arranges terminals into a small hierarchy. These are the only terms you n
 
 **Overlay.** An overlay runs one program in a temporary terminal over a session and disappears when the program exits, leaving the session as it was. It is mostly driven from the control API to launch an interactive program (a diff viewer, a process monitor) over a session without replacing its shell. See [Scripting agterm](#scripting-agterm).
 
-**Terminal zoom.** Zoom fills the whole window with one terminal surface — a pane, the scratch, an overlay, or the quick terminal — hiding the sidebar and collapsing the title bar to a slim strip that keeps the traffic lights, the window title, and an exit button. Cmd+Shift+Return toggles it on the active surface (rebindable as `toggle_terminal_zoom`; the exit button, ⌘W, and View ▸ Toggle Terminal Zoom all leave it). It is a view mode, not a layout change: entering closes transient chrome (an open palette or search), and exiting restores split ratios, focus, and visibility exactly as they were. Everything else keeps running behind the zoomed surface, and a script can zoom any surface by id with `agtermctl surface zoom`. Distinct from macOS window zoom and full screen, which size the window itself.
+**Terminal zoom.** Zoom fills the whole window with one terminal surface — a pane, the scratch, an overlay, or the quick terminal — hiding the sidebar and collapsing the title bar to a slim strip that keeps the window title and an exit button. Cmd+Shift+Return toggles it on the active surface (rebindable as `toggle_terminal_zoom`; the exit button, ⌘W, and View ▸ Toggle Terminal Zoom all leave it). It is a view mode, not a layout change: entering closes transient chrome (an open palette or search), and exiting restores split ratios, focus, and visibility exactly as they were. Everything else keeps running behind the zoomed surface, and a script can zoom any surface by id with `agtermctl surface zoom`. Distinct from macOS window zoom and full screen, which size the window itself.
 
 **Dashboard.** For watching several agents or builds at once, the dashboard shows sessions' live output side by side
 in a grid (laid out `ceil(sqrt(n))`), overlaid on the window.

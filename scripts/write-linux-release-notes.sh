@@ -34,18 +34,18 @@ if [[ -n "$LINUX_NOTES_FILE" && ! -f "$LINUX_NOTES_FILE" ]]; then
   echo "missing Linux release notes: $LINUX_NOTES_FILE" >&2
   exit 1
 fi
-API_URL="https://api.github.com/repos/${UPSTREAM_REPOSITORY}/releases/tags/${UPSTREAM_VERSION}"
-CURL_ARGS=(-fsSL -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28")
-if [[ -n "${GITHUB_TOKEN:-}" ]]; then
-  CURL_ARGS+=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
-fi
-
-UPSTREAM_BODY="$(curl "${CURL_ARGS[@]}" "$API_URL" | jq -er '.body | select(type == "string" and length > 0)')"
-# Upstream separates product notes from macOS signing and installation details with a horizontal rule.
-PRODUCT_NOTES="$(printf '%s\n' "$UPSTREAM_BODY" | awk '/^---[[:space:]]*$/ { exit } { print }')"
 CURATED_UPSTREAM_NOTES="packaging/linux/release-notes/${UPSTREAM_VERSION}-upstream.md"
 if [[ -f "$CURATED_UPSTREAM_NOTES" ]]; then
   PRODUCT_NOTES="$(cat "$CURATED_UPSTREAM_NOTES")"
+else
+  API_URL="https://api.github.com/repos/${UPSTREAM_REPOSITORY}/releases/tags/${UPSTREAM_VERSION}"
+  CURL_ARGS=(-fsSL -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28")
+  if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+    CURL_ARGS+=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
+  fi
+  UPSTREAM_BODY="$(curl "${CURL_ARGS[@]}" "$API_URL" | jq -er '.body | select(type == "string" and length > 0)')"
+  # Upstream separates product notes from macOS signing and installation details with a horizontal rule.
+  PRODUCT_NOTES="$(printf '%s\n' "$UPSTREAM_BODY" | awk '/^---[[:space:]]*$/ { exit } { print }')"
 fi
 if [[ -z "${PRODUCT_NOTES//[[:space:]]/}" ]]; then
   echo "upstream release $UPSTREAM_VERSION has no product notes" >&2

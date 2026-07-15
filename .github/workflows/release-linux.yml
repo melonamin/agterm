@@ -73,14 +73,11 @@ jobs:
 
           VERSION="${TAG#linux-}"
           PACKAGE_VERSION="${VERSION#v}"
-          PREVIOUS_TAG="$(git tag --merged "$COMMIT" --list "linux-v*" --sort=-version:refname \
-            | awk -v current="$TAG" '$0 != current { print; exit }')"
           {
             echo "tag=$TAG"
             echo "version=$VERSION"
             echo "package_version=$PACKAGE_VERSION"
             echo "commit=$COMMIT"
-            echo "previous_tag=$PREVIOUS_TAG"
             echo "source_date_epoch=$(git show -s --format=%ct "$COMMIT")"
           } >> "$GITHUB_OUTPUT"
 
@@ -147,6 +144,9 @@ jobs:
         run: |
           git diff --check
           git diff --check v0.14.0...HEAD
+
+      - name: Test published-release verifier
+        run: scripts/test-published-linux-release.sh
 
       - name: Lint Swift sources
         run: swiftlint lint --strict --quiet
@@ -232,6 +232,4 @@ jobs:
           fail_on_unmatched_files: true
           name: agterm-linux ${{ steps.release.outputs.version }}
           body_path: release-notes.md
-          generate_release_notes: true
-          previous_tag: ${{ steps.release.outputs.previous_tag }}
           make_latest: true

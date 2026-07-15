@@ -97,6 +97,9 @@ jobs:
           git diff --check
           git diff --check v0.14.0...HEAD
 
+      - name: Test published-release verifier
+        run: scripts/test-published-linux-release.sh
+
   build-linux:
     name: Build app (Linux GTK)
     needs: [changes, test-linux, lint-linux]

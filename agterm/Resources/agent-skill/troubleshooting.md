@@ -35,6 +35,7 @@ You are inside agterm (`AGTERM_ENABLED=1`). Use:
   A `conflict` means agterm found unrelated content and refused to replace it. Preview repairs with
   `agtermctl integration install hooks --dry-run --json` or `integration install skill --dry-run --json`.
   Multi-target installs may still apply independent safe targets; the conflicting target remains untouched and exit status is `2`.
+  Pi must have created `~/.pi/agent` first; restart Pi or run `/reload` after installing or updating hooks.
 
 ### "Keymap editor won't open"
 
