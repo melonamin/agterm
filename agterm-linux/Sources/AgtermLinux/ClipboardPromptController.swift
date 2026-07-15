@@ -78,7 +78,7 @@ final class ClipboardPromptController {
     }
 }
 
-private let onClipboardPromptResponse: @convention(c) (OpaquePointer?, UnsafePointer<CChar>?, gpointer?) -> Void = { _, response, data in
+private let onClipboardPromptResponse: @MainActor @convention(c) (OpaquePointer?, UnsafePointer<CChar>?, gpointer?) -> Void = { _, response, data in
     guard let data else { return }
     let ctx = Unmanaged<ClipboardPromptController.ResponseContext>.fromOpaque(data).takeRetainedValue()
     let id = response.map { String(cString: $0) } ?? "deny"

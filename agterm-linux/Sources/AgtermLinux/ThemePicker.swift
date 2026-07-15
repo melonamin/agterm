@@ -139,29 +139,29 @@ extension AppController {
     }
 }
 
-private let onThemeDestroyed: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, data in
+private let onThemeDestroyed: @MainActor @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, data in
     guard let data else { return }
     MainActor.assumeIsolated {
         Unmanaged<AppController>.fromOpaque(data).takeRetainedValue().themePickerWasDestroyed()
     }
 }
 
-private let onThemeSearch: @convention(c) (OpaquePointer?, gpointer?) -> Void = { entry, _ in
+private let onThemeSearch: @MainActor @convention(c) (OpaquePointer?, gpointer?) -> Void = { entry, _ in
     MainActor.assumeIsolated {
         let text = gtk_editable_get_text(entry).map { String(cString: $0) } ?? ""
         controllerForWidget(entry)?.filterThemes(text)
     }
 }
-private let onThemeSelected: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { list, row, _ in
+private let onThemeSelected: @MainActor @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { list, row, _ in
     MainActor.assumeIsolated { controllerForWidget(list)?.themePreviewSelected(row) }
 }
-private let onThemeActivated: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { list, _, _ in
+private let onThemeActivated: @MainActor @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { list, _, _ in
     MainActor.assumeIsolated { controllerForWidget(list)?.commitTheme() }
 }
-private let onThemeActivateEnter: @convention(c) (OpaquePointer?, gpointer?) -> Void = { entry, _ in
+private let onThemeActivateEnter: @MainActor @convention(c) (OpaquePointer?, gpointer?) -> Void = { entry, _ in
     MainActor.assumeIsolated { controllerForWidget(entry)?.commitTheme() }
 }
-private let onThemeKey: @convention(c) (OpaquePointer?, UInt32, UInt32, UInt32, gpointer?) -> gboolean = { keys, keyval, _, _, _ in
+private let onThemeKey: @MainActor @convention(c) (OpaquePointer?, UInt32, UInt32, UInt32, gpointer?) -> gboolean = { keys, keyval, _, _, _ in
     let controller = MainActor.assumeIsolated { controllerForEventController(keys) }
     switch keyval {
     case 0xFF1B: MainActor.assumeIsolated { controller?.cancelTheme() }; return 1

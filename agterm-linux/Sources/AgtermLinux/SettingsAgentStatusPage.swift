@@ -89,33 +89,33 @@ extension AppController {
     }
 }
 
-private let onSettingsActiveColor: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { button, _, _ in
+private let onSettingsActiveColor: @MainActor @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { button, _, _ in
     MainActor.assumeIsolated { controllerForWidget(button)?.setStatusColor(.active, fromButton: button) }
 }
-private let onSettingsBlockedColor: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { button, _, _ in
+private let onSettingsBlockedColor: @MainActor @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { button, _, _ in
     MainActor.assumeIsolated { controllerForWidget(button)?.setStatusColor(.blocked, fromButton: button) }
 }
-private let onSettingsCompletedColor: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { button, _, _ in
+private let onSettingsCompletedColor: @MainActor @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { button, _, _ in
     MainActor.assumeIsolated { controllerForWidget(button)?.setStatusColor(.completed, fromButton: button) }
 }
-private let onSettingsBlockedSound: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
+private let onSettingsBlockedSound: @MainActor @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
     MainActor.assumeIsolated {
         controllerForWidget(row)?.setBlockedSoundAtIndex(Int(adw_combo_row_get_selected(cast(row))))
     }
 }
-private let onSettingsAutoFollow: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
+private let onSettingsAutoFollow: @MainActor @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
     MainActor.assumeIsolated {
         controllerForWidget(row)?.setAutoFollowAtIndex(Int(adw_combo_row_get_selected(cast(row))))
     }
 }
-private let onSettingsAutoFollowAway: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
+private let onSettingsAutoFollowAway: @MainActor @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
     MainActor.assumeIsolated {
         controllerForWidget(row)?.setAutoFollowAwayFromRunning(adw_switch_row_get_active(row) != 0)
     }
 }
-private let onManageAgentIntegrations: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
+private let onManageAgentIntegrations: @MainActor @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
     MainActor.assumeIsolated { controllerForWidget(button)?.showSettings(page: .integrations) }
 }
-private let onResetAgentStatus: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
+private let onResetAgentStatus: @MainActor @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
     MainActor.assumeIsolated { controllerForWidget(button)?.resetAgentStatus() }
 }

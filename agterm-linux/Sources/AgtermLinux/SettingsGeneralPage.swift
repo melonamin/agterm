@@ -106,48 +106,48 @@ extension AppController {
     }
 }
 
-private let onSettingsScrollSpeed: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
+private let onSettingsScrollSpeed: @MainActor @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
     MainActor.assumeIsolated { controllerForWidget(row)?.setScrollSpeed(adw_spin_row_get_value(row)) }
 }
-private let onSettingsRightClickPaste: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
+private let onSettingsRightClickPaste: @MainActor @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
     MainActor.assumeIsolated {
         controllerForWidget(row)?.setRightClickPaste(adw_switch_row_get_active(row) != 0)
     }
 }
-private let onSettingsRestoreCommand: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
+private let onSettingsRestoreCommand: @MainActor @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
     MainActor.assumeIsolated {
         controllerForWidget(row)?.setRestoreRunningCommand(adw_switch_row_get_active(row) != 0)
     }
 }
-private let onSettingsConfirmClose: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
+private let onSettingsConfirmClose: @MainActor @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
     MainActor.assumeIsolated {
         controllerForWidget(row)?.setConfirmCloseSession(adw_switch_row_get_active(row) != 0)
     }
 }
-private let onSettingsCloseUndo: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
+private let onSettingsCloseUndo: @MainActor @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
     MainActor.assumeIsolated { controllerForWidget(row)?.setCloseGraceUndo(adw_switch_row_get_active(row) != 0) }
 }
-private let onSettingsSessionDirectory: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
+private let onSettingsSessionDirectory: @MainActor @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
     MainActor.assumeIsolated {
         controllerForWidget(row)?.setNewSessionDirectoryAtIndex(Int(adw_combo_row_get_selected(cast(row))))
     }
 }
-private let onSettingsInheritGhostty: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
+private let onSettingsInheritGhostty: @MainActor @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
     MainActor.assumeIsolated {
         controllerForWidget(row)?.setInheritGlobalGhosttyConfig(adw_switch_row_get_active(row) != 0)
     }
 }
-private let onChooseSessionDirectory: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
+private let onChooseSessionDirectory: @MainActor @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
     MainActor.assumeIsolated { controllerForWidget(button)?.chooseSessionDirectory() }
 }
-private let onOpenGhosttyConfig: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
+private let onOpenGhosttyConfig: @MainActor @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
     MainActor.assumeIsolated {
         guard let controller = controllerForWidget(button) else { return }
         controller.dismissSettings()
         controller.editGhosttyConfig()
     }
 }
-private let onSessionDirectoryChosen: @convention(c) (UnsafeMutablePointer<GObject>?, OpaquePointer?, gpointer?) -> Void = { dialog, result, data in
+private let onSessionDirectoryChosen: @MainActor @convention(c) (UnsafeMutablePointer<GObject>?, OpaquePointer?, gpointer?) -> Void = { dialog, result, data in
     guard let data else { return }
     MainActor.assumeIsolated {
         let controller = Unmanaged<AppController>.fromOpaque(data).takeRetainedValue()

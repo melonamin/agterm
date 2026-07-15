@@ -316,7 +316,7 @@ extension AppController {
     }
 }
 
-private let onBackgroundSettingsCommit: @convention(c) (gpointer?) -> gboolean = { data in
+private let onBackgroundSettingsCommit: @MainActor @convention(c) (gpointer?) -> gboolean = { data in
     guard let data else { return 0 }
     MainActor.assumeIsolated {
         let controller = Unmanaged<AppController>.fromOpaque(data).takeUnretainedValue()

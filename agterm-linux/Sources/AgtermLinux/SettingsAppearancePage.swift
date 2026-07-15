@@ -132,49 +132,49 @@ extension AppController {
     }
 }
 
-private let onSettingsFontFamily: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
+private let onSettingsFontFamily: @MainActor @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
     MainActor.assumeIsolated {
         controllerForWidget(row)?.setFontFamilyAtIndex(Int(adw_combo_row_get_selected(cast(row))))
     }
 }
-private let onSettingsFontSize: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
+private let onSettingsFontSize: @MainActor @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
     MainActor.assumeIsolated { controllerForWidget(row)?.setFontSize(adw_spin_row_get_value(row)) }
 }
-private let onSettingsTheme: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
+private let onSettingsTheme: @MainActor @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
     MainActor.assumeIsolated {
         controllerForWidget(row)?.applyThemeAtIndex(Int(adw_combo_row_get_selected(cast(row))))
     }
 }
-private let onSettingsFollowAppearance: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
+private let onSettingsFollowAppearance: @MainActor @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
     MainActor.assumeIsolated {
         controllerForWidget(row)?.setFollowSystemAppearance(adw_switch_row_get_active(row) != 0)
     }
 }
-private let onSettingsAlternateTheme: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
+private let onSettingsAlternateTheme: @MainActor @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
     MainActor.assumeIsolated {
         controllerForWidget(row)?.setAlternateThemeAtIndex(Int(adw_combo_row_get_selected(cast(row))))
     }
 }
-private let onSettingsToolbarMode: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
+private let onSettingsToolbarMode: @MainActor @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
     MainActor.assumeIsolated {
         controllerForWidget(row)?.setToolbarModeAtIndex(Int(adw_combo_row_get_selected(cast(row))))
     }
 }
-private let onSettingsBackgroundOpacity: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
+private let onSettingsBackgroundOpacity: @MainActor @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
     MainActor.assumeIsolated { controllerForWidget(row)?.setBackgroundOpacity(adw_spin_row_get_value(row)) }
 }
-private let onSettingsSidebarTint: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
+private let onSettingsSidebarTint: @MainActor @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
     MainActor.assumeIsolated { controllerForWidget(row)?.setSidebarTint(adw_spin_row_get_value(row)) }
 }
-private let onSettingsSidebarFont: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
+private let onSettingsSidebarFont: @MainActor @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
     MainActor.assumeIsolated { controllerForWidget(row)?.setSidebarFontSize(adw_spin_row_get_value(row)) }
 }
-private let onSettingsInactivePaneMute: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
+private let onSettingsInactivePaneMute: @MainActor @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
     MainActor.assumeIsolated { controllerForWidget(row)?.setInactivePaneMute(adw_spin_row_get_value(row)) }
 }
-private let onResetTerminalAppearance: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
+private let onResetTerminalAppearance: @MainActor @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
     MainActor.assumeIsolated { controllerForWidget(button)?.resetTerminalAppearance() }
 }
-private let onResetWindowAppearance: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
+private let onResetWindowAppearance: @MainActor @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
     MainActor.assumeIsolated { controllerForWidget(button)?.resetWindowAppearance() }
 }

@@ -340,13 +340,11 @@ extension AppController {
     }
 }
 
-private let onDashboardExit: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
-    MainActor.assumeIsolated {
-        controllerForWidget(button)?.closeDashboard()
-    }
+private let onDashboardExit: @MainActor @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
+    controllerForWidget(button)?.closeDashboard()
 }
 
-private let onDashboardCellPressed: @convention(c)
+private let onDashboardCellPressed: @MainActor @convention(c)
     (OpaquePointer?, Int32, Double, Double, gpointer?) -> Void = { _, presses, _, _, data in
     guard presses >= 1, let data else { return }
     MainActor.assumeIsolated {
@@ -355,7 +353,7 @@ private let onDashboardCellPressed: @convention(c)
     }
 }
 
-private let onDashboardClickDelay: @convention(c) (gpointer?) -> gboolean = { data in
+private let onDashboardClickDelay: @MainActor @convention(c) (gpointer?) -> gboolean = { data in
     guard let data else { return 0 }
     return MainActor.assumeIsolated {
         let context = Unmanaged<DashboardDelayedClickContext>.fromOpaque(data).takeUnretainedValue()
@@ -364,12 +362,12 @@ private let onDashboardClickDelay: @convention(c) (gpointer?) -> gboolean = { da
     }
 }
 
-private let releaseDashboardDelayedClickContext: @convention(c) (gpointer?) -> Void = { data in
+private let releaseDashboardDelayedClickContext: @MainActor @convention(c) (gpointer?) -> Void = { data in
     guard let data else { return }
     Unmanaged<DashboardDelayedClickContext>.fromOpaque(data).release()
 }
 
-private let onDashboardKey: @convention(c)
+private let onDashboardKey: @MainActor @convention(c)
     (OpaquePointer?, UInt32, UInt32, UInt32, gpointer?) -> gboolean = { _, key, _, _, data in
     guard let data else { return 0 }
     return MainActor.assumeIsolated {

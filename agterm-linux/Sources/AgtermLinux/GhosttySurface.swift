@@ -71,7 +71,7 @@ final class GhosttySurface: TerminalSurface {
     var onExit: (() -> Void)?
     private var didHandleProcessExit = false
 
-    deinit {
+    isolated deinit {
         if let surface { ghostty_surface_free(surface) }
         ownedConfigs.forEach { ghostty_config_free($0) }
         configurationStorage?.release()
@@ -686,30 +686,30 @@ private func wrap(_ data: gpointer?) -> GhosttySurface? {
 /// Releases the retained surface reference the GtkGLArea owned (balances the `passRetained` at connect
 /// time). Fired when the widget is destroyed — the LAST signal, so the object stays valid through any
 /// focus-leave/etc. emitted during teardown.
-private let surfaceDestroy: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, data in
+private let surfaceDestroy: @MainActor @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, data in
     if let data { Unmanaged<GhosttySurface>.fromOpaque(data).release() }
 }
-private let surfaceRealize: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, data in
+private let surfaceRealize: @MainActor @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, data in
     MainActor.assumeIsolated { wrap(data)?.realize() }
 }
-private let surfaceRender: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> gboolean = { _, _, data in
+private let surfaceRender: @MainActor @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> gboolean = { _, _, data in
     MainActor.assumeIsolated { wrap(data)?.render() }
     return 1
 }
-private let surfaceResize: @convention(c) (OpaquePointer?, Int32, Int32, gpointer?) -> Void = { _, w, h, data in
+private let surfaceResize: @MainActor @convention(c) (OpaquePointer?, Int32, Int32, gpointer?) -> Void = { _, w, h, data in
     MainActor.assumeIsolated { wrap(data)?.resize(width: w, height: h) }
 }
-private let surfaceKeyPressed: @convention(c) (OpaquePointer?, UInt32, UInt32, UInt32, gpointer?) -> gboolean = { _, keyval, keycode, state, data in
+private let surfaceKeyPressed: @MainActor @convention(c) (OpaquePointer?, UInt32, UInt32, UInt32, gpointer?) -> gboolean = { _, keyval, keycode, state, data in
     MainActor.assumeIsolated { (wrap(data)?.keyPressed(keyval: keyval, keycode: keycode, state: state) ?? false) ? 1 : 0 }
 }
 /// Ctrl release commits the Ctrl-Tab session-switch cycle (the only key release agterm reacts to; ghostty
 /// tracks its own key state internally).
-private let surfaceKeyReleased: @convention(c) (OpaquePointer?, UInt32, UInt32, UInt32, gpointer?) -> Void = { _, keyval, _, _, data in
+private let surfaceKeyReleased: @MainActor @convention(c) (OpaquePointer?, UInt32, UInt32, UInt32, gpointer?) -> Void = { _, keyval, _, _, data in
     if keyval == 0xFFE3 || keyval == 0xFFE4 {   // Control_L / Control_R
         MainActor.assumeIsolated { wrap(data)?.controller?.endSessionSwitch() }
     }
 }
-private let surfaceFocusEnter: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, data in
+private let surfaceFocusEnter: @MainActor @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, data in
     MainActor.assumeIsolated {
         guard let surface = wrap(data) else { return }
         surface.setFocus(true)
@@ -718,7 +718,7 @@ private let surfaceFocusEnter: @convention(c) (OpaquePointer?, gpointer?) -> Voi
         surface.controller?.surfaceDidFocus(surface.sessionID, isSplit: surface.isSplitPane)
     }
 }
-private let surfaceFocusLeave: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, data in
+private let surfaceFocusLeave: @MainActor @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, data in
     MainActor.assumeIsolated {
         wrap(data)?.setFocus(false)
         wrap(data)?.imFocus(false)
@@ -726,34 +726,34 @@ private let surfaceFocusLeave: @convention(c) (OpaquePointer?, gpointer?) -> Voi
     }
 }
 /// The IM context committed composed text (dead-key / compose / CJK result).
-private let surfaceIMCommit: @convention(c) (OpaquePointer?, UnsafePointer<CChar>?, gpointer?) -> Void = { _, text, data in
+private let surfaceIMCommit: @MainActor @convention(c) (OpaquePointer?, UnsafePointer<CChar>?, gpointer?) -> Void = { _, text, data in
     guard let text else { return }
     let s = String(cString: text)
     MainActor.assumeIsolated { wrap(data)?.imCommit(s) }
 }
-private let surfacePreeditChanged: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, data in
+private let surfacePreeditChanged: @MainActor @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, data in
     MainActor.assumeIsolated { wrap(data)?.imPreeditChanged() }
 }
-private let surfaceClicked: @convention(c) (OpaquePointer?, Int32, Double, Double, gpointer?) -> Void = { gesture, _, x, y, data in
+private let surfaceClicked: @MainActor @convention(c) (OpaquePointer?, Int32, Double, Double, gpointer?) -> Void = { gesture, _, x, y, data in
     MainActor.assumeIsolated {
         wrap(data)?.grabFocus()
         wrap(data)?.mouseButton(gesture, pressed: true, x: x, y: y)
     }
 }
-private let surfaceReleased: @convention(c) (OpaquePointer?, Int32, Double, Double, gpointer?) -> Void = { gesture, _, x, y, data in
+private let surfaceReleased: @MainActor @convention(c) (OpaquePointer?, Int32, Double, Double, gpointer?) -> Void = { gesture, _, x, y, data in
     MainActor.assumeIsolated { wrap(data)?.mouseButton(gesture, pressed: false, x: x, y: y) }
 }
-private let surfaceMotion: @convention(c) (OpaquePointer?, Double, Double, gpointer?) -> Void = { ctl, x, y, data in
+private let surfaceMotion: @MainActor @convention(c) (OpaquePointer?, Double, Double, gpointer?) -> Void = { ctl, x, y, data in
     MainActor.assumeIsolated { wrap(data)?.mouseMoved(ctl, x: x, y: y) }
 }
-private let surfaceLeave: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, data in
+private let surfaceLeave: @MainActor @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, data in
     MainActor.assumeIsolated { wrap(data)?.mouseLeft() }
 }
-private let surfaceScroll: @convention(c) (OpaquePointer?, Double, Double, gpointer?) -> gboolean = { ctl, dx, dy, data in
+private let surfaceScroll: @MainActor @convention(c) (OpaquePointer?, Double, Double, gpointer?) -> gboolean = { ctl, dx, dy, data in
     MainActor.assumeIsolated { wrap(data)?.scroll(controller: ctl, dx: dx, dy: dy) }
     return 1
 }
-private let surfaceDropString: @convention(c) (OpaquePointer?, UnsafePointer<GValue>?, Double, Double, gpointer?) -> gboolean = { _, value, _, _, data in
+private let surfaceDropString: @MainActor @convention(c) (OpaquePointer?, UnsafePointer<GValue>?, Double, Double, gpointer?) -> gboolean = { _, value, _, _, data in
     MainActor.assumeIsolated {
         guard let value, let cstr = g_value_get_string(value), let surface = wrap(data) else { return 0 }
         let payload = String(cString: cstr)
@@ -766,7 +766,7 @@ private let surfaceDropString: @convention(c) (OpaquePointer?, UnsafePointer<GVa
         return 1
     }
 }
-private let surfaceDropFiles: @convention(c) (OpaquePointer?, UnsafePointer<GValue>?, Double, Double, gpointer?) -> gboolean = { _, value, _, _, data in
+private let surfaceDropFiles: @MainActor @convention(c) (OpaquePointer?, UnsafePointer<GValue>?, Double, Double, gpointer?) -> gboolean = { _, value, _, _, data in
     MainActor.assumeIsolated {
         guard let value, let boxed = g_value_get_boxed(value), let surface = wrap(data) else { return 0 }
         let fileList = OpaquePointer(boxed)

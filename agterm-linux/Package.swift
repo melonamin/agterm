@@ -1,4 +1,4 @@
-// swift-tools-version:5.9
+// swift-tools-version:6.0
 import PackageDescription
 import Foundation
 
@@ -61,5 +61,6 @@ let package = Package(
             name: "AgtermLinuxTests",
             dependencies: ["AgtermLinux", .product(name: "agtermCore", package: "agtermCore")]
         ),
-    ]
+    ],
+    swiftLanguageModes: [.v6]
 )

@@ -33,17 +33,17 @@ extension AppController {
     }
 }
 
-private let onSettingsNotificationBanners: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
+private let onSettingsNotificationBanners: @MainActor @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
     MainActor.assumeIsolated {
         controllerForWidget(row)?.setNotificationsEnabled(adw_switch_row_get_active(row) != 0)
     }
 }
-private let onSettingsNotificationBadges: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
+private let onSettingsNotificationBadges: @MainActor @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
     MainActor.assumeIsolated {
         controllerForWidget(row)?.setNotificationBadge(adw_switch_row_get_active(row) != 0)
     }
 }
-private let onSettingsAttentionIndicator: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
+private let onSettingsAttentionIndicator: @MainActor @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { row, _, _ in
     MainActor.assumeIsolated {
         controllerForWidget(row)?.setAttentionButtonEnabled(adw_switch_row_get_active(row) != 0)
     }

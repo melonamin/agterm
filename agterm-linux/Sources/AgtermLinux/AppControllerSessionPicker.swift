@@ -150,7 +150,7 @@ extension AppController {
     }
 }
 
-private let onSessionPickerRow: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, data in
+private let onSessionPickerRow: @MainActor @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, data in
     guard let data else { return }
     MainActor.assumeIsolated {
         let context = Unmanaged<SessionPickerRowContext>.fromOpaque(data).takeUnretainedValue()
@@ -158,7 +158,7 @@ private let onSessionPickerRow: @convention(c) (OpaquePointer?, gpointer?) -> Vo
     }
 }
 
-private let onSessionPickerClosed: @convention(c) (OpaquePointer?, gpointer?) -> Void = { popover, data in
+private let onSessionPickerClosed: @MainActor @convention(c) (OpaquePointer?, gpointer?) -> Void = { popover, data in
     guard let data else { return }
     MainActor.assumeIsolated {
         Unmanaged<AppController>.fromOpaque(data).takeUnretainedValue().sessionPickerDidClose(popover)

@@ -137,7 +137,7 @@ extension AppController {
     }
 }
 
-private let onTerminalZoomExit: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
+private let onTerminalZoomExit: @MainActor @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
     MainActor.assumeIsolated {
         controllerForWidget(button)?.setTerminalZoom(.off, target: nil)
     }

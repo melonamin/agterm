@@ -108,7 +108,7 @@ private let releaseLeaderTimeoutContext: GDestroyNotify = { data in
 
 /// The custom-command leader deadline fired on the main loop — abandon the half-typed sequence.
 /// The source owns a weak-controller context until it fires or is cancelled.
-private let onLeaderTimeout: @convention(c) (gpointer?) -> gboolean = { data in
+private let onLeaderTimeout: @MainActor @convention(c) (gpointer?) -> gboolean = { data in
     guard let data else { return 0 }
     MainActor.assumeIsolated {
         Unmanaged<LeaderTimeoutContext>.fromOpaque(data).takeUnretainedValue().controller?.leaderDeadlineFired()

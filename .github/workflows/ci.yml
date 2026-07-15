@@ -32,6 +32,8 @@ jobs:
               - "**/*.swift"
               - "agtermCore/**"
               - "agterm-linux/**"
+              - "agterm/Resources/agent-status/**"
+              - "agterm/Resources/agent-skill/**"
               - "linux/**"
               - "packaging/linux/**"
               - "scripts/**"
@@ -48,13 +50,20 @@ jobs:
     container: swift:6.3.2-noble
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
       - name: Install test shell
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends zsh
+          apt-get install -y --no-install-recommends ripgrep zsh
+      - name: Verify upstream boundary tag
+        run: git rev-parse --verify 'v0.14.0^{commit}'
       - name: swift test
         working-directory: agtermCore
         run: swift test
+      - name: Enforce host-free core boundary
+        run: scripts/check-linux-core-boundary.sh v0.14.0
       - name: Reject Linux CLI parser drift
         run: scripts/check-linux-cli-drift.sh
 
@@ -68,6 +77,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          fetch-tags: true
       - name: Install SwiftLint
         run: |
           apt-get update
@@ -80,8 +90,12 @@ jobs:
           swiftlint --version
       - name: swiftlint (strict)
         run: swiftlint lint --strict --quiet
+      - name: Verify upstream boundary tag
+        run: git rev-parse --verify 'v0.14.0^{commit}'
       - name: Reject whitespace errors
-        run: git diff --check v0.14.0...HEAD
+        run: |
+          git diff --check
+          git diff --check v0.14.0...HEAD
 
   build-linux:
     name: Build app (Linux GTK)
@@ -93,28 +107,64 @@ jobs:
     container: swift:6.3.2-noble
     steps:
       - uses: actions/checkout@v7
-      - name: Install GTK4 + libadwaita + GL + zig
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Install GTK4, accessibility, software GL, test shells, and zig
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
-            libgtk-4-dev libadwaita-1-dev libepoxy-dev pkg-config git curl ca-certificates xz-utils ncurses-bin
+            libgtk-4-dev libadwaita-1-dev libepoxy-dev pkg-config git curl ca-certificates xz-utils ncurses-bin \
+            ripgrep zsh at-spi2-core dbus-x11 gir1.2-atspi-2.0 python3-gi xvfb xauth \
+            libatk-bridge2.0-0 libgl1-mesa-dri libegl-mesa0 mesa-utils
           curl -fsSLo /tmp/zig.tar.xz \
             https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz
           echo "${ZIG_SHA256}  /tmp/zig.tar.xz" | sha256sum --check
           tar -xJf /tmp/zig.tar.xz -C /opt
           echo "/opt/zig-x86_64-linux-0.15.2" >> "$GITHUB_PATH"
+      - name: Verify upstream boundary tag
+        run: git rev-parse --verify 'v0.14.0^{commit}'
+      - name: Enforce host-free core boundary and CLI sharing
+        run: |
+          scripts/check-linux-core-boundary.sh v0.14.0
+          scripts/check-linux-cli-drift.sh
       - name: Cache vendored libghostty (keyed on the pinned rev + the patch)
+        id: ghostty-cache
         uses: actions/cache@v6
         with:
           path: agterm-linux/vendor/ghostty
           key: libghostty-${{ hashFiles('scripts/setup-linux.sh', 'scripts/verify-linux-resources.sh', 'linux/ghostty-resources.env', 'linux/patches/ghostty-embedded-opengl.patch', 'linux/patches/ghostty-lib-resources.patch') }}
+      - name: Verify restored libghostty cache
+        if: steps.ghostty-cache.outputs.cache-hit == 'true'
+        run: |
+          test -s agterm-linux/vendor/ghostty/lib/libghostty.so
+          test -s agterm-linux/vendor/ghostty/include/ghostty.h
+          scripts/verify-linux-resources.sh agterm-linux/vendor/ghostty/share
       - name: Test deterministic Ghostty resources
         run: scripts/test-linux-resources.sh
       - name: Build libghostty (skips if the cache restored it)
         run: scripts/setup-linux.sh
+      - name: Verify built libghostty resources
+        run: scripts/verify-linux-resources.sh agterm-linux/vendor/ghostty/share
       - name: swift test (agterm-linux)
         working-directory: agterm-linux
         run: swift test
       - name: swift build (agterm-linux)
         working-directory: agterm-linux
         run: swift build
+      - name: swift build Release/WMO (agterm-linux)
+        working-directory: agterm-linux
+        run: swift build -c release
+      - name: Validate staged Linux payload
+        run: scripts/stage-linux.sh "$RUNNER_TEMP/agterm-stage"
+      - name: GTK AT-SPI smoke tests
+        env:
+          AGTERM_UI_ARTIFACT_DIR: ${{ github.workspace }}/artifacts/linux-ui
+        run: scripts/test-linux-ui.sh
+      - name: Upload GTK diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: linux-ui-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/linux-ui
+          if-no-files-found: warn

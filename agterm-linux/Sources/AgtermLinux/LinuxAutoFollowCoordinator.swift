@@ -137,7 +137,7 @@ private final class WeakLinuxAutoFollowCoordinator: @unchecked Sendable {
     }
 }
 
-private let onLinuxAutoFollowTimeout: @convention(c) (gpointer?) -> gboolean = { data in
+private let onLinuxAutoFollowTimeout: @MainActor @convention(c) (gpointer?) -> gboolean = { data in
     guard let data else { return 0 }
     MainActor.assumeIsolated {
         Unmanaged<LinuxAutoFollowCoordinator>.fromOpaque(data).takeUnretainedValue().fire()

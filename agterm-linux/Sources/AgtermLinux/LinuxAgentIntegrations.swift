@@ -213,17 +213,17 @@ extension AppController {
     }
 }
 
-private let onRefreshIntegrations: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
+private let onRefreshIntegrations: @MainActor @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
     MainActor.assumeIsolated { controllerForWidget(button)?.refreshIntegrationStatus() }
 }
-private let onIntegrationAction: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
+private let onIntegrationAction: @MainActor @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
     MainActor.assumeIsolated {
         guard let button, let controller = controllerForWidget(button),
               let kind = controller.integrationButtons[button] else { return }
         controller.prepareIntegration(kind)
     }
 }
-private let onIntegrationPlanResponse: @convention(c) (OpaquePointer?, UnsafePointer<CChar>?, gpointer?) -> Void = { dialog, response, _ in
+private let onIntegrationPlanResponse: @MainActor @convention(c) (OpaquePointer?, UnsafePointer<CChar>?, gpointer?) -> Void = { dialog, response, _ in
     let value = response.map { String(cString: $0) } ?? "cancel"
     MainActor.assumeIsolated {
         controllerForObject(dialog)?.respondToIntegrationPlan(value)

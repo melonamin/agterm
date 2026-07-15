@@ -108,7 +108,7 @@ func preferencesButton(
     return button
 }
 
-private let onSettingsClosed: @convention(c) (OpaquePointer?, gpointer?) -> Void = { dialog, data in
+private let onSettingsClosed: @MainActor @convention(c) (OpaquePointer?, gpointer?) -> Void = { dialog, data in
     guard let data else { return }
     MainActor.assumeIsolated {
         let controller = Unmanaged<AppController>.fromOpaque(data).takeRetainedValue()

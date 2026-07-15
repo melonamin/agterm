@@ -120,10 +120,10 @@ private let fixedShortcutCatalog: [(title: String, shortcut: String)] = [
     ("Reset font size", "ctrl+0"),
 ]
 
-private let onPreferencesShortcut: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { action, _, _ in
+private let onPreferencesShortcut: @MainActor @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { action, _, _ in
     MainActor.assumeIsolated { controllerForObject(action)?.showSettings() }
 }
-private let onShortcutPreferences: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, data in
+private let onShortcutPreferences: @MainActor @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, data in
     guard let data else { return }
     MainActor.assumeIsolated {
         let context = Unmanaged<AuxiliaryDialogContext>.fromOpaque(data).takeUnretainedValue()
@@ -133,7 +133,7 @@ private let onShortcutPreferences: @convention(c) (OpaquePointer?, gpointer?) ->
         controller.showSettings(page: .keyMapping)
     }
 }
-private let onAuxiliaryDialogClosed: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, data in
+private let onAuxiliaryDialogClosed: @MainActor @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, data in
     guard let data else { return }
     MainActor.assumeIsolated {
         let context = Unmanaged<AuxiliaryDialogContext>.fromOpaque(data).takeRetainedValue()

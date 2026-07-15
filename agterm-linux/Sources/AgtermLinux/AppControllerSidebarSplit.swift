@@ -49,7 +49,7 @@ extension AppController {
     }
 }
 
-private let onSidebarPanedPosition: @convention(c) (
+private let onSidebarPanedPosition: @MainActor @convention(c) (
     OpaquePointer?, OpaquePointer?, gpointer?
 ) -> Void = { paned, _, data in
     guard let data else { return }

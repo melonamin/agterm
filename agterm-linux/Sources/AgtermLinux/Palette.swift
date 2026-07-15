@@ -288,19 +288,19 @@ extension AppController {
     }
 }
 
-private let onPaletteSearch: @convention(c) (OpaquePointer?, gpointer?) -> Void = { entry, _ in
+private let onPaletteSearch: @MainActor @convention(c) (OpaquePointer?, gpointer?) -> Void = { entry, _ in
     MainActor.assumeIsolated {
         let text = gtk_editable_get_text(entry).map { String(cString: $0) } ?? ""
         controllerForWidget(entry)?.filterPalette(text)
     }
 }
-private let onPaletteActivate: @convention(c) (OpaquePointer?, gpointer?) -> Void = { entry, _ in
+private let onPaletteActivate: @MainActor @convention(c) (OpaquePointer?, gpointer?) -> Void = { entry, _ in
     MainActor.assumeIsolated { controllerForWidget(entry)?.runPaletteSelected() }
 }
-private let onPaletteRow: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { list, row, _ in
+private let onPaletteRow: @MainActor @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { list, row, _ in
     MainActor.assumeIsolated { controllerForWidget(list)?.runPaletteRow(row) }
 }
-private let onPaletteKey: @convention(c) (OpaquePointer?, UInt32, UInt32, UInt32, gpointer?) -> gboolean = { keys, keyval, _, _, _ in
+private let onPaletteKey: @MainActor @convention(c) (OpaquePointer?, UInt32, UInt32, UInt32, gpointer?) -> gboolean = { keys, keyval, _, _, _ in
     switch keyval {
     case 0xFF1B: MainActor.assumeIsolated { controllerForEventController(keys)?.closePalette() }; return 1
     case 0xFF52: MainActor.assumeIsolated { controllerForEventController(keys)?.paletteMove(down: false) }; return 1
@@ -308,7 +308,7 @@ private let onPaletteKey: @convention(c) (OpaquePointer?, UInt32, UInt32, UInt32
     default: return 0
     }
 }
-private let onPaletteDestroyed: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, data in
+private let onPaletteDestroyed: @MainActor @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, data in
     guard let data else { return }
     MainActor.assumeIsolated {
         Unmanaged<AppController>.fromOpaque(data).takeRetainedValue().paletteWasDestroyed()

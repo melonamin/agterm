@@ -90,26 +90,26 @@ extension AppController {
     }
 }
 
-private let onChooseConfigDirectory: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
+private let onChooseConfigDirectory: @MainActor @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
     MainActor.assumeIsolated { controllerForWidget(button)?.chooseConfigDirectory() }
 }
-private let onOpenKeymapConfig: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
+private let onOpenKeymapConfig: @MainActor @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
     MainActor.assumeIsolated {
         guard let controller = controllerForWidget(button) else { return }
         controller.dismissSettings()
         controller.editKeymap()
     }
 }
-private let onOpenKeymapDirectory: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
+private let onOpenKeymapDirectory: @MainActor @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
     MainActor.assumeIsolated { controllerForWidget(button)?.openConfigDirectory() }
 }
-private let onUseDefaultConfigDirectory: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
+private let onUseDefaultConfigDirectory: @MainActor @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
     MainActor.assumeIsolated {
         controllerForWidget(button)?.setConfigDirectory(nil)
         controllerForWidget(button)?.rebuildSettings(page: .keyMapping)
     }
 }
-private let onReloadKeymapSettings: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
+private let onReloadKeymapSettings: @MainActor @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
     MainActor.assumeIsolated {
         let controller = controllerForWidget(button)
         let count = gWindows.values.map { $0.reloadKeymapDiagnostics() }.max() ?? 0
@@ -118,7 +118,7 @@ private let onReloadKeymapSettings: @convention(c) (OpaquePointer?, gpointer?) -
         controller?.rebuildSettings(page: .keyMapping)
     }
 }
-private let onConfigDirectoryChosen: @convention(c) (UnsafeMutablePointer<GObject>?, OpaquePointer?, gpointer?) -> Void = { dialog, result, data in
+private let onConfigDirectoryChosen: @MainActor @convention(c) (UnsafeMutablePointer<GObject>?, OpaquePointer?, gpointer?) -> Void = { dialog, result, data in
     guard let data else { return }
     MainActor.assumeIsolated {
         let controller = Unmanaged<AppController>.fromOpaque(data).takeRetainedValue()

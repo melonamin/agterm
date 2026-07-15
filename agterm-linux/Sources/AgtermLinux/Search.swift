@@ -124,13 +124,13 @@ extension AppController {
     func searchClose() { searchSurface?.endSearch() }
 }
 
-private let onSearchChanged: @convention(c) (OpaquePointer?, gpointer?) -> Void = { entry, _ in
+private let onSearchChanged: @MainActor @convention(c) (OpaquePointer?, gpointer?) -> Void = { entry, _ in
     MainActor.assumeIsolated {
         let text = gtk_editable_get_text(entry).map { String(cString: $0) } ?? ""
         controllerForWidget(entry)?.searchQueryChanged(text)
     }
 }
-private let onSearchKey: @convention(c) (OpaquePointer?, UInt32, UInt32, UInt32, gpointer?) -> gboolean = { keys, keyval, _, state, _ in
+private let onSearchKey: @MainActor @convention(c) (OpaquePointer?, UInt32, UInt32, UInt32, gpointer?) -> gboolean = { keys, keyval, _, state, _ in
     let shift = (state & (1 << 0)) != 0
     let controller = MainActor.assumeIsolated { controllerForEventController(keys) }
     MainActor.assumeIsolated { controller?.noteSearchUserActivity() }
@@ -140,19 +140,19 @@ private let onSearchKey: @convention(c) (OpaquePointer?, UInt32, UInt32, UInt32,
     default: return 0
     }
 }
-private let onSearchPrev: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
+private let onSearchPrev: @MainActor @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
     MainActor.assumeIsolated {
         controllerForWidget(button)?.noteSearchUserActivity()
         controllerForWidget(button)?.searchNavigate(.previous)
     }
 }
-private let onSearchNext: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
+private let onSearchNext: @MainActor @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
     MainActor.assumeIsolated {
         controllerForWidget(button)?.noteSearchUserActivity()
         controllerForWidget(button)?.searchNavigate(.next)
     }
 }
-private let onSearchClose: @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
+private let onSearchClose: @MainActor @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
     MainActor.assumeIsolated {
         controllerForWidget(button)?.noteSearchUserActivity()
         controllerForWidget(button)?.searchClose()

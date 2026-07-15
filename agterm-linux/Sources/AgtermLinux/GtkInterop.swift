@@ -4,6 +4,11 @@
 import CGtk
 import agtermCore
 
+// GTK, GApplication, and GLib source callbacks are declared `@MainActor @convention(c)` at their
+// definitions. The C APIs cannot express executor isolation, but these callbacks are synchronously
+// delivered by the application-owned main context. Libghostty callbacks are intentionally excluded:
+// they may arrive on worker threads and must copy/retain their payload before hopping to the main actor.
+
 @inline(__always) func W(_ p: OpaquePointer?) -> UnsafeMutablePointer<GtkWidget>? { p.map { UnsafeMutablePointer($0) } }
 @inline(__always) func GLBR(_ p: OpaquePointer?) -> UnsafeMutablePointer<GtkListBoxRow>? { p.map { UnsafeMutablePointer($0) } }
 @inline(__always) func GLA(_ p: OpaquePointer?) -> UnsafeMutablePointer<GtkGLArea>? { p.map { UnsafeMutablePointer($0) } }

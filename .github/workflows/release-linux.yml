@@ -45,6 +45,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          fetch-tags: true
 
       - name: Resolve and verify release tag
         id: release
@@ -68,6 +69,7 @@ jobs:
             exit 1
           fi
           git checkout --detach "$COMMIT"
+          git rev-parse --verify 'v0.14.0^{commit}' >/dev/null
 
           VERSION="${TAG#linux-}"
           PACKAGE_VERSION="${VERSION#v}"
@@ -88,8 +90,10 @@ jobs:
           apt-get install -y --no-install-recommends \
             libgtk-4-dev libadwaita-1-dev libepoxy-dev pkg-config \
             librsvg2-dev libgirepository1.0-dev gobject-introspection \
-            git curl jq ca-certificates xz-utils unzip zsh file imagemagick \
-            rpm cpio desktop-file-utils patchelf ncurses-bin
+            git curl jq ca-certificates xz-utils unzip zsh file imagemagick ripgrep \
+            rpm cpio desktop-file-utils patchelf ncurses-bin \
+            at-spi2-core dbus-x11 gir1.2-atspi-2.0 python3-gi xvfb xauth \
+            libatk-bridge2.0-0 libgl1-mesa-dri libegl-mesa0 mesa-utils
           curl -fsSLo /tmp/swiftlint.zip \
             "https://github.com/realm/SwiftLint/releases/download/${SWIFTLINT_VERSION}/swiftlint_linux_amd64.zip"
           echo "${SWIFTLINT_SHA256}  /tmp/swiftlint.zip" | sha256sum --check
@@ -136,21 +140,62 @@ jobs:
       - name: Reject Linux CLI parser drift
         run: scripts/check-linux-cli-drift.sh
 
+      - name: Enforce host-free core boundary
+        run: scripts/check-linux-core-boundary.sh v0.14.0
+
+      - name: Reject whitespace errors
+        run: |
+          git diff --check
+          git diff --check v0.14.0...HEAD
+
       - name: Lint Swift sources
         run: swiftlint lint --strict --quiet
 
       - name: Cache vendored libghostty
+        id: ghostty-cache
         uses: actions/cache@v6
         with:
           path: agterm-linux/vendor/ghostty
           key: libghostty-x86_64-${{ hashFiles('scripts/setup-linux.sh', 'scripts/verify-linux-resources.sh', 'linux/ghostty-resources.env', 'linux/patches/ghostty-embedded-opengl.patch', 'linux/patches/ghostty-lib-resources.patch') }}
 
+      - name: Verify restored libghostty cache
+        if: steps.ghostty-cache.outputs.cache-hit == 'true'
+        run: |
+          test -s agterm-linux/vendor/ghostty/lib/libghostty.so
+          test -s agterm-linux/vendor/ghostty/include/ghostty.h
+          scripts/verify-linux-resources.sh agterm-linux/vendor/ghostty/share
+
+      - name: Test deterministic Ghostty resources
+        run: scripts/test-linux-resources.sh
+
       - name: Build libghostty
         run: scripts/setup-linux.sh
+
+      - name: Verify built libghostty resources
+        run: scripts/verify-linux-resources.sh agterm-linux/vendor/ghostty/share
 
       - name: Test Linux package
         working-directory: agterm-linux
         run: swift test
+
+      - name: Build Linux Debug products for GTK smoke
+        working-directory: agterm-linux
+        run: |
+          swift build --product AgtermLinux
+          swift build --product agtermctl-linux
+
+      - name: GTK AT-SPI smoke tests
+        env:
+          AGTERM_UI_ARTIFACT_DIR: ${{ github.workspace }}/artifacts/linux-ui
+        run: scripts/test-linux-ui.sh
+
+      - name: Upload GTK diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: linux-release-ui-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/linux-ui
+          if-no-files-found: warn
 
       - name: Build agterm-linux
         working-directory: agterm-linux

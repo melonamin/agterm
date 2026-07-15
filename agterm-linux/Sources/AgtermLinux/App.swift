@@ -28,7 +28,7 @@ struct AgtermApp {
     }
 }
 
-private let onActivate: @convention(c) (OpaquePointer?, gpointer?) -> Void = { app, _ in
+private let onActivate: @MainActor @convention(c) (OpaquePointer?, gpointer?) -> Void = { app, _ in
     MainActor.assumeIsolated { activateApplication(app) }
 }
 
@@ -36,7 +36,7 @@ private let onActivate: @convention(c) (OpaquePointer?, gpointer?) -> Void = { a
 /// second launch forwarded to the running single instance — opens a session per path in the frontmost
 /// window (a file arg → its parent dir), then raises that window. Routes through the SAME setup as
 /// activate, so a cold `agterm-linux <dir>` boots the app and lands in the directory.
-private let onOpen: @convention(c) (OpaquePointer?, UnsafeMutablePointer<OpaquePointer?>?, gint, UnsafePointer<CChar>?, gpointer?) -> Void = { app, files, nFiles, _, _ in
+private let onOpen: @MainActor @convention(c) (OpaquePointer?, UnsafeMutablePointer<OpaquePointer?>?, gint, UnsafePointer<CChar>?, gpointer?) -> Void = { app, files, nFiles, _, _ in
     MainActor.assumeIsolated {
         activateApplication(app)   // ensure setup + a window (or raise the already-running instance)
         guard let files, nFiles > 0,
@@ -113,7 +113,7 @@ func linuxSettingsStore() -> SettingsStore {
 /// On clean quit: capture each pane's foreground command (when restore is enabled), then flush every
 /// open window's snapshot — AppStore only saves on structural mutations, so a live `cd` since the last
 /// one would otherwise be lost.
-private let onShutdown: @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _ in
+private let onShutdown: @MainActor @convention(c) (OpaquePointer?, gpointer?) -> Void = { _, _ in
     MainActor.assumeIsolated { flushOnQuit() }
 }
 
@@ -195,7 +195,7 @@ nonisolated private func iconResourceCandidates() -> [String] {
     }
 }
 
-private let onColorSchemeChanged: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { _, _, _ in
+private let onColorSchemeChanged: @MainActor @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { _, _, _ in
     MainActor.assumeIsolated {
         for ctl in gWindows.values { ctl.reapplyColorScheme() }
         gWindows.values.first?.reloadConfig()
@@ -205,14 +205,14 @@ private let onColorSchemeChanged: @convention(c) (OpaquePointer?, OpaquePointer?
 
 /// SIGTERM/SIGINT → quit the GApplication on the main loop so its "shutdown" handler (flushOnQuit) runs.
 /// Returns G_SOURCE_REMOVE (the signal source is one-shot — the app is on its way out).
-private let onQuitSignal: @convention(c) (gpointer?) -> gboolean = { _ in
+private let onQuitSignal: @MainActor @convention(c) (gpointer?) -> gboolean = { _ in
     MainActor.assumeIsolated { if let app = gApp { g_application_quit(GAPP(app)) } }
     return 0
 }
 
 /// The `app.reveal` action handler: a clicked notification fires this with the pane-qualified identity
 /// (`window:session:pane`) or, for older/plain notifications, just the session id.
-private let onRevealAction: @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { _, param, _ in
+private let onRevealAction: @MainActor @convention(c) (OpaquePointer?, OpaquePointer?, gpointer?) -> Void = { _, param, _ in
     guard let param, let cstr = g_variant_get_string(param, nil) else { return }
     let target = String(cString: cstr)
     MainActor.assumeIsolated {
