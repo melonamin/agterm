@@ -308,34 +308,22 @@ extension AppController {
         guard let primary = surfaces[s.id]?.glArea else { return }
         let primaryWidget = W(primary)
         let splitWidget = W(split.glArea)
-        let showingBoth = s.isSplit
-        let showingSplitMaximized = !s.isSplit && s.splitFocused
-        if showingBoth {
-            if gtk_paned_get_start_child(paned) != primaryWidget {
-                gtk_paned_set_start_child(paned, nil)
-                gtk_paned_set_start_child(paned, primaryWidget)
-            }
-            if gtk_paned_get_end_child(paned) != splitWidget {
-                gtk_paned_set_end_child(paned, nil)
-                gtk_paned_set_end_child(paned, splitWidget)
-            }
-            gtk_widget_set_visible(primaryWidget, 1)
-            gtk_widget_set_visible(splitWidget, 1)
-        } else if showingSplitMaximized {
-            if gtk_paned_get_end_child(paned) == splitWidget { gtk_paned_set_end_child(paned, nil) }
-            if gtk_paned_get_start_child(paned) != splitWidget {
-                gtk_paned_set_start_child(paned, nil)
-                gtk_paned_set_start_child(paned, splitWidget)
-            }
-            gtk_widget_set_visible(splitWidget, 1)
-        } else {
-            if gtk_paned_get_end_child(paned) == splitWidget { gtk_paned_set_end_child(paned, nil) }
-            if gtk_paned_get_start_child(paned) != primaryWidget {
-                gtk_paned_set_start_child(paned, nil)
-                gtk_paned_set_start_child(paned, primaryWidget)
-            }
-            gtk_widget_set_visible(primaryWidget, 1)
+        let layout = SplitPaneLayout(isSplit: s.isSplit, splitFocused: s.splitFocused)
+        // Keep both GtkGLAreas in stable paned slots for the split's entire lifetime. Unparenting a
+        // GtkGLArea unrealizes it and invalidates the GL context that libghostty's surface was created
+        // against; reattaching the same widget then leaves its terminal buffer alive but the pane blank.
+        // GtkPaned gives the sole visible child the full allocation, so visibility alone implements the
+        // tmux-style hidden-split maximization without rehosting either renderer.
+        let startWidget = layout.startSlot == .primary ? primaryWidget : splitWidget
+        let endWidget = layout.endSlot == .primary ? primaryWidget : splitWidget
+        if gtk_paned_get_start_child(paned) != startWidget {
+            gtk_paned_set_start_child(paned, startWidget)
         }
+        if gtk_paned_get_end_child(paned) != endWidget {
+            gtk_paned_set_end_child(paned, endWidget)
+        }
+        gtk_widget_set_visible(primaryWidget, layout.primaryVisible ? 1 : 0)
+        gtk_widget_set_visible(splitWidget, layout.splitVisible ? 1 : 0)
     }
 
     func capturePanedRatio(_ paned: OpaquePointer?) {
