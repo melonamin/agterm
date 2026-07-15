@@ -192,7 +192,7 @@ diff --git i/src/renderer/OpenGL.zig w/src/renderer/OpenGL.zig
 index 4b01da0..5148c36 100644
 --- i/src/renderer/OpenGL.zig
 +++ w/src/renderer/OpenGL.zig
-@@ -160,19 +160,24 @@ fn prepareContext(getProcAddress: anytype) !void {
+@@ -160,18 +160,23 @@ fn prepareContext(getProcAddress: anytype) !void {
 
  /// This is called early right after surface creation.
  pub fn surfaceInit(surface: *apprt.Surface) !void {
