@@ -7,8 +7,9 @@ Full detail for every `agtermctl` command. See `SKILL.md` for the model and addr
 
 - **Socket resolution** (when `--socket` is omitted): `AGTERM_SOCKET` is the path the running app
   bound; agtermctl resolves the same rendezvous: `<AGTERM_STATE_DIR>/agterm.sock`, else
-  `<$HOME>/Library/Application Support/agterm/agterm.sock`. Passing `--socket "$AGTERM_SOCKET"` is the
-  safe explicit form.
+  `<$HOME>/Library/Application Support/agterm/agterm.sock` on macOS or
+  `${XDG_DATA_HOME:-$HOME/.local/share}/agterm/agterm.sock` on Linux. Passing
+  `--socket "$AGTERM_SOCKET"` is the safe explicit form.
 - **`--json`**: prints the raw response object. Without it, ordinary mutations print `ok`, batch
   close/move prints the affected session count, and `tree`/`window list` print a human listing. Use
   `--json` when you need to read ids or values back.

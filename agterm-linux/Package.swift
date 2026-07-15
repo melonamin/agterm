@@ -42,7 +42,7 @@ let package = Package(
             name: "agtermctlLinux",
             dependencies: [
                 "LinuxIntegrations",
-                .product(name: "agtermCore", package: "agtermCore"),
+                .product(name: "agtermctlKit", package: "agtermCore"),
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],
             path: "Sources/agtermctl"
@@ -54,6 +54,7 @@ let package = Package(
         .testTarget(
             name: "agtermctlLinuxTests",
             dependencies: ["agtermctlLinux", "LinuxIntegrations",
+                           .product(name: "agtermCore", package: "agtermCore"),
                            .product(name: "ArgumentParser", package: "swift-argument-parser")]
         ),
         .testTarget(

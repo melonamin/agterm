@@ -55,6 +55,8 @@ jobs:
       - name: swift test
         working-directory: agtermCore
         run: swift test
+      - name: Reject Linux CLI parser drift
+        run: scripts/check-linux-cli-drift.sh
 
   lint-linux:
     name: SwiftLint (Linux)

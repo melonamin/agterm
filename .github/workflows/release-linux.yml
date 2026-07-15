@@ -133,6 +133,9 @@ jobs:
         working-directory: agtermCore
         run: swift test
 
+      - name: Reject Linux CLI parser drift
+        run: scripts/check-linux-cli-drift.sh
+
       - name: Lint Swift sources
         run: swiftlint lint --strict --quiet
 

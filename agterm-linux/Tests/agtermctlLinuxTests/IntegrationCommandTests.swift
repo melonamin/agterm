@@ -7,7 +7,7 @@ import Testing
 struct IntegrationCommandTests {
     @Test("status accepts the control socket compatibility option")
     func statusParsing() throws {
-        let command = try Agtermctl.parseAsRoot([
+        let command = try AgtermctlLinux.parseAsRoot([
             "integration", "status", "--json", "--socket", "/tmp/ignored.sock",
         ])
         let status = try #require(command as? Integration.Status)
@@ -16,7 +16,7 @@ struct IntegrationCommandTests {
 
     @Test("install supports hooks dry-run")
     func hooksDryRunParsing() throws {
-        let command = try Agtermctl.parseAsRoot([
+        let command = try AgtermctlLinux.parseAsRoot([
             "integration", "install", "hooks", "--dry-run", "--socket", "/tmp/ignored.sock",
         ])
         let install = try #require(command as? Integration.Install)
@@ -28,7 +28,7 @@ struct IntegrationCommandTests {
     @Test("install rejects unknown integration")
     func invalidIntegration() throws {
         #expect(throws: Error.self) {
-            _ = try Agtermctl.parseAsRoot(["integration", "install", "unknown"])
+            _ = try AgtermctlLinux.parseAsRoot(["integration", "install", "unknown"])
         }
     }
 
