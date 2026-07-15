@@ -1,0 +1,94 @@
+{
+  "schemaVersion": 1,
+  "upstreamRange": {
+    "from": "v0.13.0",
+    "to": "v0.14.0",
+    "targetCommit": "ed0e4c6c48f1422b3e0428b46779fd6e9d46c4d8"
+  },
+  "excludedPostTagCommits": [
+    {
+      "commit": "06a5dff",
+      "subject": "docs: note setuid foreground processes are omitted from tree",
+      "disposition": "excluded-post-tag"
+    },
+    {
+      "commit": "8496d9e",
+      "subject": "test: cover keymap rebind of arrow-bound actions at launch and via live reload",
+      "disposition": "excluded-post-tag"
+    }
+  ],
+  "changes": [
+    {
+      "commit": "2a23eecc70b771f11e57c8cd4bc48015b77fbef2",
+      "subject": "feat: add Pi agent-status support to Install Agent Status Hooks (#208)",
+      "disposition": "inherited-and-linux-adaptation-required",
+      "inherited": [
+        "agtermCore Pi path, ownership marker, overwrite policy, and tests",
+        "Pi extension resource and lifecycle semantics",
+        "shell hook exclusions and shared documentation/site changes"
+      ],
+      "linuxAdaptation": [
+        "stage the Pi extension in every Linux package",
+        "add Pi status, preflight, install, rollback, CLI, and GTK preferences coverage through LinuxIntegrations"
+      ],
+      "planTask": 9
+    },
+    {
+      "commit": "45136981a70d6ffa58a19accb3397562ca4e6202",
+      "subject": "feat: dashboard single-click-to-enter, title-bar button, and modal titles",
+      "disposition": "inherited-and-linux-adaptation-required",
+      "inherited": [
+        "host-free DashboardController selection state and tests",
+        "shared user-facing documentation"
+      ],
+      "macOSOnly": [
+        "SwiftUI/AppKit dashboard view, title-bar composition, menu wiring, and XCUITests"
+      ],
+      "linuxAdaptation": [
+        "native GTK/libadwaita single-click selection flash and cancellation",
+        "content-header dashboard button and grouping",
+        "solid dashboard modal background and stripped dashboard/terminal-zoom titles",
+        "Linux unit and AT-SPI coverage"
+      ],
+      "planTask": 10
+    },
+    {
+      "commit": "309f4eac2bd8cf866f17f4da12f1e418b1b8852f",
+      "subject": "docs: note squash-merge worktree cleanup gotchas in CLAUDE.md",
+      "disposition": "inherited-documentation",
+      "planTask": 12
+    },
+    {
+      "commit": "e4e8b94a4f65ceb17eb5d127505b01121286bb47",
+      "subject": "docs: add dashboard screenshot to README and website",
+      "disposition": "inherited-documentation",
+      "notes": "Shared screenshot and website assets are inherited; Linux-specific product claims remain subject to the final parity audit.",
+      "planTask": 12
+    },
+    {
+      "commit": "760af491f01793d4cb8ccc88594b7c9b515fe6f0",
+      "subject": "fix(site): align the surfaces feature row so Dashboard shares it with Windows",
+      "disposition": "inherited-documentation",
+      "planTask": 12
+    },
+    {
+      "commit": "20ce52ea57e9bf68bd878e2c59560a2228fdf065",
+      "subject": "docs: break up the dense agent-status paragraphs",
+      "disposition": "inherited-documentation",
+      "planTask": 12
+    },
+    {
+      "commit": "298d3e2a396c2ae207de0fcdf6f7ff42e6e8f754",
+      "subject": "docs: note website carousel and grid gotchas in CLAUDE.md",
+      "disposition": "inherited-documentation",
+      "planTask": 12
+    },
+    {
+      "commit": "ed0e4c6c48f1422b3e0428b46779fd6e9d46c4d8",
+      "subject": "docs: update changelog for v0.14.0",
+      "disposition": "inherited-release-documentation",
+      "notes": "CHANGELOG.md is accepted verbatim; Linux release notes are maintained separately.",
+      "planTask": 12
+    }
+  ]
+}
