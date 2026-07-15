@@ -3,6 +3,7 @@
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -28,7 +29,11 @@ def collect(node, role=None, name=None, out=None):
         out = []
     try:
         node_name = node.get_name() or ""
-        if (role is None or node.get_role_name() == role) and (name is None or node_name == name):
+        node_role = node.get_role_name()
+        role_matches = role is None or node_role == role or (
+            role == "button" and node_role == "push button"
+        )
+        if role_matches and (name is None or node_name == name):
             out.append(node)
         for index in range(node.get_child_count()):
             collect(node.get_child_at_index(index), role, name, out)
@@ -51,7 +56,7 @@ def find_app(process_id):
     return matches[-1] if matches else None
 
 
-def wait_for(predicate, message, timeout=8):
+def wait_for(predicate, message, timeout=12):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         value = predicate()
@@ -63,6 +68,17 @@ def wait_for(predicate, message, timeout=8):
 
 def named(root, name, role=None):
     matches = collect(root, role=role, name=name)
+    return matches[0] if matches else None
+
+
+def preferences_windows(root):
+    return collect(root, role="dialog", name="Preferences") + collect(
+        root, role="panel", name="Preferences"
+    )
+
+
+def preferences_window(root):
+    matches = preferences_windows(root)
     return matches[0] if matches else None
 
 
@@ -111,10 +127,29 @@ def describe_tree(node, depth=0):
         pass
 
 
+def press_x11_key(key, process_id, window_title=None):
+    if window_title:
+        app = wait_for(lambda: find_app(process_id), "agterm app disappeared before key input")
+        window = wait_for(
+            lambda: named(app, window_title, role="frame"),
+            f"agterm window {window_title!r} disappeared before key input",
+        )
+        focus_accessible_window(window, process_id)
+    else:
+        focus_window(process_id)
+    time.sleep(0.5)
+    subprocess.run(
+        ["xdotool", "key", "--clearmodifiers", key],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
 def press_ctrl_comma(process_id, window_title=None):
     # AT-SPI's device-event controller cannot inject keys on non-Mutter Wayland.
     # Hyprland's compositor dispatcher sends the real shortcut to this test PID;
-    # X11 and other environments continue through AT-SPI below.
+    # The isolated X11 path uses xdotool against its private Xvfb display.
     if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE") and shutil.which("hyprctl"):
         target = f"title:^({window_title})$" if window_title else f"pid:{process_id}"
         subprocess.run(
@@ -127,14 +162,7 @@ def press_ctrl_comma(process_id, window_title=None):
             stderr=subprocess.DEVNULL,
         )
         return
-    control_mask = 1 << int(Atspi.ModifierType.CONTROL)
-    Atspi.generate_keyboard_event(
-        control_mask, None, Atspi.KeySynthType.LOCKMODIFIERS
-    )
-    Atspi.generate_keyboard_event(ord(","), None, Atspi.KeySynthType.PRESSRELEASE)
-    Atspi.generate_keyboard_event(
-        control_mask, None, Atspi.KeySynthType.UNLOCKMODIFIERS
-    )
+    press_x11_key("ctrl+comma", process_id, window_title)
 
 
 def press_ctrl_shift_p(process_id, window_title=None):
@@ -151,10 +179,7 @@ def press_ctrl_shift_p(process_id, window_title=None):
             stderr=subprocess.DEVNULL,
         )
         return
-    modifiers = (1 << int(Atspi.ModifierType.CONTROL)) | (1 << int(Atspi.ModifierType.SHIFT))
-    Atspi.generate_keyboard_event(modifiers, None, Atspi.KeySynthType.LOCKMODIFIERS)
-    Atspi.generate_keyboard_event(ord("p"), None, Atspi.KeySynthType.PRESSRELEASE)
-    Atspi.generate_keyboard_event(modifiers, None, Atspi.KeySynthType.UNLOCKMODIFIERS)
+    press_x11_key("ctrl+shift+p", process_id, window_title)
 
 
 def press_escape(process_id, window_title=None):
@@ -167,7 +192,7 @@ def press_escape(process_id, window_title=None):
             stderr=subprocess.DEVNULL,
         )
         return
-    Atspi.generate_keyboard_event(0xFF1B, None, Atspi.KeySynthType.PRESSRELEASE)
+    press_x11_key("Escape", process_id, window_title)
 
 
 def press_return(process_id, window_title=None):
@@ -180,7 +205,7 @@ def press_return(process_id, window_title=None):
             stderr=subprocess.DEVNULL,
         )
         return
-    Atspi.generate_keyboard_event(0xFF0D, None, Atspi.KeySynthType.PRESSRELEASE)
+    press_x11_key("Return", process_id, window_title)
 
 
 def press_right(process_id, window_title=None):
@@ -213,7 +238,7 @@ def press_right(process_id, window_title=None):
             stderr=subprocess.DEVNULL,
         )
         return
-    Atspi.generate_keyboard_event(0xFF53, None, Atspi.KeySynthType.PRESSRELEASE)
+    press_x11_key("Right", process_id, window_title)
 
 
 def focus_window(process_id):
@@ -225,6 +250,11 @@ def focus_window(process_id):
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+        return
+    app = wait_for(lambda: find_app(process_id), "agterm app disappeared before focus")
+    windows = collect(app, role="frame")
+    assert windows, "agterm has no accessible window to focus"
+    focus_accessible_window(windows[-1], process_id)
 
 
 def focus_accessible_window(window, process_id):
@@ -238,13 +268,29 @@ def focus_accessible_window(window, process_id):
             stderr=subprocess.DEVNULL,
         )
         return
-    component = window.get_component_iface()
-    assert component and component.grab_focus(), "could not focus the requested accessible window"
+    title = window.get_name() or ""
+    subprocess.run(
+        [
+            "xdotool", "search", "--onlyvisible", "--name", f"^{re.escape(title)}$",
+            "windowactivate", "--sync", "%@",
+        ],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
 
 def mouse_click(node_provider, process_id, window_title=None, button="right"):
     """Send a real pointer click to an accessible in one exact GTK window."""
-    focus_window(process_id)
+    if window_title and not os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"):
+        app = wait_for(lambda: find_app(process_id), "agterm app disappeared before pointer input")
+        window = wait_for(
+            lambda: named(app, window_title, role="frame"),
+            f"agterm window {window_title!r} disappeared before pointer input",
+        )
+        focus_accessible_window(window, process_id)
+    else:
+        focus_window(process_id)
     deadline = time.monotonic() + 8
     bounds = None
     while time.monotonic() < deadline:
@@ -304,10 +350,21 @@ def mouse_click(node_provider, process_id, window_title=None, button="right"):
         number = 3 if button == "right" else 1
         assert Atspi.generate_mouse_event(x, y, f"b{number}c"), "AT-SPI click failed"
         return
-    x = bounds.x + max(1, bounds.width // 2)
-    y = bounds.y + max(1, bounds.height // 2)
+    local = component.get_extents(Atspi.CoordType.WINDOW)
+    geometry = subprocess.check_output(
+        ["xdotool", "getactivewindow", "getwindowgeometry", "--shell"], text=True
+    )
+    origin = dict(line.split("=", 1) for line in geometry.splitlines() if "=" in line)
+    x = int(origin["X"]) + local.x + max(1, local.width // 2)
+    y = int(origin["Y"]) + local.y + max(1, local.height // 2)
     number = 3 if button == "right" else 1
-    assert Atspi.generate_mouse_event(x, y, f"b{number}c"), "AT-SPI click failed"
+    time.sleep(0.2)
+    subprocess.run(
+        ["xdotool", "mousemove", "--sync", str(x), str(y), "click", str(number)],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
 
 def right_click(node_provider, process_id, window_title=None):
@@ -342,7 +399,7 @@ def control_json(env, *arguments):
         [CTL, *arguments, "--socket", env["AGTERM_CONTROL_SOCKET"]],
         env=env,
         text=True,
-        timeout=5,
+        timeout=10,
     )
     return json.loads(output)
 
@@ -433,16 +490,16 @@ def verify_normal_toolbar(env, state, home):
 
         assert not named(app, "Main Menu"), "toolbar still exposes the removed Main Menu button"
 
-        assert not named(app, "Preferences", role="dialog"), "Preferences was open before shortcut verification"
+        assert not preferences_window(app), "Preferences was open before shortcut verification"
         focus_window(process.pid)
         press_ctrl_comma(process.pid)
         wait_for(
-            lambda: named(app, "Preferences", role="dialog"),
+            lambda: preferences_window(app),
             "Ctrl+, did not open Preferences",
         )
         press_ctrl_comma(process.pid)
         wait_for(
-            lambda: len(collect(app, role="dialog", name="Preferences")) == 1,
+            lambda: len(preferences_windows(app)) == 1,
             "Ctrl+, did not preserve the single Preferences dialog",
         )
         print("OK: menu-free toolbar and Ctrl+, Preferences shortcut")
@@ -716,7 +773,7 @@ def verify_window_callback_ownership(env):
         focus_accessible_window(primary, process.pid)
         press_ctrl_comma(process.pid, window_title="primary-session")
         preferences = wait_for(
-            lambda: named(app, "Preferences", role="dialog"),
+            lambda: preferences_window(app),
             "primary Preferences dialog did not open",
         )
         select_window(env, secondary_id)
@@ -729,7 +786,7 @@ def verify_window_callback_ownership(env):
         select_window(env, primary_id)
         press_escape(process.pid, window_title="primary-session")
         wait_for(
-            lambda: not named(app, "Preferences", role="dialog"),
+            lambda: not preferences_window(app),
             "background Preferences dialog did not close through its owning window",
         )
 
@@ -1202,7 +1259,10 @@ def verify_preferences_pages(env, home):
             "Pi row did not refresh to Current",
         )
 
-        skill_row = wait_for(lambda: named(app, "Agent Skill"), "Agent Skill integration row is missing")
+        skill_row = wait_for(
+            lambda: named(app, "Agent Skill", role="list item"),
+            "Agent Skill integration row is missing",
+        )
         install = wait_for(
             lambda: next((item for item in descendants(skill_row) if item.get_name() == "Install"), None),
             "Agent Skill did not become installable",
@@ -1274,11 +1334,11 @@ def verify_hidden_toolbar(env, state):
             env, "surface", "zoom", "hide", "--target", "active",
             "--window", window_id, "--json",
         )
-        assert not named(app, "Preferences", role="dialog"), "Preferences was open before hidden-toolbar shortcut"
+        assert not preferences_window(app), "Preferences was open before hidden-toolbar shortcut"
         focus_window(process.pid)
         press_ctrl_comma(process.pid)
         wait_for(
-            lambda: named(app, "Preferences", role="dialog"),
+            lambda: preferences_window(app),
             "Ctrl+, did not open Preferences with toolbar hidden",
         )
         print("OK: hidden modal chrome stays hidden and Preferences remains keyboard-accessible")
@@ -1392,7 +1452,7 @@ def verify_auto_follow(env, state):
             return next((session for session in sessions if session["id"] == blocked_id), {}).get("active")
 
         wait_for(
-            lambda: named(app, "Preferences", role="dialog"),
+            lambda: preferences_window(app),
             "startup Preferences dialog did not open for auto-follow test",
         )
         set_status("blocked")

@@ -118,7 +118,7 @@ jobs:
           apt-get update
           apt-get install -y --no-install-recommends \
             libgtk-4-dev libadwaita-1-dev libepoxy-dev pkg-config git curl ca-certificates xz-utils ncurses-bin \
-            ripgrep zsh at-spi2-core dbus-x11 gir1.2-atspi-2.0 python3-gi xvfb xauth \
+            ripgrep zsh at-spi2-core dbus-x11 gir1.2-atspi-2.0 openbox python3-gi xdotool xvfb xauth \
             libatk-bridge2.0-0 libgl1-mesa-dri libegl-mesa0 mesa-utils
           curl -fsSLo /tmp/zig.tar.xz \
             https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz

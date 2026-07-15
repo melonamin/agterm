@@ -13,7 +13,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-for command in dbus-run-session xvfb-run "$PYTHON"; do
+for command in dbus-run-session openbox xdotool xvfb-run "$PYTHON"; do
   if ! command -v "$command" >/dev/null 2>&1; then
     echo "missing Linux UI test dependency: $command" >&2
     exit 1
@@ -42,7 +42,7 @@ export AGTERM_TEST_BIN="$BIN"
 export AGTERM_TEST_CTL="$CTL"
 export AGTERM_RESOURCE_ROOT="${AGTERM_RESOURCE_ROOT:-$ROOT/agterm/Resources}"
 export GDK_BACKEND=x11
-export GTK_A11Y=1
+export GTK_A11Y=atspi
 export NO_AT_BRIDGE=0
 export LIBGL_ALWAYS_SOFTWARE=1
 export GALLIUM_DRIVER=llvmpipe
@@ -52,12 +52,18 @@ unset WAYLAND_DISPLAY HYPRLAND_INSTANCE_SIGNATURE SWAYSOCK
 
 LOG="$ARTIFACT_DIR/atspi.log"
 XVFB_LOG="$ARTIFACT_DIR/xvfb.log"
+WM_LOG="$ARTIFACT_DIR/openbox.log"
 set +e
 dbus-run-session -- \
   xvfb-run --auto-servernum \
     --error-file="$XVFB_LOG" \
     --server-args="-screen 0 1440x900x24 -nolisten tcp +extension GLX +render -noreset" \
-    "$PYTHON" "$ROOT/agterm-linux/tests/atspi_smoke.py" 2>&1 | tee "$LOG"
+    bash -c '
+      openbox --sm-disable >"$1" 2>&1 &
+      wm_pid=$!
+      trap "kill $wm_pid 2>/dev/null || true" EXIT
+      "$2" "$3"
+    ' _ "$WM_LOG" "$PYTHON" "$ROOT/agterm-linux/tests/atspi_smoke.py" 2>&1 | tee "$LOG"
 status="${PIPESTATUS[0]}"
 set -e
 
