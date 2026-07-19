@@ -21,8 +21,8 @@ permissions:
   attestations: write
 
 env:
-  UPSTREAM_BASE_TAG: "v0.14.0"
-  UPSTREAM_BASE_COMMIT: "ed0e4c6c48f1422b3e0428b46779fd6e9d46c4d8"
+  UPSTREAM_BASE_TAG: "v0.15.2"
+  UPSTREAM_BASE_COMMIT: "95926fc88fd7c6e7f3e1acf229cb2dab637fdbe0"
   SWIFTLINT_VERSION: "0.65.0"
   SWIFTLINT_SHA256: "79306a34e5c7cc55a220cd108cbb861dcad5f10138dcdf261e2624ae8b0a486b"
   LINUX_SOURCEKIT_LIB_PATH: "/usr/lib/libsourcekitdInProc.so"
@@ -141,12 +141,12 @@ jobs:
         run: scripts/check-linux-cli-drift.sh
 
       - name: Enforce host-free core boundary
-        run: scripts/check-linux-core-boundary.sh v0.14.0
+        run: scripts/check-linux-core-boundary.sh "$UPSTREAM_BASE_TAG"
 
       - name: Reject whitespace errors
         run: |
           git diff --check
-          git diff --check v0.14.0...HEAD
+          git diff --check "$UPSTREAM_BASE_TAG"...HEAD
 
       - name: Test published-release verifier
         run: scripts/test-published-linux-release.sh
