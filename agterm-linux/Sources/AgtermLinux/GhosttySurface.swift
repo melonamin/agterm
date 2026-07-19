@@ -217,10 +217,12 @@ final class GhosttySurface: TerminalSurface {
 
     private func pushSize() {
         guard let surface else { return }
-        let scale = gtk_widget_get_scale_factor(W(glArea))
-        let w = UInt32(max(1, gtk_widget_get_width(W(glArea)) * scale))
-        let h = UInt32(max(1, gtk_widget_get_height(W(glArea)) * scale))
-        ghostty_surface_set_size(surface, w, h)
+        let viewport = GhosttySurfaceGeometry.initialBackingSize(
+            gtkWidth: gtk_widget_get_width(W(glArea)),
+            gtkHeight: gtk_widget_get_height(W(glArea)),
+            scaleFactor: gtk_widget_get_scale_factor(W(glArea))
+        )
+        ghostty_surface_set_size(surface, viewport.width, viewport.height)
     }
 
     func render() {
@@ -377,10 +379,11 @@ final class GhosttySurface: TerminalSurface {
         guard let surface else { return }
         let scale = gtk_widget_get_scale_factor(W(glArea))
         ghostty_surface_set_content_scale(surface, Double(scale), Double(scale))
-        // GtkGLArea::resize already reports the viewport in device pixels (it emits
-        // width*scale, height*scale). Pass them straight through — multiplying by scale
-        // again over-sizes the grid on HiDPI, pushing the bottom rows off-screen.
-        ghostty_surface_set_size(surface, UInt32(max(1, width)), UInt32(max(1, height)))
+        let viewport = GhosttySurfaceGeometry.resizedViewport(
+            widthPixels: width,
+            heightPixels: height
+        )
+        ghostty_surface_set_size(surface, viewport.width, viewport.height)
     }
 
     /// Forward a GTK scroll event to libghostty. ghostty's convention is "positive = up,
@@ -409,14 +412,15 @@ final class GhosttySurface: TerminalSurface {
         return ghosttyMods(gtk_event_controller_get_current_event_state(controller).rawValue)
     }
 
-    /// Forward the pointer position (device pixels) so libghostty can build mouse reports
-    /// for mouse-tracking TUIs (Claude, vim, htop) and extend drag-selections. Without
-    /// this, apps on the alternate screen never see the wheel/clicks. Also serves the
-    /// "enter" signal (same shape), so hover state arms as soon as the pointer arrives.
+    /// Forward the pointer position in GTK widget coordinates; the embedded libghostty API
+    /// applies the surface content scale before it builds selections and mouse reports for
+    /// TUIs (Claude, vim, htop). Without this, apps on the alternate screen never see the
+    /// wheel/clicks. Also serves the "enter" signal (same shape), so hover state arms as soon
+    /// as the pointer arrives.
     func mouseMoved(_ controller: OpaquePointer?, x: Double, y: Double) {
         guard let surface else { return }
-        let scale = Double(gtk_widget_get_scale_factor(W(glArea)))
-        ghostty_surface_mouse_pos(surface, x * scale, y * scale, currentMods(controller))
+        let point = GhosttySurfaceGeometry.pointerPosition(gtkX: x, gtkY: y)
+        ghostty_surface_mouse_pos(surface, point.x, point.y, currentMods(controller))
     }
 
     /// Pointer left the surface: report an out-of-bounds position so libghostty clears
@@ -428,9 +432,9 @@ final class GhosttySurface: TerminalSurface {
 
     func mouseButton(_ gesture: OpaquePointer?, pressed: Bool, x: Double, y: Double) {
         guard let surface else { return }
-        let scale = Double(gtk_widget_get_scale_factor(W(glArea)))
+        let point = GhosttySurfaceGeometry.pointerPosition(gtkX: x, gtkY: y)
         let mods = currentMods(gesture)
-        ghostty_surface_mouse_pos(surface, x * scale, y * scale, mods)
+        ghostty_surface_mouse_pos(surface, point.x, point.y, mods)
         let btn = gesture.map { gtk_gesture_single_get_current_button($0) } ?? 1
         let gbtn: ghostty_input_mouse_button_e = btn == 2 ? GHOSTTY_MOUSE_MIDDLE : (btn == 3 ? GHOSTTY_MOUSE_RIGHT : GHOSTTY_MOUSE_LEFT)
         _ = ghostty_surface_mouse_button(surface, pressed ? GHOSTTY_MOUSE_PRESS : GHOSTTY_MOUSE_RELEASE, gbtn, mods)

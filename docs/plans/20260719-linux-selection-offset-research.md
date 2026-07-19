@@ -2,18 +2,19 @@
 
 ## Outcome
 
-The Linux selection offset is caused by inconsistent initial and subsequent terminal surface sizing on
-scaled displays.
-The pointer path is consistent with Ghostty's GTK frontend and should keep multiplying GTK widget coordinates
-by the content scale.
-The incorrect path is `GhosttySurface.pushSize()`, which multiplies the GTK widget width and height by that
-scale before passing them to `ghostty_surface_set_size`.
+The Linux selection offset was caused by scaling GTK pointer coordinates twice at the embedded libghostty
+C API boundary.
+GTK event controllers report positions in widget coordinates.
+The Linux port multiplied those positions by the GTK scale factor before calling
+`ghostty_surface_mouse_pos`, but the embedded implementation applies its stored content scale internally.
+At 2x scale, a pointer halfway down the widget was therefore reported at the bottom of libghostty's grid,
+placing the selection well below the cursor.
 
-On a 2x display, libghostty therefore starts with a surface grid approximately twice the visible height.
-A pointer at the middle of the widget maps to the middle of that oversized grid, so the selected row appears
-well below the pointer.
-The regular `GtkGLArea::resize` path passes width and height through unchanged and should repair the mismatch
-after the first real window resize.
+Surface sizes use a different contract.
+`gtk_widget_get_width/height` are logical widget dimensions and need conversion to backing pixels during
+surface creation, while `GtkGLArea::resize` already reports the physical GL viewport and must pass through.
+Scaling the resize callback again makes the PTY larger than the visible terminal, leaving its prompt in
+unreachable rows rather than scrollback.
 
 ## Evidence
 
@@ -24,37 +25,31 @@ after the first real window resize.
 - `GtkGLArea::resize` reports viewport width and height and fires once on realization and after realized-size
   changes.
   See [`Gtk.GLArea::resize`](https://docs.gtk.org/gtk4/signal.GLArea.resize.html).
-- The pinned Ghostty GTK frontend multiplies pointer coordinates by the widget scale factor, but stores and
-  forwards `GtkGLArea::resize` width and height without multiplying them.
-  It also initializes the core surface from the first resize specifically to avoid an incorrect PTY size.
+- GTK's `GtkGLArea` implementation allocates its framebuffer as `widget width/height * scale`, then emits
+  those backing-pixel values through `resize` and uses them for `glViewport`.
+  See GTK's [`gtkglarea.c`](https://gitlab.gnome.org/GNOME/gtk/-/blob/main/gtk/gtkglarea.c).
+- The pinned Ghostty GTK frontend calls the core directly, so it scales pointer positions before that call.
   See Ghostty's pinned [`surface.zig`](https://github.com/ghostty-org/ghostty/blob/4dcb09ada0c0909717d92547623b26eafa50ca8a/src/apprt/gtk/class/surface.zig).
-- The Linux port currently ignores resize callbacks until `surface` exists, creates the libghostty surface
-  from `realize`, and immediately calls `pushSize()` with `gtk_widget_get_width/height * scale`.
-- Later Linux resize callbacks pass their dimensions through without scaling.
-  The initial and steady-state paths therefore disagree only when the scale factor is greater than one.
+- The embedded C API adds another adapter layer: its `cursorPosCallback` explicitly converts unscaled host
+  coordinates to pixels using the content scale.
+  See Ghostty's pinned [`embedded.zig`](https://github.com/ghostty-org/ghostty/blob/4dcb09ada0c0909717d92547623b26eafa50ca8a/src/apprt/embedded.zig).
+- Upstream's embedded macOS host follows this contract: it sends logical view coordinates to
+  `ghostty_surface_mouse_pos` and backing dimensions to `ghostty_surface_set_size`.
 
-## Minimal fix proposal
+## Implemented fix
 
-Make initial sizing use the same units as the resize callback:
+Keep each boundary in the units expected by the embedded API:
 
-1. Remove the scale multiplication from `pushSize()` and pass `gtk_widget_get_width()` and
-   `gtk_widget_get_height()` directly to `ghostty_surface_set_size`.
-2. Correct the `resize` comment: GTK reports viewport/widget units here, not already-scaled device pixels.
-3. Keep `ghostty_surface_set_content_scale` and the pointer-coordinate multiplication unchanged.
+1. Pass GTK motion and click coordinates through unchanged; embedded libghostty scales them internally.
+2. Convert the initial logical widget allocation to backing pixels with the GTK scale factor.
+3. Pass `GtkGLArea::resize` viewport pixels through without applying the scale again.
+4. Keep `ghostty_surface_set_content_scale` unchanged for libghostty's DPI and coordinate conversion.
 
-The still-closer Ghostty-host design would cache the first resize and initialize the core surface from that
-callback.
-That is a larger lifecycle change and is unnecessary for the focused correction.
+## Regression coverage and verification
 
-## Regression strategy
-
-- Extract the size conversion into a small host-free Linux helper and unit-test scale 1 and scale 2 to prove
-  that initial and resize dimensions remain identical.
-- In an isolated app/state/socket instance, drag-select before resizing at scale 2 and verify that the selected
-  row remains under the pointer.
-- Repeat after resize, at scale 1, and in main, split, scratch, quick, overlay, dashboard, and zoom surfaces.
-- Recheck terminal rows/columns through `agtermctl tree --json` or PTY size output so the correction does not
-  alter shell geometry unexpectedly.
-
-No selection fix is included in the v0.15.2 parity work until the isolated before/after observation confirms
-that a resize currently repairs the offset.
+- `GhosttySurfaceGeometryTests` pins all three contracts: initial scale 1/2 backing conversion,
+  resize-viewport pass-through, and unscaled pointer positions.
+- An isolated Wayland instance with `GDK_SCALE=2`, separate state, a separate control socket, and a unique
+  application ID confirmed selection stays under the cursor before resize.
+- The same hands-on run confirmed long output can scroll back to the prompt after the resize-unit correction.
+- Shared core behavior and the control API are unchanged; this is Linux GTK/libghostty adapter work only.
