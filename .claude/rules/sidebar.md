@@ -59,6 +59,9 @@ paths:
 - Add affordances live in a bottom bar in `WindowContentView`: a workspace button and a session menu (New Session
   / Open Directory…).
   The two session actions are also on each workspace row's right-click menu.
+  Each workspace ROW additionally carries a hover-revealed `+` (New Session) affordance (`SidebarCellView`'s
+  `addButton`, id `workspace-add-session`, shown on `mouseEntered`, same action as the footer New Session)
+  — a SEPARATE toggleable Interface element (`workspaceAddSession`, gated in `mouseEntered`; see [[settings]]).
 - **A single click anywhere on a workspace ROW toggles its expansion** (not just the disclosure triangle),
   so the whole row is the hit target.
   Wired via the outline's `action` (`Coordinator.handleSingleClick`) — which fires on a genuine click,
@@ -101,6 +104,18 @@ paths:
   Batch row actions: move uses `AppStore.moveSessions`, close uses `AppActions.closeSessions(_:in:)` →
   `AppStore.softCloseSessions`, flag uses `AppActions.toggleFlags(_:in:)` → `setFlag(_:forSessions:)`,
   and clear-status loops `setAgentIndicator` once per selected session (loop-equivalent to `session status idle`).
+  SINGLE-selection-only row actions (shown only when the context menu resolves to exactly ONE session, since
+  they have no sensible batch meaning): Rename, **Duplicate Session** (right after Rename), and Reveal in Finder.
+  **Duplicate Session** creates a fresh session — a plain new login shell — in the SAME workspace, inserted directly
+  AFTER the source, rooted at the source's focused-pane cwd (`Session.focusedCwd`, the same directory the row
+  shows and Reveal in Finder opens), then selects + focuses it.
+  ONLY the directory carries over: the duplicate does NOT inherit the source's custom name, initial command,
+  split, scratch, status, flag, font size, or watermark — it is "New Session seeded with the source's cwd",
+  not a clone of state.
+  Its control half is `session.duplicate` (`agtermctl session duplicate [--target]`), which reads back off
+  `tree` as a new node right after its source carrying the source's focused-pane cwd — equal to the source
+  node's `tree.cwd` unless the source is a split focused off its primary pane (then `tree.cwd` reports the
+  primary and the two differ), see the Control API rule.
 - **Flagged working-set view (`AppStore.sidebarMode` `.tree`/`.flagged`).**
   `SidebarMode` (`agtermCore/SidebarMode.swift`, `String`-backed `Codable`/`Sendable`) drives a per-window
   MODE toggle between the normal two-level tree and a FLAT list of just the flagged sessions.

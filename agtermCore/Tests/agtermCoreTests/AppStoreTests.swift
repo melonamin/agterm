@@ -64,6 +64,20 @@ struct AppStoreTests {
         #expect(store.activeSession?.id == unwrapped.id)
     }
 
+    @Test func addSessionWithoutSelectLeavesSelectionUntouched() {
+        let store = makeStore()
+        let ws = store.addWorkspace(name: "work")
+        let first = try! #require(store.addSession(toWorkspace: ws.id, cwd: "/a"))
+        #expect(store.selectedSessionID == first.id)
+        // a background add (control `session.new --no-select`) appends the session but keeps the current
+        // selection and recency, so `active` still points at the first session.
+        let background = try! #require(store.addSession(toWorkspace: ws.id, cwd: "/b", select: false))
+        #expect(store.workspaces[0].sessions.map(\.id) == [first.id, background.id])
+        #expect(store.selectedSessionID == first.id)
+        #expect(store.activeSession?.id == first.id)
+        #expect(store.sessionRecency.items == [first.id]) // the background add was not recorded
+    }
+
     @Test func addSessionCarriesInitialCommand() {
         let store = makeStore()
         let ws = store.addWorkspace(name: "work")
@@ -472,17 +486,20 @@ struct AppStoreTests {
     }
 
     @Test func softCloseSessionsAdjustsReselectionForEarlierBatchRemovals() throws {
+        // the index adjustment feeds the POSITIONAL fallback, which only runs when the scoped recency is
+        // empty, so drive it through a restore: nothing has been activated but the restored selection, and
+        // once that is the session being closed the fallback is the only thing left to pick with.
         let store = makeStore()
-        let ws = store.addWorkspace(name: "work")
-        let first = try #require(store.addSession(toWorkspace: ws.id, cwd: "/a"))
-        let active = try #require(store.addSession(toWorkspace: ws.id, cwd: "/b"))
-        let neighbor = try #require(store.addSession(toWorkspace: ws.id, cwd: "/c"))
-        _ = try #require(store.addSession(toWorkspace: ws.id, cwd: "/d"))
-        store.selectSession(active.id)
+        let wsID = UUID()
+        let ids = [UUID(), UUID(), UUID(), UUID()]
+        let sessions = ids.enumerated().map { SessionSnapshot(id: $1, customName: nil, cwd: "/\($0)") }
+        store.restore(from: Snapshot(selectedSessionID: ids[1],
+                                     workspaces: [WorkspaceSnapshot(id: wsID, name: "work", sessions: sessions)]))
 
-        #expect(store.softCloseSessions([first.id, active.id], grace: 60))
+        #expect(store.softCloseSessions([ids[0], ids[1]], grace: 60))
 
-        #expect(store.selectedSessionID == neighbor.id)
+        // without the adjustment the stale index 1 would pick the LAST session instead of the neighbor
+        #expect(store.selectedSessionID == ids[2])
     }
 
     @Test func softCloseSessionsFallsBackWhenActiveWorkspaceIsEmptied() throws {

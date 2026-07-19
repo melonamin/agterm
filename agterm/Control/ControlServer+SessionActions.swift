@@ -120,8 +120,10 @@ extension ControlServer: ControlActions {
                 guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                     return ControlResponse(ok: false, error: "workspace name must not be blank")
                 }
+                // a --no-select create must not clear the workspace-focus filter (addWorkspace's auto-reveal),
+                // so the background create leaves the current view untouched like the rest of --no-select.
                 let workspace = options.createWorkspace == true
-                    ? store.ensureWorkspace(named: name)
+                    ? store.ensureWorkspace(named: name, clearFocus: !options.noSelect)
                     : store.workspace(named: name)
                 guard let workspace else {
                     return ControlResponse(ok: false, error: "no workspace named \"\(name)\" (pass --create-workspace to add it)")
@@ -149,6 +151,22 @@ extension ControlServer: ControlActions {
                 return ControlResponse(ok: false, error: "no such session")
             }
             return body(location)
+        }
+    }
+
+    /// The control half of the sidebar row's "Duplicate": a fresh shell in the target's directory, inserted
+    /// right after it in its own workspace. Takes no options — the target names both the workspace and the
+    /// cwd — and, like `session.new`, focuses the duplicate when it lands in the frontmost window and returns
+    /// its id. The read-back is `tree`: the new session appears after its source, carrying the source's
+    /// focused-pane cwd — equal to the source node's `tree.cwd` unless the source is a split focused off its
+    /// primary pane (then `tree.cwd` reports the primary and the two differ).
+    func duplicateSession(_ target: String?, window: String?) -> ControlResponse {
+        resolver.resolveSession(target, window: window) { store, id in
+            guard let session = store.duplicateSession(id) else {
+                return ControlResponse(ok: false, error: "could not duplicate session")
+            }
+            if store === library.activeStore { actions.focusActiveSession() }
+            return ControlResponse(ok: true, result: ControlResult(id: session.id.uuidString))
         }
     }
 

@@ -22,6 +22,15 @@ surface ownership, and the C-boundary concurrency contract before changing the b
   This generalizes the HARD keep-in-sync convention (which covers GUI actions in `AppActions`/`AppStore`)
   to features with NO GUI surface at all — `notify`/`session.copy`/`session.type` are control-native.
   Only skip when exposure is genuinely meaningless (pure rendering/visual chrome with nothing to drive).
+- **Propose a Settings ▸ Interface toggle for a new toggleable UI/chrome element — ask first, never
+  automatic.** When adding a title-bar or sidebar affordance the user might want to hide (a button, a
+  hover glyph like the workspace-row add-session "+", a status/indicator element), evaluate whether it
+  should join the host-free `InterfaceElement` set so it gets a live Settings ▸ Interface toggle (a new
+  case auto-appears in the tab via `allCases`, gated through the `GhosttyApp.hiddenInterfaceElements`
+  mirror — the detail is the `hiddenInterfaceElements` bullet in `.claude/rules/settings.md`).
+  Unlike the control-API norm above, do NOT add it proactively — PROPOSE it and let the user decide,
+  since some chrome is intentionally always-on; skip only when a toggle is genuinely meaningless
+  (transient/decorative chrome with nothing to hide).
 - **Use the Swift skills for Swift/SwiftUI work — proactively, from the START,
   not only when stuck.** agterm is Swift 6 + SwiftUI + AppKit; activate the relevant skill before/while
   working: `swiftui-expert` for any SwiftUI/AppKit view, layout, `@Observable`/state,
@@ -432,7 +441,7 @@ This only changes raw-text line breaks — the rendered markdown is identical �
   Triggers on `ControlServer.swift`, `ControlProtocol`/`ControlResolve`,
   `agtermctlKit`/`agtermctl`, the three installers + their host-free `*Install` logic,
   `Resources/agent-skill/`, and the control UI tests.
-- `settings.md` — `AppSettings`/`SettingsModel`, the 5-tab Settings scene,
+- `settings.md` — `AppSettings`/`SettingsModel`, the 6-tab Settings scene,
   ghostty-config emission, window translucency.
   Triggers on `SettingsModel.swift`, `SettingsView`/`SettingsCatalog`/`WindowAppearance`/`NSColor+AgtermHex`,
   `AppSettings`/`SettingsStore`, and the settings UI tests.

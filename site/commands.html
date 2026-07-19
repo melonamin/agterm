@@ -6,7 +6,7 @@
     <title>Command reference — agterm | agtermctl control API</title>
     <meta
       name="description"
-      content="Complete agtermctl reference: all 60 control commands for agterm — sessions, workspaces, windows, overlays, the quick terminal, sidebar, agent status, themes, and keymaps, with arguments and return values."
+      content="Complete agtermctl reference: all 61 control commands for agterm — sessions, workspaces, windows, overlays, the quick terminal, sidebar, agent status, themes, and keymaps, with arguments and return values."
     />
     <meta
       name="keywords"
@@ -18,7 +18,7 @@
     <meta property="og:title" content="Command reference — agterm" />
     <meta
       property="og:description"
-      content="All 60 agtermctl control commands with arguments, return values, and errors."
+      content="All 61 agtermctl control commands with arguments, return values, and errors."
     />
     <meta property="og:url" content="https://agterm.com/commands" />
     <meta property="og:image" content="https://agterm.com/assets/agterm-og.png" />
@@ -30,7 +30,7 @@
     <meta name="twitter:title" content="Command reference — agterm" />
     <meta
       name="twitter:description"
-      content="All 60 agtermctl control commands with arguments, return values, and errors."
+      content="All 61 agtermctl control commands with arguments, return values, and errors."
     />
     <meta name="twitter:image" content="https://agterm.com/assets/agterm-og.png" />
     <link rel="icon" type="image/x-icon" href="/assets/favicon.ico" />
@@ -64,6 +64,7 @@
         "
       >
         <div
+          class="site-nav-bar"
           style="
             max-width: 1240px;
             margin: 0 auto;
@@ -104,6 +105,7 @@
             >
           </a>
           <div
+            class="site-nav-desktop"
             style="
               display: flex;
               align-items: center;
@@ -128,13 +130,41 @@
               >GitHub ↗</a
             >
           </div>
+          <details class="site-nav-mobile">
+            <summary>menu</summary>
+            <nav aria-label="Mobile navigation" onclick="this.parentElement.open=false">
+              <button
+                type="button"
+                class="doc-drawer-trigger"
+                aria-controls="doc-navigation"
+                onclick="document.getElementById('doc-drawer').checked=true; document.querySelector('#doc-navigation a').focus()"
+              >
+                contents
+              </button>
+              <a href="/">← home</a>
+              <a href="/docs">docs</a>
+              <a href="https://github.com/umputun/agterm">GitHub ↗</a>
+            </nav>
+          </details>
         </div>
       </div>
 
+      <input class="doc-drawer-toggle" type="checkbox" id="doc-drawer" />
+      <button
+        type="button"
+        class="doc-drawer-overlay"
+        aria-label="Close documentation navigation"
+        onclick="document.getElementById('doc-drawer').checked=false; document.querySelector('.site-nav-mobile summary').focus()"
+      ></button>
+
       <!-- ===== LAYOUT ===== -->
-      <div style="max-width: 1240px; margin: 0 auto; display: grid; grid-template-columns: 236px 1fr; gap: 48px; padding: 0 28px">
+      <div
+        class="doc-layout"
+        style="max-width: 1240px; margin: 0 auto; display: grid; grid-template-columns: 236px 1fr; gap: 48px; padding: 0 28px"
+      >
         <!-- SIDEBAR -->
         <aside
+          id="doc-navigation"
           class="doc-scroll"
           style="
             position: sticky;
@@ -146,7 +176,11 @@
             font-family: &quot;JetBrains Mono&quot;, monospace;
           "
         >
-          <nav style="display: flex; flex-direction: column; gap: 4px; font-size: 13.5px">
+          <nav
+            aria-label="Command reference sections"
+            onclick="document.getElementById('doc-drawer').checked=false; document.querySelector('.site-nav-mobile summary').focus()"
+            style="display: flex; flex-direction: column; gap: 4px; font-size: 13.5px"
+          >
             <a href="#overview" style="color: #bfbab0; padding: 7px 12px; border-radius: 7px" class="hv9">Overview</a>
             <a href="#addressing" style="color: #bfbab0; padding: 7px 12px; border-radius: 7px" class="hv9">Addressing</a>
             <div style="height: 16px"></div>
@@ -174,7 +208,7 @@
         </aside>
 
         <!-- CONTENT -->
-        <main style="min-width: 0; padding: 48px 0 120px; max-width: 760px">
+        <main class="doc-content" style="min-width: 0; padding: 48px 0 120px; max-width: 760px">
           <div
             style="
               font-family: &quot;JetBrains Mono&quot;, monospace;
@@ -200,7 +234,7 @@
             Command reference
           </h1>
           <p style="font-size: 19px; line-height: 1.6; color: #bfbab0; margin: 0 0 8px">
-            All 60 commands of the agterm control API, with arguments and return values. Every one is reachable from the
+            All 61 commands of the agterm control API, with arguments and return values. Every one is reachable from the
             <span style="font-family: &quot;JetBrains Mono&quot;, monospace; color: #cbc6bc">agtermctl</span> CLI and from the local
             control socket.
           </p>
@@ -398,7 +432,7 @@
                 <span style="font-family: &quot;JetBrains Mono&quot;, monospace">statusColor</span>,
                 <span style="font-family: &quot;JetBrains Mono&quot;, monospace">foreground</span> /
                 <span style="font-family: &quot;JetBrains Mono&quot;, monospace">splitForeground</span> (each pane's live foreground
-                argv, omitted at the shell prompt),
+                argv, omitted at the shell prompt or for a setuid program like top/sudo),
                 <span style="font-family: &quot;JetBrains Mono&quot;, monospace">background</span>, and
                 <span style="font-family: &quot;JetBrains Mono&quot;, monospace">unseen</span>.
               </p>
@@ -540,7 +574,7 @@
             <div style="background: #22272b; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 11px; padding: 18px 20px; margin-bottom: 12px">
               <div style="font-family: &quot;JetBrains Mono&quot;, monospace; font-size: 13.5px; color: #6d82f3; line-height: 1.6; word-break: break-word">
                 agtermctl session new [--cwd DIR] [--workspace W | --workspace-name NAME [--create-workspace]] [--command CMD]
-                [--name NAME] [--after SID | --before SID] [--window W]
+                [--name NAME] [--after SID | --before SID] [--no-select] [--window W]
               </div>
               <div style="font-family: &quot;JetBrains Mono&quot;, monospace; font-size: 11.5px; color: #6b727a; margin-top: 6px">session.new</div>
               <p style="font-size: 15px; line-height: 1.65; color: #cbc6bc; margin: 10px 0 0">
@@ -579,6 +613,44 @@
                 fails with exit 127. Use an absolute path, or wrap it:
                 <span style="font-family: &quot;JetBrains Mono&quot;, monospace; color: #f2b45c; white-space: nowrap">--command "zsh -lc 'htop'"</span>. The
                 command is persisted and re-runs on restore when <em>Restore running commands on restart</em> is enabled.
+              </p>
+              <p style="font-size: 13.5px; line-height: 1.6; color: #949ba4; margin: 8px 0 0">
+                <span style="font-family: &quot;JetBrains Mono&quot;, monospace">--no-select</span> creates the session in the
+                background: it is added to the sidebar but not selected or focused, leaving the current selection untouched (the
+                new node is not <span style="font-family: &quot;JetBrains Mono&quot;, monospace">active</span> in
+                <span style="font-family: &quot;JetBrains Mono&quot;, monospace">tree</span> — that flag is the read-back). Omit it
+                for the default select-and-focus behavior.
+              </p>
+            </div>
+
+            <div style="background: #22272b; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 11px; padding: 18px 20px; margin-bottom: 12px">
+              <div style="font-family: &quot;JetBrains Mono&quot;, monospace; font-size: 13.5px; color: #6d82f3; line-height: 1.6; word-break: break-word">
+                agtermctl session duplicate [--target T] [--window W]
+              </div>
+              <div style="font-family: &quot;JetBrains Mono&quot;, monospace; font-size: 11.5px; color: #6b727a; margin-top: 6px">session.duplicate</div>
+              <p style="font-size: 15px; line-height: 1.65; color: #cbc6bc; margin: 10px 0 0">
+                Create a fresh session in the same workspace as the target, directly after it, rooted at the target's focused-pane
+                working directory — then select and focus it. There are no other options: the target names both the destination
+                workspace and the directory. Equivalent to
+                <span style="font-family: &quot;JetBrains Mono&quot;, monospace; color: #f2b45c; white-space: nowrap"
+                  >session new --cwd &lt;source cwd&gt; --after &lt;source&gt;</span
+                >
+                in one round-trip.
+                <strong style="color: #bfbab0">Returns</strong>
+                <span style="font-family: &quot;JetBrains Mono&quot;, monospace">result.id</span>.
+              </p>
+              <p style="font-size: 13.5px; line-height: 1.6; color: #949ba4; margin: 8px 0 0">
+                Only the directory carries over. The duplicate is a plain login shell with the auto basename — it does
+                <em>not</em> inherit the source's custom name,
+                <span style="font-family: &quot;JetBrains Mono&quot;, monospace">--command</span>, split, scratch, status, flag, font
+                size, or background. It is the control half of the sidebar row's <strong style="color: #bfbab0">Duplicate Session</strong>
+                context-menu item (single-selection only). Read back from
+                <span style="font-family: &quot;JetBrains Mono&quot;, monospace">tree</span>: no new field — the new session node
+                appears directly after its source, carrying the source's focused-pane
+                <span style="font-family: &quot;JetBrains Mono&quot;, monospace">cwd</span> (equal to the source node's
+                <span style="font-family: &quot;JetBrains Mono&quot;, monospace">tree.cwd</span> unless the source is a split
+                focused off its primary pane, where <span style="font-family: &quot;JetBrains Mono&quot;, monospace">tree.cwd</span>
+                reports the primary).
               </p>
             </div>
 

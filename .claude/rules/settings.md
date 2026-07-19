@@ -16,7 +16,7 @@ paths:
   NO version field — optionality is the forward-compat) + `SettingsStore` (JSON at `<stateDir>/settings.json`,
   `AGTERM_STATE_DIR`-isolated, mirrors `PersistenceStore`).
   Fields: `fontFamily`/`fontSize`/`theme`/`darkTheme`/`followSystemAppearance` + `backgroundOpacity` (0...1) / `backgroundBlur` (CGS radius)
-  + `notificationsEnabled` / `toolbarMode` / `notificationBadgeEnabled` / `attentionButtonEnabled` / `dockBounce`
+  + `notificationsEnabled` / `toolbarMode` / `notificationBadgeEnabled` / `attentionButtonEnabled` / `dockBounce` / `notificationSoundName`
   + the agent-status glyph colors `activeStatusColorHex`/`blockedStatusColorHex`/`completedStatusColorHex`
   (nil defaults: `notificationsEnabled`/`notificationBadgeEnabled` = on,
   `toolbarMode` = the three-state titlebar chrome `ToolbarMode { normal, compact, hidden }`,
@@ -44,7 +44,9 @@ paths:
   + `autoFollowAttention`/`autoFollowStayOnActive` (the per-window idle auto-follow-to-oldest-blocked policy:
   `autoFollowAttention` an `AutoFollowAttention` raw string [nil = off/disabled], `autoFollowStayOnActive`
   [nil/false = off] the "don't leave a running session" opt-in; NOT ghostty keys, save-only + fanned out into
-  every open window's `AppStore` via `SettingsModel.applyAutoFollow` → `AppStore.setAutoFollow`).
+  every open window's `AppStore` via `SettingsModel.applyAutoFollow` → `AppStore.setAutoFollow`)
+  + `hiddenInterfaceElements` (raw names of title-bar / sidebar-footer chrome elements the user hid,
+  nil/empty = all shown; the `InterfaceElement` set; NOT a ghostty key — see its own bullet).
   `theme`/`darkTheme`/`followSystemAppearance` are the macOS light/dark appearance-sync state: `theme` is the single/light-slot theme, `darkTheme` the dark slot, `followSystemAppearance` (nil = off) the toggle; when following, `ghosttyConfigLines()` emits ghostty's raw dual `theme = light:NAME,dark:NAME` conditional and libghostty resolves the side at runtime — `ghosttyConfigLines()` takes NO `isDark` arg (see the Theme picker rule; `ThemeResolution` is gone, the dual value is reduced to the active side for the sidebar selection colors by `ThemeName.resolved(from:isDark:)`).
   The three `*StatusColorHex` (`#RRGGBB`, nil = active `#DBD9E6` muted lavender-grey + system amber/green)
   color the sidebar agent-status glyph: `SettingsModel` passes the hex to `GhosttyApp.setAgentStatusColors`
@@ -143,7 +145,7 @@ paths:
   `ContentView` mirrors the color into `terminalColor` view state (the quick terminal's opaque backing
   re-renders with the new color) and `TitleProbeView` re-applies the window appearance.
   Without this the chrome only refreshed when the window next re-keyed.
-  UI is the standard SwiftUI `Settings` scene (Cmd+,) with a 5-tab `TabView` (frame 480×590).
+  UI is the standard SwiftUI `Settings` scene (Cmd+,) with a 6-tab `TabView` (frame 540×590).
   An explicit `TabView(selection:)` binding (`@State` default `.general`) suppresses SwiftUI's
   `com_apple_SwiftUI_Settings_selectedTabIndex` auto-persistence, so the window always opens on General
   instead of restoring the last-used tab.
@@ -158,9 +160,13 @@ paths:
   `.compact` mapping back to nil) + background opacity/blur sliders + the Sidebar Tint slider + the Sidebar
   Font Size stepper (`settings-sidebar-font-size`, 9...20, `AppSettings.defaultSidebarFontSize` 13 mapping
   back to nil, matching the terminal font-size stepper's style) + the inactive-pane-mute slider.
-  The formerly-separate **Panes** section was folded into **Window** so the tab still fits 480×590 without
+  The formerly-separate **Panes** section was folded into **Window** so the tab still fits 540×590 without
   scrolling after adding the font-size stepper).
-  **Notifications** (a **Notifications** section with the banner / badge / attention-indicator toggles plus the Dock-bounce mode picker).
+  **Interface** (per-element chrome visibility, grouped into a **Title Bar** section and a **Sidebar**
+  section — one default-on Toggle per `InterfaceElement`, laid out TWO per row (`twoColumnSection`) so the
+  tab keeps fitting 540×590 without scrolling as the element set grows; see the `hiddenInterfaceElements`
+  bullet).
+  **Notifications** (a **Notifications** section with the banner / badge / attention-indicator toggles plus the Dock-bounce mode and notification-sound pickers).
   **Agent Status** (a **Colors** section with the three glyph color pickers, a **Sound** section with
   the blocked-sound picker, an **Auto-follow** section with the idle-timeout Picker
   (Disabled/5s/10s/30s/60s/5m) + the "Don't auto-follow away from a running session" Toggle, and a trailing
@@ -170,7 +176,7 @@ paths:
   Captions under controls are dropped for self-explanatory controls, which is nearly all of them.
   A caption is kept ONLY when it carries information the label can't — currently just two:
   `Blur needs opacity below 100%` (a functional dependency) and the Ghostty-config edit-path hint.
-  This keeps the busiest tab short enough that the 480×590 window fits every tab without scrolling.
+  This keeps the busiest tab short enough that the 540×590 window fits every tab without scrolling.
   The notification toggle (`AppSettings.notificationsEnabled`, nil = on) is mirrored to `NotificationManager.bannersEnabled`
   by `SettingsModel`; it gates only the OS banner, never the badge, and is NOT a ghostty config key (no
   reload).
@@ -375,6 +381,22 @@ paths:
   GUI-only and keep-in-sync EXEMPT (only `theme.set`/`config.reload` touch settings over the socket).
   Default + tolerant-decode covered host-free in `AppSettingsTests`; the bounce itself is app-target
   (settings-picker persistence in `SettingsUITests`, the animation verified by eye — not accessibility-observable).
+- **`notificationSoundName` (a system sound on every delivered banner, opt-in, Notifications tab).**
+  `AppSettings.notificationSoundName: String?` (nil/empty = silent, the default) names the system sound
+  attached to the delivered banner (`UNNotificationSound`, so it follows the banner toggle and Do Not
+  Disturb), in BOTH the OSC and control paths.
+  NOT a ghostty key (`writeGhosttyConfig` no-ops, no surface reload).
+  Like `dockBounce` it needs NO `.agtermAppearanceChanged` re-render: `SettingsModel.setNotificationSoundName`
+  saves + `applyNotificationSound` pushes the value into the `NotificationManager.notificationSoundName`
+  mirror (alongside the other two `NotificationManager` mirrors), read on the NEXT notification.
+  The Notifications tab's `Picker("Notification sound")` mirrors the Agent Status blocked-sound picker
+  binding (None maps back to nil to keep `settings.json` minimal; selecting a sound previews it via
+  `StatusSoundPlayer`).
+  GUI-only and keep-in-sync EXEMPT (only `theme.set`/`config.reload` touch settings over the socket).
+  Default + round-trip covered host-free in `AppSettingsTests`; the picker persistence in `SettingsUITests`
+  (`testNotificationSoundPickerPersists`); the sound itself is app-target (verified by ear, like the
+  blocked sound).
+  See the Notifications rule for the delivery behavior.
 - **`confirmCloseSession` (confirm before closing a session, opt-in, General tab).**
   `AppSettings.confirmCloseSession: Bool?` (nil = OFF, the default-off precedent like `restoreRunningCommand`)
   gates a native `NSAlert` confirm before a GUI session close.
@@ -391,6 +413,51 @@ paths:
   must never prompt), like the quit-confirm.
   Default-off + round-trip covered host-free in `AppSettingsTests`; the confirm itself is app-target
   (manually/build verified, no app unit-test host, like `confirmDelete`/`confirmClearFlags`).
+- **`hiddenInterfaceElements` (per-element title-bar / sidebar-footer chrome visibility, Interface tab).**
+  `AppSettings.hiddenInterfaceElements: [String]?` (nil/empty = everything shown, the default) holds the
+  raw names of the chrome elements the user HID.
+  Stored as raw strings so an unknown future element name decodes tolerantly (dropped by
+  `resolvedHiddenInterfaceElements`) instead of failing the whole decode — the forward-compat rule shared
+  with `toolbarMode`/`dockBounce`.
+  NOT a ghostty key (`ghosttyConfigLines()` never emits it).
+  The toggleable elements are the host-free `InterfaceElement` enum (agtermCore): title bar —
+  `sidebarToggle`/`sessionName`/`windowName`/`recentSessions`/`scratch`/`split`/`dashboard`/`quickTerminal`;
+  sidebar — `newWorkspace`/`newSession`/`flaggedView` (the footer add/flag controls) + `workspaceAddSession`
+  (the hover-revealed "+" on each workspace ROW that adds a session there — a SEPARATE toggle from the
+  footer `newSession` button, though both run the same new-session action).
+  Each case carries its `section` (Title Bar / Sidebar) and `displayName` (the toggle label), so the
+  Interface tab iterates `InterfaceElement.allCases` grouped by section.
+  The attention bell is NOT in the set — it keeps its own `attentionButtonEnabled` opt-in (default OFF, not
+  ON), and the focus pill is transient, so neither is a per-element toggle.
+  It is the non-observable chrome-mirror pattern (like `attentionButtonEnabled`/`toolbarMode`):
+  `SettingsModel.setInterfaceElementVisible(_:visible:)` mutates the RAW string set (NOT
+  `resolvedHiddenInterfaceElements`, whose known-only filter would erase an unknown future element name a
+  newer build persisted; empty maps back to nil to keep `settings.json` minimal) + `persistAndApply` +
+  `applyInterfaceElements` pushes `settings.resolvedHiddenInterfaceElements` into the
+  `GhosttyApp.hiddenInterfaceElements` mirror, so a flip rides `.agtermAppearanceChanged` and every open
+  window re-reads the mirror (`WindowContentView.shows(_:)`) to gate each element live.
+  The SwiftUI title-bar / sidebar-FOOTER elements gate via `WindowContentView.shows(_:)`; the sidebar-ROW
+  `workspaceAddSession` is AppKit, so it gates in `SidebarCellView.mouseEntered` — which reads the
+  `GhosttyApp.hiddenInterfaceElements` mirror before revealing the "+", so a live toggle takes effect on
+  the next hover (the sidebar is never hovered while the Settings window holds the pointer, so a mid-hover
+  flip can't strand a visible "+").
+  The title-bar building moved to `WindowContentView+Titlebar.swift` (matching the `+Dashboard`/`+RecentSessions`/`+Zoom`
+  split) to keep `WindowContentView.swift` under the 1000-line limit; the session-vs-window title split lives
+  there in `titleText` (gated) vs `windowTitle` (always the OS window title), and the trailing button cluster
+  draws a group divider ONLY where two groups that each still show 2+ buttons meet (a group reduced to one
+  button flows in without a bracketing divider) — the rule is the host-free
+  `InterfaceElement.titlebarGroupDividers(countA:countB:countC:)`, unit-tested in `AppSettingsTests`.
+  GUI-only and keep-in-sync EXEMPT — pure visual chrome, and every gated element's ACTION already has full
+  control coverage (`sidebar`/`session.split`/`session.scratch`/`quick`/`dashboard`/`workspace.new`/`session.new`;
+  only `theme.set`/`config.reload` touch settings over the socket).
+  Default + round-trip + tolerant-decode covered host-free in `AppSettingsTests`; the picker persistence in
+  `SettingsUITests` (`testInterfaceElementTogglePersists`); the live gating is app-target (build/manually
+  verified, no app unit-test host).
+  **Adding a new toggleable element:** add the `InterfaceElement` case (+ its `section`/`displayName`) and
+  gate its render site on the mirror; the Interface tab picks it up automatically via `allCases`, and the
+  round-trip/tolerant-decode tests already iterate `allCases`.
+  Do this only AFTER the user agrees the element should be user-toggleable — some chrome is intentionally
+  always-on — per the propose-then-ask working-norm in the root `CLAUDE.md` (never automatic).
 - **A Settings toggle's DESCRIPTION stays single-line short-form** — a terse hint, not a manual.
   No detailed multi-line explanation of what the toggle does and no cross-refs to other toggles;
   keep the minimal style (see also the flag-description convention).

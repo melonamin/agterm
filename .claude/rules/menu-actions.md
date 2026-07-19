@@ -189,6 +189,68 @@ paths:
   quick terminal was up, closing the window instead of the cover.
   `AppStore.currentWorkspaceID`/`defaultWorkspaceName` are the host-free placement/naming helpers behind
   New Session / New Workspace.
+- **Closing the ACTIVE session returns to the most-recently-active SURVIVING session, not to a positional
+  neighbor** (Discussion #147).
+  `AppStore.closeReselectionTarget(after:)` (`AppStore+CloseReselection.swift`, host-free and unit-tested in
+  `AppStoreCloseReselectionTests`) is the single reselection pick for all three close paths — `closeSession`
+  plus the two undoable ones, `softCloseSession` / `softCloseSessions`.
+  It takes `sessionRecency.top(1, in: scope)` where `scope` = the closing session's OWN workspace's surviving
+  session ids, further ∩ the flagged set in `.flagged` sidebar mode.
+  The workspace term is what keeps the close from being disorienting: an UNSCOPED "most recent survivor" could
+  yank the user into another workspace, which is worse than the positional neighbor it replaces.
+  The scope set is built from the TREE, not from the recency stack: the closing session is removed from
+  `workspaces` before reselection at every call site, so it can never be picked — which is what makes the
+  soft-close paths correct WITHOUT pruning `sessionRecency` at close time (they must not, since undo needs the
+  entry back; only `hardFinalizePendingSession` prunes, at grace expiry).
+  When the close leaves that workspace with NOTHING in scope — it emptied the workspace, or in `.flagged`
+  mode no other session there is flagged — the workspace term is dropped and the MRU widens: "stay in the current
+  workspace" has nothing left to mean, and the alternative is a positional jump into the FIRST workspace, which is
+  the disorientation the whole feature exists to remove.
+  The FLAGGED term survives that widening (`flaggedSessions` is cross-workspace by definition), so a
+  `.flagged`-mode close crosses workspaces rather than landing on an unflagged session the sidebar isn't rendering.
+- **The FOCUS filter deliberately does NOT scope the close-reselection MRU — do not "fix" this by reaching for
+  `navigableSessions`.**
+  It is the obvious-looking choice (one set, already the definition of "what the user is navigating within") and
+  it is WRONG here, because focus is a property of the TREE, not of the selection: `setFocusedWorkspace` never
+  moves the active session, so focus can sit on a workspace the closing session doesn't even belong to.
+  Scoping by `navigableSessions` (which folds focus in) breaks two reachable states: closing a session while
+  ANOTHER workspace is focused jumps the user INTO that focused workspace, and closing the focused workspace's LAST
+  session widens into an EMPTY set (`navigableSessions` has collapsed to the workspace just emptied) and falls
+  through to the positional first-workspace jump.
+  Landing outside the focused workspace needs no scoping defense anyway: every caller already runs
+  `autoUnfocusIfOutsideFocus` on the pick, which drops the filter to reveal the target.
+  Both cases are pinned by `closeActiveSessionWhileAnotherWorkspaceIsFocusedStaysInTheClosingWorkspace` and
+  `closeTheFocusedWorkspacesLastSessionPicksTheRecentSurvivorElsewhere`.
+  Only an empty MRU after that (a fresh restore before anything was activated, or the only recent entry was the one
+  just closed) falls back to the positional `reselectionTarget(after:)`, which is UNCHANGED — so the worst case is
+  the old neighbor behavior (scoped to the flagged set in `.flagged` mode, see the next paragraph), never an empty
+  selection.
+  In `.flagged` mode that fallback is scoped too — `nearestInScopeTarget` repeats `reselectionTarget`'s walk
+  restricted to the scope, because `reselectionTarget` walks the tree positionally and would otherwise land on an
+  unflagged sibling the flagged sidebar has no row for (`syncSelection` would then `deselectAll` and show nothing
+  selected).
+  It stays POSITIONAL within the filter, and the walk runs over the tree FLATTENED in sidebar order: the in-scope
+  session that shifted into the removed slot, else the nearest in-scope one before it.
+  The walk spans workspaces because the scope can — once the closing workspace holds nothing in scope the scope has
+  widened to the whole flagged set, which the flagged sidebar renders as ONE flat cross-workspace list, so the
+  adjacent row there is the neighboring FLAGGED row even when it lives in another workspace.
+  (While the scope is still same-workspace it holds only that workspace's ids, so the flat walk collapses to the
+  in-workspace one.)
+  Taking merely "the first flagged row" instead would throw away the locality the fallback exists to preserve and
+  break the "worst case is the old neighbor behavior" promise above, jumping to the TOP of the flagged list when a
+  mid-list session closes.
+  Pinned by `closeActiveSessionInFlaggedModeWithAnEmptyScopedRecencyStaysWithinTheFlaggedSet`,
+  `closeActiveSessionInFlaggedModeWithAnEmptyScopedRecencyPicksTheNEARESTFlaggedSurvivor`, and
+  `closeTheWorkspacesLastFlaggedSessionWithAnEmptyRecencyPicksTheADJACENTFlaggedRow`.
+  The ONE case the flagged scoping cannot hold is closing the LAST flagged session anywhere: the scope is then
+  empty, the flagged sidebar renders no rows at all, and the positional pick stands — selecting nothing would
+  leave no terminal.
+  Pinned by `closeTheLastFlaggedSessionFallsThroughToThePositionalTarget`.
+  `reselectionTarget` now has exactly ONE caller, this helper: `removeWorkspace` / `softRemoveWorkspace` never used
+  it and keep their own inline positional pick (reselection there is deliberately untouched — the
+  "stay in the current workspace" constraint is meaningless when the workspace itself is what's being removed).
+  `softCloseSessions`' `removedBeforeActive` index adjustment is preserved verbatim — it now feeds only the
+  fallback.
 - **Session navigation (between sessions).**
   Previous/Next Session sit on ⌥⌘↑/⌥⌘↓; First/Last Session have NO hotkey (menu + palette + `session.go`
   only).

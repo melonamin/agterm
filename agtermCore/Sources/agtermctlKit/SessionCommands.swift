@@ -18,7 +18,7 @@ func validatePaneArgument(_ pane: String?) throws {
 struct Session: ParsableCommand {
     static let configuration = CommandConfiguration(
         abstract: "Session commands.",
-        subcommands: [New.self, Close.self, Select.self, Go.self, Rename.self, Reveal.self, Move.self, TypeText.self,
+        subcommands: [New.self, Duplicate.self, Close.self, Select.self, Go.self, Rename.self, Reveal.self, Move.self, TypeText.self,
                       Split.self, Scratch.self, Focus.self, Resize.self, Copy.self, Paste.self, SelectAll.self,
                       Text.self, Status.self, FlagCommand.self,
                       Seen.self, Search.self, Background.self, Overlay.self]
@@ -34,6 +34,7 @@ struct Session: ParsableCommand {
         @Option(name: .long, help: "Initial session name (defaults to the auto basename).") var name: String?
         @Option(name: .long, help: "Place the new session right AFTER this anchor session (id/prefix/active); the anchor carries its own workspace, replacing --workspace.") var after: String?
         @Option(name: .long, help: "Place the new session right BEFORE this anchor session (id/prefix/active); mirror of --after.") var before: String?
+        @Flag(name: .long, help: "Create the session in the background without selecting or focusing it (leaves the current selection untouched).") var noSelect = false
         @OptionGroup var options: ClientOptions
         var echoesResultID: Bool { true }
 
@@ -56,8 +57,22 @@ struct Session: ParsableCommand {
         func makeRequest() throws -> ControlRequest {
             ControlRequest(cmd: .sessionNew, args: options.withWindow(
                 ControlArgs(name: name, cwd: cwd, workspace: workspace, workspaceName: workspaceName,
-                            createWorkspace: createWorkspace ? true : nil, command: command,
-                            after: after, before: before)))
+                            createWorkspace: createWorkspace ? true : nil, noSelect: noSelect ? true : nil,
+                            command: command, after: after, before: before)))
+        }
+    }
+
+    /// No options: the target session names both the destination workspace and the cwd, so a duplicate is
+    /// fully described by `--target` (the GUI half is the sidebar row's "Duplicate").
+    struct Duplicate: RequestCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "Duplicate a session: a fresh shell in its directory, placed right after it.")
+        @OptionGroup var target: TargetOptions
+        @OptionGroup var options: ClientOptions
+        var echoesResultID: Bool { true }
+
+        func makeRequest() throws -> ControlRequest {
+            ControlRequest(cmd: .sessionDuplicate, target: target.target, args: options.withWindow())
         }
     }
 

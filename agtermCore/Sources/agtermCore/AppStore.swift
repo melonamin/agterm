@@ -238,15 +238,15 @@ public final class AppStore {
                            dashboardFontMode: dashboardFontMode())
     }
 
-    /// Creates a workspace and appends it. Clears any active focus so the new (empty)
-    /// workspace is immediately visible — without this `visibleWorkspaces` would still
-    /// return only the focused one and the new workspace would be silently hidden until
-    /// the user manually unfocuses (the same auto-reveal contract as `addSession`).
+    /// Creates a workspace and appends it. When `clearFocus` (the default) it clears any active focus so
+    /// the new (empty) workspace is immediately visible — else `visibleWorkspaces` returns only the
+    /// focused one and the new workspace is silently hidden (the auto-reveal contract, like `addSession`).
+    /// Pass `clearFocus: false` to keep the current focus — a background `session.new --no-select` create.
     @discardableResult
-    public func addWorkspace(name: String) -> Workspace {
+    public func addWorkspace(name: String, clearFocus: Bool = true) -> Workspace {
         let workspace = Workspace(name: name)
         workspaces.append(workspace)
-        focusedWorkspaceID = nil
+        if clearFocus { focusedWorkspaceID = nil }
         save()
         return workspace
     }
@@ -259,22 +259,22 @@ public final class AppStore {
         return workspaces.first { $0.name == needle }
     }
 
-    /// The workspace named `name`, created if none exists (idempotent reuse-or-create). Returns nil only
-    /// when `name` is blank. Backs `session.new --workspace-name … --create-workspace`.
+    /// The workspace named `name`, created if none exists (idempotent); `clearFocus` (default true) is
+    /// forwarded to `addWorkspace` on the create path. Nil only when blank. Backs `--workspace-name --create-workspace`.
     @discardableResult
-    public func ensureWorkspace(named name: String) -> Workspace? {
+    public func ensureWorkspace(named name: String, clearFocus: Bool = true) -> Workspace? {
         guard let needle = name.trimmedOrNil else { return nil }
-        return workspace(named: needle) ?? addWorkspace(name: needle)
+        return workspace(named: needle) ?? addWorkspace(name: needle, clearFocus: clearFocus)
     }
 
-    /// Creates a session in the given workspace and selects it. An optional `name` seeds the session's
-    /// `customName` (trimmed; blank clears it to the auto basename, matching `renameSession`). With `at`
-    /// nil the session is appended (the default); with `at` set it is inserted at the clamped index
-    /// (`0...count`), backing the control `session.new --after`/`--before` placement. Returns nil if no
-    /// workspace matches.
+    /// Creates a session in the given workspace and, when `select` is true (the default), selects it;
+    /// `select: false` appends it in the background, leaving selection/focus/recency untouched (backs
+    /// `session.new --no-select`). An optional `name` seeds `customName` (trimmed; blank = the auto
+    /// basename, matching `renameSession`). `at` nil appends (default); `at` set inserts at the clamped
+    /// index (`0...count`), backing `session.new --after`/`--before`. Returns nil if no workspace matches.
     @discardableResult
     public func addSession(toWorkspace workspaceID: UUID, cwd: String, command: String? = nil,
-                           name: String? = nil, at index: Int? = nil) -> Session? {
+                           name: String? = nil, at index: Int? = nil, select: Bool = true) -> Session? {
         guard let wsIndex = workspaces.firstIndex(where: { $0.id == workspaceID }) else { return nil }
         let session = Session(initialCwd: cwd, customName: name?.trimmedOrNil)
         session.initialCommand = command
@@ -284,9 +284,12 @@ public final class AppStore {
         } else {
             workspaces[wsIndex].sessions.append(session)
         }
-        selectedSessionID = session.id
-        autoUnfocusIfOutsideFocus(session.id) // a control-driven add into another workspace must reveal it
-        recordRecency()
+        // a background add (`session.new --no-select`) leaves selection/focus/recency untouched.
+        if select {
+            selectedSessionID = session.id
+            autoUnfocusIfOutsideFocus(session.id) // a control-driven add into another workspace must reveal it
+            recordRecency()
+        }
         save()
         return session
     }
@@ -343,32 +346,6 @@ public final class AppStore {
         session(withID: sessionID)?.unseenCount = 0
     }
 
-    /// Sets a session's agent status indicator (the sidebar status glyph). The single mutation point
-    /// for the control channel's `session.status`. Stamps `statusChangedAt` with the current time on any
-    /// non-idle status (the attention list's newest-first sort key) and clears it on idle. No-op for an
-    /// unknown id. Not persisted (the indicator is ephemeral), so it never triggers a `save()`.
-    public func setAgentIndicator(_ indicator: AgentIndicator, forSession id: UUID) {
-        guard let session = session(withID: id) else { return }
-        var indicator = indicator
-        // normalize a `.right` tag to `.left` when the session has NO split. A promoted survivor's
-        // shell keeps its baked `AGTERM_PANE=right`, so the agent-status hook re-emits `--pane right` after
-        // promotion even though there is no right pane — left unnormalized that re-creates the
-        // `split:false` + `statusPane:"right"` contradiction the round-3 re-tag fixed, and the sole
-        // (`.left`-role-aware) pane could never keystroke-clear it. A hidden-but-LIVE split keeps
-        // `hasSplit`, so `.right` stays valid there. `.left`/`.scratch` are untouched.
-        // gated on `hasSplit`, NOT `splitSurface == nil`: `toggleSplit`/restore set `hasSplit`
-        // synchronously while the deck creates `splitSurface` a render pass later, so a scripted
-        // `session.split` + immediate `session.status --pane right` lands in that realization window —
-        // there `.right` is the correct forward tag and must NOT be rewritten. `splitSurface != nil`
-        // implies `hasSplit` (only `closeSplit`/`closePrimaryPane` clear it, tearing the surface down
-        // with it), so `!hasSplit` still covers every genuinely splitless session.
-        if indicator.statusPane == .right, !session.hasSplit {
-            indicator.statusPane = .left
-        }
-        session.agentIndicator = indicator
-        session.statusChangedAt = indicator.status == .idle ? nil : Date()
-    }
-
     /// Pushes the current selection to the front of the recency stack (the Ctrl-Tab order).
     /// No-op when nothing is selected.
     func recordRecency() {
@@ -396,8 +373,8 @@ public final class AppStore {
     }
 
     /// Removes a session, tears down its surface, and — if it was the active
-    /// session — reselects a neighbor (next in the same workspace, else the
-    /// previous, else any remaining session, else nil).
+    /// session — reselects the most-recently-active surviving session in scope
+    /// (see `closeReselectionTarget(after:)`), falling back to the positional neighbor.
     public func closeSession(_ sessionID: UUID) {
         guard let location = location(ofSession: sessionID) else { return }
         let wasActive = selectedSessionID == sessionID
@@ -412,9 +389,9 @@ public final class AppStore {
         WatermarkStorage.removeRenderedText(sessionID: sessionID) // drop any rendered .text PNG; the session is gone
         sessionRecency.remove(sessionID)
         if wasActive {
-            selectedSessionID = reselectionTarget(after: location)
+            selectedSessionID = closeReselectionTarget(after: location)
             replaceSidebarSelection(with: selectedSessionID)
-            autoUnfocusIfOutsideFocus(selectedSessionID) // the neighbor may live outside the focused workspace
+            autoUnfocusIfOutsideFocus(selectedSessionID) // the reselected session may live outside the focused workspace
             recordRecency()
         } else {
             pruneSidebarSelection()
@@ -790,28 +767,6 @@ public final class AppStore {
     /// (`AppActions.paletteSessions`), so all follow the same filter as the visible sidebar.
     public var navigableSessions: [Session] {
         sidebarMode == .flagged ? flaggedSessions : visibleWorkspaces.flatMap(\.sessions)
-    }
-
-    /// The window-wide non-idle sessions, the single source of truth for the titlebar attention icon
-    /// and the `.attention` palette. Spans ALL workspaces (`workspaces.flatMap(\.sessions)`) and
-    /// deliberately IGNORES the focus/flagged sidebar filter (unlike `navigableSessions`) — the point
-    /// is window-wide visibility even when the sidebar is hidden. Sorted by `attentionRank` ascending
-    /// (blocked → active → completed) then `statusChangedAt` DESCENDING (newest change first; a nil
-    /// stamp sorts last within its rank group).
-    public var attentionSessions: [Session] {
-        workspaces.flatMap(\.sessions)
-            .filter { $0.agentIndicator.status != .idle }
-            .sorted { lhs, rhs in
-                let lrank = lhs.agentIndicator.status.attentionRank
-                let rrank = rhs.agentIndicator.status.attentionRank
-                if lrank != rrank { return lrank < rrank }
-                switch (lhs.statusChangedAt, rhs.statusChangedAt) {
-                case let (l?, r?): return l > r // newest change first within the rank group
-                case (_?, nil): return true     // a stamped session sorts before an unstamped one
-                case (nil, _?): return false
-                case (nil, nil): return false
-                }
-            }
     }
 
     // MARK: - Persistence

@@ -23,6 +23,69 @@ public enum DockBounce: String, Codable, Sendable, CaseIterable {
     case untilFocused
 }
 
+/// A toggleable window-chrome element in the title bar or the sidebar. Persisted by raw name in
+/// `AppSettings.hiddenInterfaceElements`, so an unknown future case in a stored list decodes tolerantly
+/// (it is simply dropped) rather than failing the whole decode — the AppSettings forward-compat rule.
+/// Every element is shown by default; hiding one adds its raw name to the persisted list.
+public enum InterfaceElement: String, Codable, Sendable, CaseIterable {
+    // title bar
+    case sidebarToggle
+    case sessionName
+    case windowName
+    case recentSessions
+    case scratch
+    case split
+    case dashboard
+    case quickTerminal
+    // sidebar
+    case newWorkspace
+    case newSession
+    case flaggedView
+    case workspaceAddSession
+
+    /// Which chrome surface the element belongs to — the Settings tab groups the toggles by this.
+    public enum Section: Sendable { case titleBar, sidebar }
+
+    /// The surface this element lives on: the sidebar for the add/flag controls (the footer buttons plus
+    /// the workspace-row add-session "+"), the title bar for everything else.
+    public var section: Section {
+        switch self {
+        case .newWorkspace, .newSession, .flaggedView, .workspaceAddSession: return .sidebar
+        default: return .titleBar
+        }
+    }
+
+    /// The human-facing toggle label shown in the Interface settings tab.
+    public var displayName: String {
+        switch self {
+        case .sidebarToggle: return "Sidebar toggle"
+        case .sessionName: return "Session name"
+        case .windowName: return "Window name"
+        case .recentSessions: return "Recent sessions"
+        case .scratch: return "Scratch terminal"
+        case .split: return "Split view"
+        case .dashboard: return "Dashboard"
+        case .quickTerminal: return "Quick terminal"
+        case .newWorkspace: return "New workspace"
+        case .newSession: return "New session"
+        case .flaggedView: return "Flagged view"
+        case .workspaceAddSession: return "Workspace add-session"
+        }
+    }
+
+    /// Which of the two separators in the title bar's trailing button cluster to draw, given how many
+    /// visible buttons each of the three groups has (A = recent-sessions + attention, B = scratch + split,
+    /// C = dashboard + quick-terminal). A separator sits ONLY where two groups that each still show 2+
+    /// buttons meet: `afterA` between A and B, `afterB` between B and C, or — when B is empty — directly
+    /// between a full A and a full C. A group reduced to one button flows in without a bracketing separator.
+    /// Host-free so the rule is unit-tested without an app host; the view supplies the three counts.
+    public static func titlebarGroupDividers(countA: Int, countB: Int, countC: Int) -> (afterA: Bool, afterB: Bool) {
+        let afterA = countA >= 2 && countB >= 2
+        let afterB = (countB >= 2 && countC >= 2) || (countA >= 2 && countC >= 2 && countB == 0)
+        return (afterA, afterB)
+    }
+}
+
 /// User-facing appearance settings, persisted independently of the workspace tree.
 ///
 /// Every field is optional: nil means "use the ghostty default", and a settings file written
@@ -190,6 +253,14 @@ public struct AppSettings: Codable, Equatable, Sendable {
     /// `NotificationManager` reads its mirror and issues the matching `requestUserAttention`, a no-op while
     /// agterm is the frontmost app.
     public var dockBounce: String?
+    /// Name of the system sound attached to a delivered desktop notification (e.g. `Glass`), or
+    /// nil/empty for no sound (the default). Delivered as `UNNotificationSound(named:)` on the banner's
+    /// content (the `.aiff` suffix is added when the name has none), so it RIDES the banner: gated by
+    /// `notificationsEnabled` and the macOS notification authorization, and silenced by Do Not Disturb —
+    /// unlike the badge and the Dock bounce, which fire whether or not banners show (only the Settings
+    /// picker's preview uses `NSSound`). An app-level value, NOT a ghostty key — it never appears in
+    /// `ghosttyConfigLines()`.
+    public var notificationSoundName: String?
     /// Name of the system sound played when a session enters the `blocked` status (e.g. `Glass`, resolved by
     /// `NSSound(named:)`), or nil/empty for no sound (the default). A per-call `session.status --sound`
     /// overrides this. An app-level value played at the AppKit level, NOT a ghostty key — it never appears
@@ -232,6 +303,12 @@ public struct AppSettings: Codable, Equatable, Sendable {
     /// sizes. Applied at the AppKit level when the sidebar draws, NOT a ghostty key — it never appears in
     /// `ghosttyConfigLines()`.
     public var sidebarFontSize: Double?
+    /// Raw names of title-bar / sidebar chrome elements the user has HIDDEN (see `InterfaceElement`).
+    /// nil/empty means every element is shown (the default). Stored as raw strings so an unknown future
+    /// element name decodes tolerantly (it is dropped by `resolvedHiddenInterfaceElements`) instead of
+    /// failing the whole decode — the AppSettings forward-compat rule. A GUI-only chrome value applied at
+    /// the AppKit/SwiftUI level, NOT a ghostty key — it never appears in `ghosttyConfigLines()`.
+    public var hiddenInterfaceElements: [String]?
 
     public init(fontFamily: String? = nil, fontSize: Double? = nil, theme: String? = nil,
                 darkTheme: String? = nil, followSystemAppearance: Bool? = nil,
@@ -242,12 +319,13 @@ public struct AppSettings: Codable, Equatable, Sendable {
                 mouseScrollMultiplier: Double? = nil, inactivePaneMuteStrength: Int? = nil,
                 sidebarBackgroundShift: Int? = nil, restoreRunningCommand: Bool? = nil,
                 inheritGlobalGhosttyConfig: Bool? = nil, attentionButtonEnabled: Bool? = nil,
-                dockBounce: String? = nil,
+                dockBounce: String? = nil, notificationSoundName: String? = nil,
                 blockedStatusSoundName: String? = nil, rightClickPaste: Bool? = nil,
                 newSessionDirectory: String? = nil, newSessionCustomDirectory: String? = nil,
                 confirmCloseSession: Bool? = nil, closeGraceUndoEnabled: Bool? = nil,
                 autoFollowAttention: String? = nil,
-                autoFollowStayOnActive: Bool? = nil, sidebarFontSize: Double? = nil) {
+                autoFollowStayOnActive: Bool? = nil, sidebarFontSize: Double? = nil,
+                hiddenInterfaceElements: [String]? = nil) {
         self.fontFamily = fontFamily
         self.fontSize = fontSize
         self.theme = theme
@@ -270,6 +348,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.inheritGlobalGhosttyConfig = inheritGlobalGhosttyConfig
         self.attentionButtonEnabled = attentionButtonEnabled
         self.dockBounce = dockBounce
+        self.notificationSoundName = notificationSoundName
         self.blockedStatusSoundName = blockedStatusSoundName
         self.rightClickPaste = rightClickPaste
         self.newSessionDirectory = newSessionDirectory
@@ -279,6 +358,20 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.autoFollowAttention = autoFollowAttention
         self.autoFollowStayOnActive = autoFollowStayOnActive
         self.sidebarFontSize = sidebarFontSize
+        self.hiddenInterfaceElements = hiddenInterfaceElements
+    }
+
+    /// The resolved set of hidden chrome elements: the known raw names from `hiddenInterfaceElements`,
+    /// with any unknown (future-written) names dropped. The single read point the app target and the
+    /// Settings UI use, so callers never touch the raw string list.
+    public var resolvedHiddenInterfaceElements: Set<InterfaceElement> {
+        Set((hiddenInterfaceElements ?? []).compactMap(InterfaceElement.init(rawValue:)))
+    }
+
+    /// Whether a given chrome element is hidden. Everything is shown by default, so an element absent from
+    /// the persisted list reads as visible.
+    public func isInterfaceElementHidden(_ element: InterfaceElement) -> Bool {
+        resolvedHiddenInterfaceElements.contains(element)
     }
 
     /// The resolved titlebar row state: the explicit `toolbarMode` when set to a KNOWN raw value, else the

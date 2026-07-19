@@ -19,6 +19,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// debounced `settings.json` writes (opacity/blur, theme preview) on terminate.
     var settingsModel: SettingsModel?
 
+    /// The action hub, handed over once the scene appears so `application(_:open:)` can open a session at
+    /// a folder path passed by `open -a agterm /path`. Nil before the scene `.task` runs.
+    var actions: AppActions?
+
+    /// Directories requested via `open -a agterm /path` (the OS "open terminal here" integration) that
+    /// haven't become sessions yet — queued until the frontmost window's store resolves, so a `session
+    /// new`-style graft lands in the last-active window.
+    private var pendingOpenDirectories: [String] = []
+
     private var restoreObserver: NSObjectProtocol?
     private var scheduledReconciliationReasons: Set<String> = []
 
@@ -81,6 +90,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let submenu = topItem.submenu else { continue }
             for item in submenu.items where item.action == selector {
                 submenu.removeItem(item)
+            }
+        }
+    }
+
+    /// `open -a agterm /path` (the OS "open terminal here" integration): macOS delivers the folder/file
+    /// URLs here. Each resolves to a directory (a folder → itself, a file → its parent, via the host-free
+    /// `OpenPathResolver`), which is queued and drained into a new session in the last-active window.
+    /// This serves the WARM case — agterm already running (its daily-driver norm) — where the running
+    /// instance has a window and grafts the session immediately.
+    func application(_: NSApplication, open urls: [URL]) {
+        let directories = urls.compactMap { OpenPathResolver.directory(for: $0) }
+        guard !directories.isEmpty else { return }
+        pendingOpenDirectories.append(contentsOf: directories)
+        drainPendingOpenDirectories()
+    }
+
+    /// Turn every queued `open -a` directory into a new session in the last-active window, one at a time,
+    /// dropping each entry only after its session lands (a transient failure keeps it queued). No-op when
+    /// the queue is empty. When the frontmost store isn't resolvable yet it retries on a 0.1 s backoff,
+    /// giving up after a bounded number of ticks so a folder can't wedge a stuck timer.
+    func drainPendingOpenDirectories(retry: Int = 0) {
+        guard !pendingOpenDirectories.isEmpty else { return }
+        guard let actions, library?.activeStore?.currentWorkspaceID != nil else {
+            guard retry < 50 else { pendingOpenDirectories.removeAll(); return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                self?.drainPendingOpenDirectories(retry: retry + 1)
+            }
+            return
+        }
+        NSApp.activate()
+        let beforeCount = pendingOpenDirectories.count
+        while let directory = pendingOpenDirectories.first, actions.openSession(atDirectory: directory) {
+            pendingOpenDirectories.removeFirst()
+        }
+        // raise/deminiaturize the window the session landed in — `NSApp.activate()` only brings the app
+        // forward, so an "open terminal here" into a minimized last-active window would otherwise leave it
+        // in the Dock and show nothing. `WindowRegistry.raise` deminiaturizes + makes key; a no-op for an
+        // already-frontmost window. Only when a session actually landed.
+        if pendingOpenDirectories.count < beforeCount, let windowID = library?.activeWindowID {
+            WindowRegistry.shared.raise(windowID)
+        }
+        if !pendingOpenDirectories.isEmpty, retry < 50 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                self?.drainPendingOpenDirectories(retry: retry + 1)
             }
         }
     }

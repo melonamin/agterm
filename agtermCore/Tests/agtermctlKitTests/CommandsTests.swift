@@ -88,6 +88,12 @@ struct CommandsTests {
         #expect(try request(["session", "new", "--workspace-name", "servers", "--create-workspace"]) == expected)
     }
 
+    @Test func sessionNewWithNoSelect() throws {
+        // --no-select sets noSelect=true on the wire (omitted when the flag is absent).
+        let expected = ControlRequest(cmd: .sessionNew, args: ControlArgs(noSelect: true))
+        #expect(try request(["session", "new", "--no-select"]) == expected)
+    }
+
     @Test func sessionNewRejectsWorkspaceAndWorkspaceName() {
         // both addressing modes set — validate() rejects it before any request is built.
         #expect(validationMessage(["session", "new", "--workspace", "active", "--workspace-name", "servers"])
@@ -123,6 +129,17 @@ struct CommandsTests {
     @Test func sessionNewRejectsBeforeAndWorkspaceName() {
         #expect(validationMessage(["session", "new", "--before", "a", "--workspace-name", "servers"])
             == "session.new takes --after/--before or a workspace, not both")
+    }
+
+    @Test func sessionDuplicateTargetsExplicitSession() throws {
+        let expected = ControlRequest(cmd: .sessionDuplicate, target: "9f3c")
+        #expect(try request(["session", "duplicate", "--target", "9f3c"]) == expected)
+    }
+
+    @Test func sessionDuplicateDefaultsToActive() throws {
+        // no options at all: the target defaults to `active`, which names its own workspace and cwd.
+        let expected = ControlRequest(cmd: .sessionDuplicate, target: "active")
+        #expect(try request(["session", "duplicate"]) == expected)
     }
 
     @Test func sessionClose() throws {

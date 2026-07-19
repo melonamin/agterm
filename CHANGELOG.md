@@ -1,5 +1,45 @@
 # Changelog
 
+## v0.15.2 - 2026-07-18
+
+### Improvements
+
+- a Settings ▸ Interface toggle for the per-workspace add-session `+` (the glyph revealed on hovering a workspace row), so it can be hidden like the other chrome elements #252 @umputun
+- idle auto-follow now shows each waiting block once instead of repeatedly pulling you back to the same blocked session; a session re-arms only when it leaves blocked and blocks again #251 @umputun
+- an opt-in `--no-select` flag on `agtermctl session new` that creates a session in the background without selecting or focusing it, leaving the current selection and focus in place #250 @umputun
+- `open -a agterm <path>` (or Finder's Open With ▸ agterm on a folder) adds a terminal session in that directory to the last-active window while agterm is running #244 @umputun
+
+### Bug Fixes
+
+- custom-command key chords now fire from a window that has drained to zero sessions (for example after an SSH session disconnects) instead of going dead #249 @umputun
+
+## v0.15.1 - 2026-07-17
+
+### Bug Fixes
+
+- renaming a session in the flagged view no longer bakes the ` : workspace` suffix into the name; the inline editor now seeds the bare session name instead of the decorated row label #243 @umputun
+
+## v0.15.0 - 2026-07-17
+
+### New Features
+
+- a new Interface tab in Settings to hide or show individual title-bar and sidebar-footer chrome elements (the sidebar toggle, the session and window names, the recent-sessions, scratch, split, dashboard, and quick-terminal buttons, and the new-workspace, new-session, and flagged-view footer buttons), each shown by default #241 @umputun
+- a Duplicate Session action, reachable from the sidebar context menu, the menu bar, the action palette, a keybinding, and the control API #234 @dimetron
+- per-pane OSC 11 dynamic background under window translucency, so a program that sets its own background color tints just its pane instead of staying hidden behind the window backing #240 @umputun
+- closing the active session now returns to the previously-active session instead of the next one in the list #231 @olomix
+- an optional notification sound on a delivered banner, off by default, chosen in Settings ▸ Notifications #232 @ZUBOV-ILLIA
+- an inline `+` button on each workspace row to create a new session in that workspace #233 @wievtsal
+
+### Bug Fixes
+
+- make the site navigation responsive on mobile #229 @Hormold
+
+## v0.14.1 - 2026-07-15
+
+### Bug Fixes
+
+- stop the mouse cursor flickering between shapes over a restored session's visible terminal, by scoping every cursor write to the on-screen deck pane so a hidden stacked surface can no longer paint its cached shape over the front one #228 @umputun
+
 ## v0.14.0 - 2026-07-14
 
 ### New Features

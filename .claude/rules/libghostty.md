@@ -231,6 +231,58 @@ paths:
   a `deckVisible` gate (so a covered scratch is also not a file-drop target).
   The FLOATING (sized) overlay and the quick terminal need none of this — both draw an opaque
   `terminalColor`-backed panel, so nothing shows through them.
+- **OSC 11 dynamic background is honored PER-PANE via `GHOSTTY_ACTION_COLOR_CHANGE`.**
+  libghostty parses OSC 10/11/12 (set fg/bg/cursor) and applies the color to its own render state, then
+  fires the `GHOSTTY_ACTION_COLOR_CHANGE` action as a NOTIFICATION (the reference macOS apprt only posts
+  a NotificationCenter event from it; it does not paint the surface).
+  Under translucency the surface renders `background-opacity = 0`, so an OSC 11 background is invisible —
+  the terminal is transparent and the AppKit window backing (theme) shows through.
+  `GhosttyCallbacks` handles `COLOR_CHANGE` for the BACKGROUND kind and calls `GhosttySurfaceView.applyOSCBackground(_:)`,
+  which gives THIS surface its own `.color` config overlay (`WatermarkConfig.overlayText` — the SAME
+  per-surface path as `session background color`), baking the window opacity into `background-opacity`, so
+  the pane renders its tint translucently, per-pane, without touching the window backing or any other surface.
+  Held on `GhosttySurfaceView.oscBackgroundColorHex` and re-asserted across a config reload and a live
+  opacity change (`reapplySessionConfigIfNeeded`/`reapplyColorBackgroundIfNeeded`), and preserved across a
+  dashboard open/close (the `dashboardFontOverride` didSet re-emits it).
+  **A program's live OSC 11 owns the pane's rendered color; an explicit `session.background` CANNOT
+  override it against the pinned libghostty (codex-confirmed for commit `4dcb09ada`).**
+  libghostty's `DynamicRGB` (terminal `Colors.background`, `src/terminal/color.zig`) has two layers,
+  `override` (set by OSC 11 via `colors.background.set`) and `default` (seeded from the ghostty `background`
+  config key, `Termio.zig`), and the renderer draws `override orelse default`.
+  `session.background color` (and the `.color` overlay generally) only sets the config `default`, so while
+  an OSC 11 `override` is live it MASKS the explicit color and the pane keeps rendering the OSC color.
+  There is NO embedding C API to clear the `override`: config updates touch only `default`, the `reset`
+  binding action's `fullReset` (RIS) does NOT touch colors, `csi`/`esc`/`text` write to the child pty and
+  not the VT parser, and `COLOR_CHANGE` is outbound-only.
+  Even OSC 111 does not null the override: in this pin `DynamicRGB.reset()` COPIES the current `default`
+  into `override`, so the override only changes when the program emits a color-reset sequence or the surface
+  is recreated (a fresh shell).
+  The explicit spec is therefore the DEFAULT layer, visible only when no OSC override is live; `tree`'s
+  `background` reports the stored spec, which can differ from what a live OSC program is painting.
+  `oscBackgroundColorHex` mirrors the OSC color currently applied to THIS surface's overlay (nil when a
+  watermark/plain config is applied instead): it is BOTH the dedupe key in the `COLOR_CHANGE` caller and the
+  re-assert source across reload / opacity / dashboard.
+  `applyWatermarkFromSession` (every `session.background` set/clear) RELEASES the latch, because it installs
+  a config with no OSC overlay; without this, a re-`printf` of the SAME OSC 11 color right after `session
+  background clear/set` matches the stale latch, is deduped away, and never renders.
+  The reload / opacity / dashboard re-assert paths guard on the latch BEFORE calling
+  `applyWatermarkFromSession`, so a live OSC is preserved there, not dropped.
+  `session.background clear` does not reset the OSC override (nothing can): it emits an EMPTY overlay so the
+  surface falls back to the base config's pinned `background-opacity = 0`, the OSC color is re-HIDDEN behind
+  the window backing, the pane shows the theme background, and a later `printf` OSC 11 re-renders (the latch
+  was released).
+  `session.background color X` instead bumps the opacity back to `windowOpacity`, so the still-live OSC
+  override RESURFACES and masks X; and because `session.background` is session-scoped, both split panes are
+  affected even though the OSC tint was per-pane.
+  Only BACKGROUND is wired — OSC 10/12 (fg/cursor) render regardless of translucency.
+  A per-prompt OSC re-emit is deduped in the `COLOR_CHANGE` caller (skip when the hex is unchanged) so a
+  shell re-asserting OSC 11 every prompt does not rebuild the surface config each time.
+  Reset (OSC 111) arrives as a `COLOR_CHANGE` to the theme color, so the pane reverts to the theme
+  background (intended — the callback cannot distinguish a reset from a deliberate set-to-theme-color); a
+  pane/tab close clears the latch outright.
+  Diagnosed with codex; verified BY EYE (background color is not accessibility-observable, like the
+  cursor solid/hollow case), only visible under translucency (at 100% opacity ghostty renders the OSC bg
+  itself).
 - **Non-zero backing size.**
   Create the surface only when the view has a non-zero backing size, else the Metal layer renders blank.
   `pendingSurfaceCreation` defers creation until `setFrameSize` reports a real size.
@@ -383,6 +435,52 @@ paths:
   It is the companion to the `mouseEntered` restore (which only covers cross-the-boundary re-entry).
   Like the cursor-focus case, this input plumbing is not accessibility-observable and is verified by hand,
   not a UI test.
+- **Only the ON-SCREEN deck pane may set the process-global cursor (`deckVisible` gates every cursor write).**
+  Every session's surface is eagerly realized with a `.mouseMoved`/`.cursorUpdate` tracking area, and AppKit
+  tracking ignores SwiftUI `.opacity(0)`/sibling overlap the SAME way drag-destination resolution does — a
+  hidden surface's `visibleRect` is NOT clipped by the visible pane stacked over it.
+  So several stacked surfaces receive the SAME `mouseMoved` and each ran `NSCursor.set()`; a hidden session
+  cached at a different mouse shape (a mouse-reporting TUI, or an OSC 22 pointer shape) then flickered its
+  shape over the visible terminal on every move — issue #225's arrow↔I-beam flicker, seen in RESTORED
+  sessions precisely because restore mounts MANY surfaces at once (one session shows no competition).
+  The fix gates the cursor on `deckVisible` (the same on-screen-pane flag drag registration uses) in TWO
+  places: `setupTrackingArea` installs the tracking area only while `deckVisible` (a hidden surface gets no
+  `mouseMoved` at all — this also stops the `reportMousePos` fan-out to every hidden TUI), AND the three
+  cursor-set sites (`mouseMoved`, `applyMouseShape`, `cursorUpdate`) each `guard deckVisible`.
+  The tracking-area gate ALONE is NOT enough: AppKit still delivers a `cursorUpdate` to a HIDDEN surface on
+  window activation, so a background pane cached at a stale shape would paint it on the reactivating click
+  without the `.set()`-site guards.
+  Conversely AppKit does NOT re-issue a `cursorUpdate` to the VISIBLE pane on bare activation, so
+  `reassertCursorOnActivation` (called from the `didBecomeKey` observer) re-asserts the visible pane's cursor
+  when its window becomes key — gated `deckVisible` + `isKeyWindow` + pointer-in-bounds, so it never paints
+  the terminal cursor over the sidebar or a background window, and it wins uncontested since hidden panes are
+  already muted.
+  `deckVisible` itself is computed in `WindowContentView.sessionDetail` (the pane's `visible`, plus the
+  scratch and overlay `deckVisible` expressions); each must exclude EVERY layer that covers the surface, or
+  the covered surface keeps `deckVisible = true` and competes anyway.
+  Full overlay / scratch drop it via `hideForOverlay`; the window-level quick terminal drops it via
+  `!quickTerminal.isVisible` on the pane, scratch, AND overlay expressions (it covers the deck WITHOUT
+  touching `deckInteractive`/`hideForOverlay`, so without that term the covered surfaces flicker against the
+  quick-terminal surface — issue #225's quick-terminal path).
+  Two residual cases remain, both far milder than the original many-surface flicker and both predating this
+  change.
+  A FLOATING overlay leaves the pane VISIBLE in the margin around the panel (so the pane legitimately keeps
+  `deckVisible = true`), and no boolean gate can scope the cursor to the panel-vs-margin split — over the
+  panel's overlap the pane and the overlay surface can still show competing shapes.
+  The command palette and Ctrl-Tab switcher (window-level SwiftUI overlays NOT in the `deckVisible`
+  predicate) likewise leave the covered pane `deckVisible = true`, so over them the covered terminal surface
+  can still write its cached cursor (cosmetic, plus a rare drop-through) — but that is ONE terminal surface
+  under a SwiftUI overlay, not two terminals fighting, and these are transient keyboard-driven overlays the
+  pointer rarely rests on.
+  Both are left as known limitations of the boolean approach rather than chasing every window-level overlay
+  into the predicate (the quick terminal is gated because it is the persistent, mouse-used one).
+  The tracking + pointer methods live in `GhosttySurfaceView+Tracking.swift` (`currentTrackingArea` is
+  `internal`, not `private`, so that extension can manage the stored area).
+  Cursor shape is not accessibility-observable, so this is verified BY EYE (like the cursor solid/hollow
+  case), reproduced deterministically with several stacked sessions given differing OSC 22 shapes
+  (`printf '\033]22;crosshair\007'`).
+  Do NOT "simplify" this to only the tracking-area gate (the refocus crosshair returns) or only the
+  `.set()`-site gates (hidden TUIs keep getting the `reportMousePos` fan-out).
 - **OSC 52 clipboard access is gated in OUR callbacks, not by a ghostty-internal dialog.**
   A program reading (`\e]52;c;?\a`) or writing (`\e]52;c;<base64>\a`) the system clipboard reaches agterm
   through `read_clipboard_cb`/`confirm_read_clipboard_cb` and `write_clipboard_cb` (`GhosttyCallbacks`).
