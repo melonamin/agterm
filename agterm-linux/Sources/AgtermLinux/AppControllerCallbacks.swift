@@ -49,6 +49,25 @@ let onWindowCloseRequest: @MainActor @convention(c) (OpaquePointer?, gpointer?) 
     return 0
 }
 
+let onEmptyWindowKeyPressed: @MainActor @convention(c)
+    (OpaquePointer?, UInt32, UInt32, UInt32, gpointer?) -> gboolean = { controller, keyval, keycode, state, _ in
+        MainActor.assumeIsolated {
+            guard let owner = controllerForEventController(controller), owner.store.activeSession == nil else {
+                return 0
+            }
+            return owner.handleKey(
+                keyval: keyval, keycode: keycode, state: state, sessionID: UUID(), origin: nil) ? 1 : 0
+    }
+}
+
+@MainActor
+func installEmptyWindowKeyController(on window: OpaquePointer?) {
+    let keys = gtk_event_controller_key_new()
+    connect(keys, "key-pressed", unsafeBitCast(onEmptyWindowKeyPressed as @convention(c)
+        (OpaquePointer?, UInt32, UInt32, UInt32, gpointer?) -> gboolean, to: GCallback.self))
+    gtk_widget_add_controller(W(window), keys)
+}
+
 let onQuitResponse: @MainActor @convention(c) (OpaquePointer?, UnsafePointer<CChar>?, gpointer?) -> Void = { dialog, response, _ in
     let id = response.map { String(cString: $0) } ?? "cancel"
     MainActor.assumeIsolated { controllerForWidget(dialog)?.confirmQuit(id) }
@@ -65,6 +84,14 @@ let onNewSession: @MainActor @convention(c) (OpaquePointer?, gpointer?) -> Void 
 
 let onNewWorkspace: @MainActor @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
     MainActor.assumeIsolated { controllerForWidget(button)?.newWorkspace() }
+}
+
+let onWorkspaceAddSession: @MainActor @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
+    MainActor.assumeIsolated {
+        guard let controller = controllerForWidget(button),
+              let workspace = controller.workspaceForHeader(button) else { return }
+        controller.newSession(in: workspace)
+    }
 }
 
 let onSidebarToggle: @MainActor @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
@@ -283,6 +310,10 @@ let onCtxMove: @MainActor @convention(c) (OpaquePointer?, gpointer?) -> Void = {
 
 let onCtxRename: @MainActor @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
     MainActor.assumeIsolated { controllerForWidget(button)?.contextRename() }
+}
+
+let onCtxDuplicate: @MainActor @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in
+    MainActor.assumeIsolated { controllerForWidget(button)?.contextDuplicate() }
 }
 
 let onCtxRevealDirectory: @MainActor @convention(c) (OpaquePointer?, gpointer?) -> Void = { button, _ in

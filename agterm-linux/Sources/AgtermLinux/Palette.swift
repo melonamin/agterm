@@ -85,6 +85,9 @@ extension AppController {
         case .newWorkspace: return (.newWorkspace, { self.newWorkspace() })
         case .openDirectory: return (.openDirectory, { self.openDirectory() })
         case .renameSession: return (.renameSession, { self.startRenameActive() })
+        case .duplicateSession: return (.duplicateSession, {
+            if let id = self.store.selectedSessionID { _ = self.duplicateSession(id) }
+        })
         case .renameWorkspace: return (.renameWorkspace, { if let id = self.store.currentWorkspaceID { self.beginRename(id: id, isWorkspace: true) } })
         case .closeSession: return (.closeSession, { if let id = self.store.selectedSessionID { self.requestCloseSession(id) } })
         case .reopenRecent: return (.reopenRecent, { self.reopenRecentClosed() })

@@ -20,7 +20,7 @@ struct LinuxControlDispatcher {
         switch request.cmd {
         case .tree:
             return actions.controlTree(window: request.args?.window)
-        case .sessionNew, .sessionSelect, .sessionGo, .sessionClose, .sessionRename, .sessionReveal,
+        case .sessionNew, .sessionDuplicate, .sessionSelect, .sessionGo, .sessionClose, .sessionRename, .sessionReveal,
                 .sessionMove, .sessionFlag, .sessionSeen, .sessionStatus:
             return dispatchSessionCommand(request)
         case .sessionSplit, .sessionScratch, .sessionFocus, .sessionResize, .surfaceZoom,
@@ -71,8 +71,11 @@ struct LinuxControlDispatcher {
                 command: args?.command,
                 name: args?.name,
                 after: args?.after,
-                before: args?.before
+                before: args?.before,
+                noSelect: args?.noSelect == true
             ))
+        case .sessionDuplicate:
+            return actions.duplicateSession(request.target, window: request.args?.window)
         case .sessionSelect:
             return actions.selectSession(request.target, window: request.args?.window)
         case .sessionGo:

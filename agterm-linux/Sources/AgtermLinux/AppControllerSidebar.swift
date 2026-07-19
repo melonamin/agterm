@@ -6,6 +6,12 @@ import agtermCore
 extension AppController {
     static var sidebarFontProvider: OpaquePointer?
 
+    func newSession(in workspaceID: UUID) {
+        noteUserActivity()
+        guard store.addSession(toWorkspace: workspaceID, cwd: newSessionCwd()) != nil else { return }
+        reconcile()
+    }
+
     func installSidebarDirectoryDropTarget() {
         let drop = gtk_drop_target_new(gdk_file_list_get_type(), GDK_ACTION_COPY)
         connect(drop, "drop", unsafeBitCast(onSidebarDirectoryDrop as @convention(c)
@@ -106,6 +112,17 @@ extension AppController {
                 gtk_widget_add_css_class(W(name), "heading")
                 gtk_box_append(cast(row), W(name))
             }
+            if !linuxSettingsStore().load().isInterfaceElementHidden(.workspaceAddSession),
+               let add = op(gtk_button_new_from_icon_name("list-add-symbolic")) {
+                gtk_button_set_has_frame(BUTTON(add), 0)
+                gtk_widget_add_css_class(W(add), "flat")
+                gtk_widget_add_css_class(W(add), "workspace-add-session")
+                "New Session in \(title)".withCString { gtk_widget_set_tooltip_text(W(add), $0) }
+                workspaceDiscButtons[add] = wsID
+                connect(add, "clicked", unsafeBitCast(onWorkspaceAddSession as @convention(c)
+                    (OpaquePointer?, gpointer?) -> Void, to: GCallback.self))
+                gtk_box_append(cast(row), W(add))
+            }
             workspaceDiscButtons[row] = wsID
             let wsLeftClick = gtk_gesture_click_new()
             gtk_gesture_single_set_button(wsLeftClick, 1)
@@ -170,7 +187,10 @@ extension AppController {
             gtk_box_append(cast(box), W(lead))
         }
         let flaggedView = store.sidebarMode == .flagged
-        let label = flaggedView
+        // The flagged row normally includes its workspace breadcrumb, but inline rename must edit only
+        // the session's bare display name. Reuse the normal name widget for the active rename so the
+        // entry is created and seeded without the breadcrumb.
+        let label = flaggedView && renaming?.id != s.id
             ? op(gtk_label_new(LinuxSidebarPolicy.flaggedRowLabel(for: s, in: store)))
             : makeNameWidget(id: s.id, text: s.displayName, isWorkspace: false)
         gtk_widget_set_hexpand(W(label), 1)

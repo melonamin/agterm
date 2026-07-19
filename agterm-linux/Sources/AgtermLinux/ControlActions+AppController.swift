@@ -100,17 +100,18 @@ extension AppController: ControlActions {
 
     func createSession(_ options: ControlSessionCreateOptions) -> ControlResponse {
         let cwd = options.cwd ?? Self.homeCwd
+        let shouldFocus = !options.noSelect && gtk_window_is_active(WIN(windowPointer)) != 0
         if let anchor = options.after ?? options.before {
             switch resolveAnchorLocation(anchor) {
             case .failure(let response): return response
             case .success(let location):
                 let index = options.before != nil ? location.index : location.index + 1
                 guard let session = store.addSession(toWorkspace: location.workspace, cwd: cwd,
-                                                     command: options.command, name: options.name, at: index) else {
+                                                     command: options.command, name: options.name, at: index,
+                                                     select: !options.noSelect) else {
                     return err("no such workspace")
                 }
-                reconcile()
-                selectSession(session.id, userInitiated: false)
+                reconcile(focusActive: shouldFocus)
                 return ok(session.id)
             }
         }
@@ -118,7 +119,8 @@ extension AppController: ControlActions {
         if let name = options.workspaceName {
             guard let needle = name.linuxTrimmedOrNil else { return err("workspace name must not be blank") }
             if options.createWorkspace == true {
-                workspaceID = store.ensureWorkspace(named: needle)?.id ?? store.addWorkspace(name: needle).id
+                workspaceID = store.ensureWorkspace(named: needle, clearFocus: !options.noSelect)?.id
+                    ?? store.addWorkspace(name: needle, clearFocus: !options.noSelect).id
             } else if let workspace = store.workspace(named: needle) {
                 workspaceID = workspace.id
             } else {
@@ -131,14 +133,23 @@ extension AppController: ControlActions {
             }
         }
         guard let session = store.addSession(toWorkspace: workspaceID, cwd: cwd,
-                                             command: options.command, name: options.name) else {
+                                             command: options.command, name: options.name,
+                                             select: !options.noSelect) else {
             return err("no such workspace")
         }
-        reconcile()
-        selectSession(session.id, userInitiated: false)
+        reconcile(focusActive: shouldFocus)
         return ok(session.id)
     }
 
+    func duplicateSession(_ target: String?, window: String?) -> ControlResponse {
+        switch resolveSessionResponse(target) {
+        case .failure(let response): return response
+        case .success(let id):
+            guard let session = store.duplicateSession(id) else { return err("could not duplicate session") }
+            reconcile(focusActive: gtk_window_is_active(WIN(windowPointer)) != 0)
+            return ok(session.id)
+        }
+    }
     func selectSession(_ target: String?, window: String?) -> ControlResponse {
         switch resolveSessionResponse(target) {
         case .failure(let response): return response

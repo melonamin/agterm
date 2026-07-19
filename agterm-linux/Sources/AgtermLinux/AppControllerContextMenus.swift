@@ -6,6 +6,14 @@ import agtermCore
 extension AppController {
     // MARK: - Row context menu
 
+    @discardableResult
+    func duplicateSession(_ id: UUID) -> Session? {
+        noteUserActivity()
+        guard let duplicate = store.duplicateSession(id) else { return nil }
+        reconcile()
+        return duplicate
+    }
+
     func showRowContextMenu(listBox: OpaquePointer, x: Double, y: Double) {
         guard let rowPtr = gtk_list_box_get_row_at_y(listBox, Int32(y)),
               let sid = rowSession[OpaquePointer(rowPtr)] else { return }
@@ -36,6 +44,9 @@ extension AppController {
         if targets.count == 1 {
             addContextButton(box, "Rename",
                              unsafeBitCast(onCtxRename as @convention(c) (OpaquePointer?, gpointer?) -> Void, to: GCallback.self))
+            addContextButton(box, "Duplicate Session",
+                             unsafeBitCast(onCtxDuplicate as @convention(c) (OpaquePointer?, gpointer?) -> Void,
+                                           to: GCallback.self))
             addContextButton(box, "Reveal in Files",
                              unsafeBitCast(onCtxRevealDirectory as @convention(c) (OpaquePointer?, gpointer?) -> Void,
                                            to: GCallback.self))
@@ -108,6 +119,12 @@ extension AppController {
         dismissContextMenu()
         selectSession(id)
         startRenameActive()
+    }
+
+    func contextDuplicate() {
+        guard let id = contextMenuSession else { return }
+        dismissContextMenu()
+        _ = duplicateSession(id)
     }
 
     func contextRevealDirectory() {

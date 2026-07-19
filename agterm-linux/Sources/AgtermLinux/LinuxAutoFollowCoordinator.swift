@@ -119,12 +119,15 @@ final class LinuxAutoFollowCoordinator: @unchecked Sendable {
         let current = store.activeSession
         if current?.agentIndicator.status == .blocked { return }
         if stayOnActive, current?.agentIndicator.status == .active { return }
-        let blocked = store.attentionSessions.filter { $0.agentIndicator.status == .blocked }
+        let blocked = store.attentionSessions.filter {
+            $0.agentIndicator.status == .blocked && !$0.autoFollowConsumed
+        }
         guard let target = blocked.min(by: {
             ($0.statusChangedAt ?? .distantFuture) < ($1.statusChangedAt ?? .distantFuture)
         }) else { return }
         let statusPane = target.agentIndicator.statusPane
         store.selectSession(target.id)
+        target.autoFollowConsumed = true
         handleAutoFollow(target.id, statusPane: statusPane)
     }
 }

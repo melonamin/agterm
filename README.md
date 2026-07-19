@@ -41,7 +41,7 @@ Code layout:
 
 ### Linux feature parity and platform differences
 
-The `linux-port` branch carries the upstream v0.13.0 terminal model and control protocol, including
+The `linux-port` branch carries the upstream v0.15.2 terminal model and control protocol, including
 split/scratch/overlay terminals, Quick terminal input and read-back, terminal zoom, fullscreen,
 recently closed sessions with grouped undo, light/dark themes, configurable toolbar and sidebar text,
 recent-session and attention popovers, agent status in the multi-session dashboard, stable pane status
@@ -380,9 +380,16 @@ The dashboard and terminal zoom are mutually exclusive.
 
 **Flagging and focus.** Two ways to cut down a busy sidebar. Flag a few sessions from different workspaces to get a flat working-set view of just those; a flag is durable and survives a move. Focus a single workspace to hide the others, with a one-click way back. The two are independent.
 
-Sidebar session rows support Shift-click range selection and Cmd-click toggling for batch work. Right-clicking inside a multi-selection keeps the batch for Flag/Unflag, Close, and Move to; right-clicking outside narrows to the clicked row. Dragging from a selected row moves the selected sessions as one ordered block. **Duplicate Session** — in a single session's context menu, right after Rename — opens a fresh session in the same workspace, right after that one, in its current directory (a plain new shell: only the directory carries over, nothing else about the session does).
+Sidebar session rows support Shift-click range selection and Cmd-click toggling on macOS or Ctrl-click toggling on Linux for batch work.
+Right-clicking inside a multi-selection keeps the batch for Flag/Unflag, Close, and Move to; right-clicking outside narrows to the clicked row.
+Dragging from a selected row moves the selected sessions as one ordered block.
+**Duplicate Session** — in a single session's context menu, right after Rename — opens a fresh session in the same workspace, right after that one, in its current directory (a plain new shell: only the directory carries over, nothing else about the session does).
 
-**Finder integration.** In the tree view, drag folders from Finder onto a workspace or session row to open one session per folder there; drop on empty sidebar space to use the focused/current workspace. Collapsed workspaces spring open while you hover and close again if you cancel. Dropping more than 20 folders at once is rejected. **Reveal in Finder** in the session context menu or main menu selects the focused pane's current directory (and is disabled if that directory no longer exists). Folder-picking panels also start in the focused pane's directory when it is available.
+**File-manager integration.** In the tree view, drag folders from Finder on macOS or the desktop file manager on Linux onto a workspace or session row to open one session per folder there; drop on empty sidebar space to use the focused/current workspace.
+Collapsed workspaces spring open while you hover and close again if you cancel.
+Dropping more than 20 folders at once is rejected.
+**Reveal in Finder** on macOS or **Reveal in Files** on Linux opens the focused pane's current directory (and is disabled if that directory no longer exists).
+Folder-picking panels also start in the focused pane's directory when it is available.
 
 **Notifications.** A program in any session can raise a desktop notification (via OSC 9 / 777, or the control API). It shows as a banner and a count badge on the session's row unless that exact terminal surface is already focused in the active window; an explicit `agtermctl notify` request always delivers. Clicking the banner jumps to the exact pane that raised it and reopens its encoded window if it was closed in the meantime. Upstream macOS can optionally bounce its Dock icon while the app is in the background; Linux omits that setting because desktop shells provide no portable equivalent. The badge clears when you visit the session, or headlessly with `agtermctl session seen` — so an orchestrator driving a session over the socket can acknowledge its notifications without pulling focus to it (`agtermctl tree --json` reports each session's `unseen` count). For a coding agent that just needs to say it is waiting on you, [Agent status](#agent-status) is usually the better fit.
 
@@ -404,7 +411,7 @@ The same recently-used history decides where you land when you close the session
 
 On Linux, press **Ctrl+,** or choose **Preferences…** from the command palette.
 Both routes remain available when the toolbar is hidden.
-The GTK Preferences dialog has **General**, **Appearance**, **Notifications**, **Agent Status**, **Key Mapping**, and **Integrations** pages.
+The GTK Preferences dialog has **General**, **Appearance**, **Interface**, **Notifications**, **Agent Status**, **Key Mapping**, and **Integrations** pages.
 Common options use native controls and apply live: mouse behavior, new-session directories, command restoration, close behavior, font and light/dark themes, terminal opacity, toolbar mode, sidebar tint and text size, inactive-pane muting, notifications, status colors and desktop bell, and auto-follow behavior.
 The Key Mapping page shows the active path and parse diagnostics and can open or reload `keymap.conf`.
 
@@ -416,6 +423,14 @@ On macOS, upstream Settings uses **Cmd+,**, retains the platform-owned blur cont
 
 The toolbar has three modes: **Normal**, **Compact** (the default), and **Hidden**.
 Hiding it does not disable **Ctrl+,**, keyboard shortcuts, or command-palette access.
+The Interface page independently shows or hides title-bar actions and sidebar footer actions, including the
+hover-revealed add-session button on each workspace row.
+These choices affect presentation only; the corresponding keyboard, palette, and control actions remain available.
+
+Upstream macOS can attach an optional sound to a delivered notification so Focus and Do Not Disturb govern
+the interruption together with the banner.
+Linux's portable `GNotification` API has no sound field, so the GTK frontend intentionally omits that picker
+instead of playing audio independently of the desktop's notification policy.
 
 The theme picker (View ▸ Select Theme…, or the action palette) previews each bundled theme on the open terminals as you move through the list, so you see it before committing. Enter commits and syncs it to Settings; Esc reverts to the one you started on. While following the system appearance, the picker edits the theme for the appearance you are in; the control channel drives both slots with `agtermctl theme set --light NAME --dark NAME` (or either flag alone).
 On Linux, the GTK window chrome reads its palette from the same finalized Ghostty configuration as the terminal, so colors loaded through an agterm-scoped `config-file` import also theme the header and sidebar.
@@ -424,7 +439,9 @@ On Linux, the GTK window chrome reads its palette from the same finalized Ghostt
 
 `agterm` can be driven from a script over a local unix-domain socket through a companion CLI, `agtermctl`. This is for personal scripting — fire-and-forget commands that manage workspaces and sessions, inject text, and invoke control actions. There is no terminal-output streaming and no event subscription.
 
-To open a terminal at a directory without the CLI, `open -a agterm <path>` — or right-click a folder in Finder and choose **Open With ▸ agterm**. agterm adds a session in that directory to the last-active window. This works when agterm is already running (its usual state); if it isn't, launch agterm first, then run the command. The socket equivalent, and the way to place the session precisely, is `agtermctl session new --cwd <path>`.
+To open a terminal at a directory without the CLI, run `agterm-linux <path>` on Linux or `open -a agterm <path>` on macOS.
+agterm adds a session in that directory to the last-active window.
+The socket equivalent, and the way to place the session precisely, is `agtermctl session new --cwd <path>`.
 
 The sections below cover the common cases. All 61 commands, with every argument, return value, and error, are documented in the **[Command reference](https://agterm.com/commands)**.
 
@@ -697,6 +714,10 @@ agtermctl session status idle --target "$AGTERM_SESSION_ID"        # clear it
 ```
 
 `<state>` is one of `idle | active | completed | blocked`. `--blink` pulses the icon for attention. `--auto-reset` makes the indicator clear back to idle the moment you visit (select) the session — used for a finished result you only need to notice once; without it the status is kept until something changes it. `--sound` plays a one-shot sound when the status is set — `default` for the system alert sound, or a system sound name (`Basso`, `Blow`, `Bottle`, `Frog`, `Funk`, `Glass`, `Hero`, `Morse`, `Ping`, `Pop`, `Purr`, `Sosumi`, `Submarine`, `Tink`, plus any custom sound in `~/Library/Sounds`); it is optional and entirely caller-driven, so the agent decides when a status change is worth an audible nudge. If you'd rather have a blocked prompt always make a sound without touching the hooks, set **Settings ▸ Agent Status ▸ Blocked sound** to a system sound (default None) — it plays whenever a session becomes `blocked`, and an explicit `--sound` on the call still overrides it. `--color` (`#rrggbb`) overrides the glyph tint for that one call — it rides the status, so the next `session status` without `--color` reverts to the configured color; use it to distinguish states beyond the fixed palette (say, a caller-specific blocked color).
+
+On Linux, `default` and named status sounds map to the desktop bell, and the blocked-sound picker offers
+**None** or **Desktop bell**.
+This keeps the cross-platform control request valid without pretending that macOS sound catalogs exist on Linux.
 
 `--pane` (`left`|`right`|`scratch`, defaulting to `left` = the main pane when omitted) records which pane set the status, which has two effects: a status set from a background pane survives foreground typing in a *different* pane (only a keystroke in the owning pane clears it), and any GUI selection of the session (auto-follow, attention nav ⌃⌥↑/↓, plain session nav, the command palettes, and a sidebar click) reveals and focuses the tagged pane — flipping to the split, or showing a hidden scratch — instead of the main pane, so an agent running in a split or scratch should set its own pane to be found (the control `session go next-attention` only steps the selection, it does not itself move focus into the pane). It reads back on `tree` as each session's `statusPane`. The target session can live in any window, frontmost or not.
 

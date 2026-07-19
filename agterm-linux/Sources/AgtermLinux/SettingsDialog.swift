@@ -4,6 +4,7 @@ import agtermCore
 enum LinuxSettingsPage: String {
     case general
     case appearance
+    case interface
     case notifications
     case agentStatus = "agent-status"
     case keyMapping = "key-mapping"
@@ -26,6 +27,7 @@ extension AppController {
         "preferences".withCString { gtk_widget_set_name(W(dialog), $0) }
         adw_preferences_dialog_set_search_enabled(cast(dialog), 1)
         let pages = [makeGeneralSettingsPage(settings), makeAppearanceSettingsPage(settings),
+                     makeInterfaceSettingsPage(settings),
                      makeNotificationsSettingsPage(settings), makeAgentStatusSettingsPage(settings),
                      makeKeyMappingSettingsPage(settings), makeIntegrationsSettingsPage()]
         for preferencesPage in pages { adw_preferences_dialog_add(cast(dialog), cast(preferencesPage)) }
@@ -120,6 +122,7 @@ private let onSettingsClosed: @MainActor @convention(c) (OpaquePointer?, gpointe
             controller.settingsCustomDirectoryRow = nil
             controller.settingsConfigDirectoryRow = nil
             controller.settingsAutoFollowAwayRow = nil
+            controller.settingsInterfaceRows.removeAll()
             controller.integrationRows.removeAll()
             controller.integrationKindButtons.removeAll()
             controller.integrationButtons.removeAll()

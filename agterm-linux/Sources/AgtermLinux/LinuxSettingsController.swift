@@ -61,7 +61,43 @@ extension AppController {
 
     func setAttentionButtonEnabled(_ enabled: Bool) {
         persist(\.attentionButtonEnabled, enabled ? true : nil)
-        for controller in gWindows.values { controller.updateAttentionButton() }
+        for controller in gWindows.values {
+            controller.updateAttentionButton()
+            controller.applyInterfaceElements()
+        }
+    }
+
+    func setInterfaceElementVisible(_ element: InterfaceElement, visible: Bool) {
+        var settings = linuxSettingsStore().load()
+        var hidden = Set(settings.hiddenInterfaceElements ?? [])
+        if visible {
+            hidden.remove(element.rawValue)
+        } else {
+            hidden.insert(element.rawValue)
+        }
+        settings.hiddenInterfaceElements = hidden.isEmpty ? nil : hidden.sorted()
+        try? linuxSettingsStore().save(settings)
+        for controller in gWindows.values {
+            controller.applyInterfaceElements(settings: settings)
+            controller.rebuildSidebar()
+        }
+    }
+
+    func applyInterfaceElements(settings: AppSettings? = nil) {
+        let hidden = (settings ?? linuxSettingsStore().load()).resolvedHiddenInterfaceElements
+        for (element, widget) in interfaceWidgets {
+            gtk_widget_set_visible(W(widget), hidden.contains(element) ? 0 : 1)
+        }
+        let countA = (hidden.contains(.recentSessions) ? 0 : 1)
+            + ((linuxSettingsStore().load().attentionButtonEnabled ?? false) ? 1 : 0)
+        let countB = (hidden.contains(.scratch) ? 0 : 1) + (hidden.contains(.split) ? 0 : 1)
+        let countC = (hidden.contains(.dashboard) ? 0 : 1) + (hidden.contains(.quickTerminal) ? 0 : 1)
+        let dividers = InterfaceElement.titlebarGroupDividers(countA: countA, countB: countB, countC: countC)
+        gtk_widget_set_visible(W(titlebarDividerAfterA), dividers.afterA ? 1 : 0)
+        gtk_widget_set_visible(W(titlebarDividerAfterB), dividers.afterB ? 1 : 0)
+        let footerVisible = !hidden.isSuperset(of: [.newWorkspace, .newSession, .flaggedView])
+        gtk_widget_set_visible(W(bottomBar), footerVisible ? 1 : 0)
+        updateTitle()
     }
 
     func setNewSessionDirectoryAtIndex(_ index: Int) {

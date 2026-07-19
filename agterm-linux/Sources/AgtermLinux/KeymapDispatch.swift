@@ -182,7 +182,7 @@ extension AppController {
         // Custom-command leader matcher (disjoint from built-ins by parseKeymap validation).
         switch customCommandEngine.advance(chord) {
         case .fired(let cmd):
-            runCustomCommand(cmd, origin: origin)
+            runCustomCommand(cmd, origin: origin, allowSessionless: store.activeSession == nil)
             return true
         case .armed:
             return true   // leader in progress: consume and wait for the next chord
@@ -244,6 +244,7 @@ extension AppController {
         case .newSession: newSession()
         case .openDirectory: openDirectory()
         case .renameSession: startRenameActive()
+        case .duplicateSession: _ = duplicateSession(sessionID)
         case .closeSession: requestCloseSession(sessionID)
         case .reopenRecent: reopenRecentClosed()
         case .undoClose: undoPendingClose()

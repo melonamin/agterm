@@ -131,7 +131,8 @@ final class ControlServer: @unchecked Sendable {
             return .controller(controller)
         }
         switch req.cmd {
-        case .sessionClose, .sessionSelect, .sessionGo, .sessionRename, .sessionReveal, .sessionMove, .sessionType,
+        case .sessionClose, .sessionDuplicate, .sessionSelect, .sessionGo, .sessionRename, .sessionReveal,
+             .sessionMove, .sessionType,
              .sessionStatus, .sessionFlag, .sessionSeen, .sessionSplit, .sessionScratch, .sessionFocus,
              .sessionCopy, .sessionPaste, .sessionSelectAll, .sessionSearch,
              .sessionOverlayOpen, .sessionOverlayClose, .sessionOverlayResize, .sessionOverlayResult,

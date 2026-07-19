@@ -202,8 +202,14 @@ extension AppController {
         return (keymap.commands, diags.count)
     }
 
-    func runCustomCommand(_ cmd: CustomCommand, origin: GhosttySurface? = nil) {
+    func runCustomCommand(_ cmd: CustomCommand, origin: GhosttySurface? = nil,
+                          allowSessionless: Bool = false) {
         let s = store.activeSession
+        guard s != nil || allowSessionless else { return }
+        if s == nil, CommandContext.referencesSessionScopedContext(cmd.command) {
+            showToast("\(cmd.name) needs an active session")
+            return
+        }
         let workspace = s.flatMap { store.workspace(forSession: $0.id) }
         let pane: CommandContext.Pane
         let selectionSurface: GhosttySurface?
@@ -440,6 +446,22 @@ extension AppController {
             title = (p < 0 ? "⋯ " : "\(p)% ") + title
         }
         title.withCString { gtk_window_set_title(WIN(window), $0) }
+        if let titleWidget {
+            let hidden = linuxSettingsStore().load().resolvedHiddenInterfaceElements
+            let sessionPart = hidden.contains(.sessionName) ? nil : (store.activeSession?.displayName ?? "agterm")
+            let windowPart = hidden.contains(.windowName) || windowInfo?.hasCustomName != true ? nil : windowInfo?.name
+            let visibleTitle: String
+            switch (sessionPart, windowPart) {
+            case let (session?, window?): visibleTitle = "\(session) — \(window)"
+            case let (session?, nil): visibleTitle = session
+            case let (nil, window?): visibleTitle = window
+            case (nil, nil): visibleTitle = ""
+            }
+            visibleTitle.withCString { adw_window_title_set_title(titleWidget, $0) }
+            let subtitle = linuxSettingsStore().load().effectiveToolbarMode == .normal
+                ? (store.activeSession?.subtitleDetail ?? "") : ""
+            subtitle.withCString { adw_window_title_set_subtitle(titleWidget, $0) }
+        }
         normalTitle.withCString { value in
             if let zoomTitleLabel { gtk_label_set_text(zoomTitleLabel, value) }
         }

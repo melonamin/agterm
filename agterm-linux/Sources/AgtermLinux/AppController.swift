@@ -42,6 +42,9 @@ final class AppController {
     var recentSessionsButton: OpaquePointer? // title-bar MRU session picker
     var attentionButton: OpaquePointer?   // optional title-bar attention indicator button
     var dashboardButton: OpaquePointer?   // title-bar MRU dashboard toggle
+    var quickToggleBtn: OpaquePointer?; var sidebarToggleBtn: OpaquePointer?; var titleWidget: OpaquePointer?; var titlebarDividerAfterA: OpaquePointer?; var titlebarDividerAfterB: OpaquePointer?
+    var interfaceWidgets: [InterfaceElement: OpaquePointer] = [:]
+    var footerNewWorkspaceButton: OpaquePointer?; var footerNewSessionButton: OpaquePointer?; var footerFlaggedButton: OpaquePointer?
     var sessionPickerPopover: OpaquePointer?; var sessionPickerContexts: [SessionPickerRowContext] = []
     var sessionPickerSuppressesAutoFollow = false
     var sessionPickerShowsAttention = false
@@ -117,6 +120,7 @@ final class AppController {
     var settingsCustomDirectoryRow: OpaquePointer?
     var settingsConfigDirectoryRow: OpaquePointer?
     var settingsAutoFollowAwayRow: OpaquePointer?
+    var settingsInterfaceRows: [OpaquePointer: InterfaceElement] = [:]
     var integrationRows: [IntegrationKind: OpaquePointer] = [:]
     var integrationKindButtons: [IntegrationKind: OpaquePointer] = [:]
     var integrationButtons: [OpaquePointer: IntegrationPlanKind] = [:]
@@ -161,6 +165,7 @@ final class AppController {
         autoFollowCoordinator = LinuxAutoFollowCoordinator(store: store)
         window = OpaquePointer(adw_application_window_new(APPW(app)))
         attachControllerContext(to: window, windowID: windowID)
+        installEmptyWindowKeyController(on: window)
         // restore the window's last on-screen size (Wayland: size only — the compositor owns position),
         // else the default. set BEFORE present so the window maps at the saved size.
         if let geo = library.geometry(forWindow: windowID), geo.width > 0, geo.height > 0 {
@@ -199,12 +204,14 @@ final class AppController {
             connect(b, "clicked", unsafeBitCast(cb, to: GCallback.self))
             return b
         }
-        gtk_box_append(cast(bottomBar), W(footerButton("agterm-new-workspace-symbolic", "New Workspace", onNewWorkspace)))
-        gtk_box_append(cast(bottomBar), W(footerButton("agterm-new-session-symbolic", "New Session", onNewSession)))
+        footerNewWorkspaceButton = footerButton("agterm-new-workspace-symbolic", "New Workspace", onNewWorkspace)
+        footerNewSessionButton = footerButton("agterm-new-session-symbolic", "New Session", onNewSession)
+        gtk_box_append(cast(bottomBar), W(footerNewWorkspaceButton)); gtk_box_append(cast(bottomBar), W(footerNewSessionButton))
         let spacer = OpaquePointer(gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0))
         gtk_widget_set_hexpand(W(spacer), 1)
         gtk_box_append(cast(bottomBar), W(spacer))
-        gtk_box_append(cast(bottomBar), W(footerButton("agterm-flag-symbolic", "Show Flagged Only", onFlaggedToggle)))
+        footerFlaggedButton = footerButton("agterm-flag-symbolic", "Show Flagged Only", onFlaggedToggle)
+        gtk_box_append(cast(bottomBar), W(footerFlaggedButton))
         adw_toolbar_view_add_bottom_bar(sidebarToolbar, W(bottomBar))
 
         // Content side: header over [search bar (hidden) + deck]. No menu button and no window controls
@@ -214,35 +221,29 @@ final class AppController {
         self.contentHeader = contentHeader
         adw_header_bar_set_show_start_title_buttons(contentHeader, 0)
         adw_header_bar_set_show_end_title_buttons(contentHeader, 0)
+        installInterfaceTitle(in: contentHeader)
         // Title-bar session pickers and terminal toggles mirror the macOS top-right action cluster.
         // `pack_end` stacks leftward, so construction proceeds from the visual right edge.
         // Sidebar toggle on the LEFT (macOS sidebar.left), always visible so a hidden sidebar can return.
         let sidebarBtn = OpaquePointer(gtk_button_new_from_icon_name("agterm-sidebar-symbolic"))
+        sidebarToggleBtn = sidebarBtn
         gtk_widget_set_tooltip_text(W(sidebarBtn), "Toggle Sidebar (Ctrl+Shift+B)")
         connect(sidebarBtn, "clicked", unsafeBitCast(onSidebarToggle as @convention(c) (OpaquePointer?, gpointer?) -> Void, to: GCallback.self))
         adw_header_bar_pack_start(contentHeader, W(sidebarBtn))
         installPreferencesShortcut()
-        @discardableResult func headerToggle(_ icon: String, _ tip: String, _ cb: @escaping @convention(c) (OpaquePointer?, gpointer?) -> Void) -> OpaquePointer? {
-            let b = OpaquePointer(gtk_button_new_from_icon_name(icon))
-            gtk_widget_set_tooltip_text(W(b), tip); connect(b, "clicked", unsafeBitCast(cb, to: GCallback.self))
-            adw_header_bar_pack_end(contentHeader, W(b)); return b
-        }
-        func headerSeparator() {
-            let separator = OpaquePointer(gtk_separator_new(GTK_ORIENTATION_VERTICAL))
-            gtk_widget_set_margin_top(W(separator), 8); gtk_widget_set_margin_bottom(W(separator), 8)
-            adw_header_bar_pack_end(contentHeader, W(separator))
-        }
         // Left-to-right: Recent, Attention | Scratch, Split | Dashboard, Quick; split/scratch gain fill when active.
-        headerToggle("agterm-quick-symbolic", "Quick Terminal (Ctrl+`)", onQuickToggle)
-        dashboardButton = headerToggle("agterm-grid-symbolic", "Dashboard (Ctrl+Shift+M)", onDashboardToggle)
-        headerSeparator()
-        splitToggleBtn = headerToggle("agterm-split-symbolic", "Toggle Split (Ctrl+Shift+D)", onSplitToggle)
-        scratchToggleBtn = headerToggle("agterm-scratch-symbolic", "Scratch Terminal (Ctrl+Shift+J)", onScratchToggle)
-        headerSeparator()
-        attentionButton = headerToggle("emblem-important-symbolic", "Show sessions that need attention (Ctrl+Shift+I)", onAttentionButton)
-        recentSessionsButton = headerToggle("document-open-recent-symbolic", "Recent Sessions (Ctrl+Tab)", onRecentSessionsButton)
+        quickToggleBtn = linuxHeaderToggle(contentHeader, "agterm-quick-symbolic", "Quick Terminal (Ctrl+`)", onQuickToggle)
+        dashboardButton = linuxHeaderToggle(contentHeader, "agterm-grid-symbolic", "Dashboard (Ctrl+Shift+M)", onDashboardToggle)
+        titlebarDividerAfterB = linuxHeaderSeparator(contentHeader)
+        splitToggleBtn = linuxHeaderToggle(contentHeader, "agterm-split-symbolic", "Toggle Split (Ctrl+Shift+D)", onSplitToggle)
+        scratchToggleBtn = linuxHeaderToggle(contentHeader, "agterm-scratch-symbolic", "Scratch Terminal (Ctrl+Shift+J)", onScratchToggle)
+        titlebarDividerAfterA = linuxHeaderSeparator(contentHeader)
+        attentionButton = linuxHeaderToggle(contentHeader, "emblem-important-symbolic", "Show sessions that need attention (Ctrl+Shift+I)", onAttentionButton)
+        recentSessionsButton = linuxHeaderToggle(contentHeader, "document-open-recent-symbolic", "Recent Sessions (Ctrl+Tab)", onRecentSessionsButton)
+        registerInterfaceWidgets(sidebarToggle: sidebarBtn)
         updateAttentionButton()
         updateDashboardButton()
+        applyInterfaceElements()
         let contentToolbar = OpaquePointer(adw_toolbar_view_new())
         adw_toolbar_view_add_top_bar(contentToolbar, W(contentHeader))
         let contentBox = OpaquePointer(gtk_box_new(GTK_ORIENTATION_VERTICAL, 0))
@@ -294,7 +295,7 @@ final class AppController {
         _ = store.addSession(toWorkspace: wsID, cwd: newSessionCwd())
         reconcile()
     }
-    private func newSessionCwd() -> String {
+    func newSessionCwd() -> String {
         linuxSettingsStore().load().resolveNewSessionCwd(currentSessionCwd: store.activeSession?.focusedCwd,
                                                     home: Self.homeCwd)
     }
@@ -326,7 +327,6 @@ final class AppController {
         updateRecentSessionsButton()
         if needsRefresh || focusFilterChanged { rebuildSidebar() }
     }
-
     /// Whether selecting `id` would change its sidebar row (an unseen badge or an auto-reset glyph clears).
     private func clearedRowChanges(_ id: UUID) -> Bool {
         guard let s = store.session(withID: id) else { return false }
