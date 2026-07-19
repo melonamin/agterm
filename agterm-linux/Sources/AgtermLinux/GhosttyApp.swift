@@ -240,7 +240,11 @@ final class GhosttyApp: @unchecked Sendable {
                 Self.wrapper(fromTarget: target)?.applyHostConfigChange()
                 return true
             case GHOSTTY_ACTION_COLOR_CHANGE:
-                // a program changed the terminal palette/fg/bg (OSC 4/10/11); ghostty repaints via RENDER.
+                let change = action.action.color_change
+                if change.kind == GHOSTTY_ACTION_COLOR_KIND_BACKGROUND {
+                    Self.wrapper(fromTarget: target)?.applyOSCBackground(
+                        red: change.r, green: change.g, blue: change.b)
+                }
                 return true
             default:
                 return false

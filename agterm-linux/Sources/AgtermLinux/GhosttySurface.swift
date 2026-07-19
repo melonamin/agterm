@@ -51,11 +51,12 @@ final class GhosttySurface: TerminalSurface {
     /// Per-surface overlay configs (session background/font override), retained until a newer overlay
     /// replaces them or the surface is torn down.
     private var ownedConfigs: [ghostty_config_t] = []
+    private var oscBackgroundColorHex: String?
     private var pendingFontRestore: Double?
     var dashboardFontOverride: Double? {
         didSet {
             guard dashboardFontOverride != oldValue else { return }
-            applyWatermarkFromSession()
+            reapplyBackgroundOverlay(force: true)
             guard dashboardFontOverride == nil, let cleared = oldValue else {
                 pendingFontRestore = nil
                 return
@@ -283,12 +284,27 @@ final class GhosttySurface: TerminalSurface {
     }
 
     func applyWatermarkFromSession(windowOpacity: Double? = nil, settings: AppSettings? = nil) {
-        guard let surface, let session = controller?.store.session(withID: sessionID) else { return }
-        let resolvedImagePath = WatermarkRenderer.materialize(session.backgroundWatermark, sessionID: session.id)
+        // An explicit session.background set/clear owns the config overlay until a program emits OSC 11
+        // again. Release the dedupe latch so re-emitting the same OSC color is not ignored.
+        oscBackgroundColorHex = nil
+        reapplyBackgroundOverlay(windowOpacity: windowOpacity, settings: settings, force: true)
+    }
+
+    private func reapplyBackgroundOverlay(windowOpacity: Double? = nil, settings: AppSettings? = nil,
+                                          force: Bool = false) {
+        guard let surface else { return }
+        let session = controller?.store.session(withID: sessionID)
+        let watermark = oscBackgroundColorHex.map {
+            BackgroundWatermark(kind: .color, colorHex: $0)
+        } ?? session?.backgroundWatermark
+        guard force || watermark != nil || dashboardFontOverride != nil || session?.fontSize != nil else { return }
+        let resolvedImagePath = session.flatMap {
+            WatermarkRenderer.materialize(watermark, sessionID: $0.id)
+        }
         let effectiveWindowOpacity = windowOpacity ?? linuxSettingsStore().load().backgroundOpacity ?? 1
-        let overlay = WatermarkConfig.overlayText(watermark: session.backgroundWatermark,
+        let overlay = WatermarkConfig.overlayText(watermark: watermark,
                                                   resolvedImagePath: resolvedImagePath,
-                                                  fontSize: dashboardFontOverride ?? session.fontSize,
+                                                  fontSize: dashboardFontOverride ?? session?.fontSize ?? fontSize,
                                                   windowOpacity: effectiveWindowOpacity)
         guard let config = GhosttyApp.shared.configWithOverlay(overlay, settings: settings) else { return }
         ghostty_surface_update_config(surface, config)
@@ -300,8 +316,19 @@ final class GhosttySurface: TerminalSurface {
     }
 
     func reapplyWatermarkIfNeeded(windowOpacity: Double? = nil, settings: AppSettings? = nil) {
-        guard controller?.store.session(withID: sessionID)?.backgroundWatermark != nil else { return }
-        applyWatermarkFromSession(windowOpacity: windowOpacity, settings: settings)
+        guard oscBackgroundColorHex != nil
+                || controller?.store.session(withID: sessionID)?.backgroundWatermark != nil else { return }
+        reapplyBackgroundOverlay(windowOpacity: windowOpacity, settings: settings)
+    }
+
+    /// Make a program's per-pane OSC 11 background visible through agterm's transparent surface config.
+    /// libghostty already owns the live color override; this overlay supplies the matching opacity and is
+    /// retained/re-applied per surface across config reloads.
+    func applyOSCBackground(red: UInt8, green: UInt8, blue: UInt8) {
+        let hex = String(format: "#%02X%02X%02X", red, green, blue)
+        guard oscBackgroundColorHex != hex else { return }
+        oscBackgroundColorHex = hex
+        reapplyBackgroundOverlay()
     }
 
     func startSearch() { performBindingAction("start_search") }
