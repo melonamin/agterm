@@ -78,10 +78,12 @@ struct LinuxPolicyTests {
         session.hasSplit = true
         let store = AppStore(workspaces: [Workspace(name: "work", sessions: [session])])
 
-        store.recordPwd("/main", forSession: session.id, isSplit: false)
-        store.recordPwd("/split", forSession: session.id, isSplit: true)
-        store.recordTitle("main", forSession: session.id, isSplit: false)
-        store.recordTitle("split", forSession: session.id, isSplit: true)
+        #expect(store.recordPwd("/main", forSession: session.id, isSplit: false))
+        #expect(store.recordPwd("/split", forSession: session.id, isSplit: true))
+        #expect(store.recordTitle("main", forSession: session.id, isSplit: false))
+        #expect(store.recordTitle("split", forSession: session.id, isSplit: true))
+        #expect(!store.recordPwd("/main", forSession: session.id, isSplit: false))
+        #expect(!store.recordTitle("split", forSession: session.id, isSplit: true))
         store.setPaneFocus(true, forSession: session.id)
 
         #expect(session.currentCwd == "/main")

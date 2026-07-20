@@ -4,6 +4,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PATCH="$ROOT/linux/patches/ghostty-embedded-opengl.patch"
+INPUT_HANDOFF_PATCH="$ROOT/linux/patches/ghostty-embedded-input-handoff.patch"
 RESOURCE_PATCH="$ROOT/linux/patches/ghostty-lib-resources.patch"
 VENDOR="$ROOT/agterm-linux/vendor/ghostty"
 VERIFY="$ROOT/scripts/verify-linux-resources.sh"
@@ -49,11 +50,13 @@ grep -F "$GHOSTTY_THEMES_URL" "$BUILD_DIR/build.zig.zon" >/dev/null || {
 
 echo "applying embedded-OpenGL patch..."
 git -C "$BUILD_DIR" apply "$PATCH"
+git -C "$BUILD_DIR" apply "$INPUT_HANDOFF_PATCH"
 git -C "$BUILD_DIR" apply "$RESOURCE_PATCH"
 echo "building libghostty and generated terminfo source..."
+# Zig defaults to Debug, whose terminal integrity checks make sustained PTY output unusably slow.
 (
   cd "$BUILD_DIR"
-  "$ZIG" build -Dapp-runtime=none -Dtarget=x86_64-linux-gnu.2.39 \
+  "$ZIG" build -Doptimize=ReleaseFast -Dapp-runtime=none -Dtarget=x86_64-linux-gnu.2.39 \
     -Demit-themes=false -Demit-terminfo=true
 )
 

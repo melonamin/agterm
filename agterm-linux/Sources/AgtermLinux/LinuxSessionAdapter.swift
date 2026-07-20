@@ -7,21 +7,31 @@ extension AppStore {
         if session.splitFocused != toSplit { session.splitFocused = toSplit }
     }
 
-    func recordPwd(_ pwd: String, forSession sessionID: UUID, isSplit: Bool) {
-        guard let session = session(withID: sessionID) else { return }
+    @discardableResult
+    func recordPwd(_ pwd: String, forSession sessionID: UUID, isSplit: Bool) -> Bool {
+        guard let session = session(withID: sessionID) else { return false }
         if isSplit {
-            if session.splitCwd != pwd { session.splitCwd = pwd }
+            guard session.splitCwd != pwd else { return false }
+            session.splitCwd = pwd
         } else if session.currentCwd != pwd {
             session.currentCwd = pwd
+        } else {
+            return false
         }
+        return true
     }
 
-    func recordTitle(_ title: String, forSession sessionID: UUID, isSplit: Bool) {
-        guard let session = session(withID: sessionID) else { return }
+    @discardableResult
+    func recordTitle(_ title: String, forSession sessionID: UUID, isSplit: Bool) -> Bool {
+        guard let session = session(withID: sessionID) else { return false }
         if isSplit {
-            if session.splitTitle != title { session.splitTitle = title }
+            guard session.splitTitle != title else { return false }
+            session.splitTitle = title
         } else if session.oscTitle != title {
             session.oscTitle = title
+        } else {
+            return false
         }
+        return true
     }
 }

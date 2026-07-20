@@ -76,11 +76,11 @@ final class AppController {
     /// (mirrors the macOS SettingsModel preview debounce). Commit/cancel/close cancel it and act now.
     let themePreviewDebouncer = Debouncer()
     static let themePreviewDebounceInterval: TimeInterval = 0.07
-    /// Coalesces sidebar/session divider drag ticks into one persist (~0.4 s after settle).
+    // Independent debouncers coalesce layout saves and terminal-metadata sidebar refreshes.
     let layoutSaveDebouncer = Debouncer()
+    let sidebarMetadataDebouncer = Debouncer()
     /// Owner-scoped, cancellable retries for persisted split divider restoration.
     let splitRatioRestore = SplitRatioRestoreCoordinator()
-
     var surfaces: [UUID: GhosttySurface] = [:]        // primary pane per session
     var splitSurfaces: [UUID: GhosttySurface] = [:]   // second pane (when split)
     var scratchSurfaces: [UUID: GhosttySurface] = [:] // full-overlay scratch shell

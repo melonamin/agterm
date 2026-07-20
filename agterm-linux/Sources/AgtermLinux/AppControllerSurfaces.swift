@@ -439,6 +439,7 @@ extension AppController {
     }
 
     func updateTitle() {
+        let settings = linuxSettingsStore().load()
         let windowInfo = library.windows.first(where: { $0.id == windowID })
         let normalTitle = LinuxModalTitle.normal(sessionName: store.activeSession?.displayName, window: windowInfo)
         var title = store.activeSession?.displayName ?? "agterm"
@@ -447,7 +448,7 @@ extension AppController {
         }
         title.withCString { gtk_window_set_title(WIN(window), $0) }
         if let titleWidget {
-            let hidden = linuxSettingsStore().load().resolvedHiddenInterfaceElements
+            let hidden = settings.resolvedHiddenInterfaceElements
             let sessionPart = hidden.contains(.sessionName) ? nil : (store.activeSession?.displayName ?? "agterm")
             let windowPart = hidden.contains(.windowName) || windowInfo?.hasCustomName != true ? nil : windowInfo?.name
             let visibleTitle: String
@@ -458,7 +459,7 @@ extension AppController {
             case (nil, nil): visibleTitle = ""
             }
             visibleTitle.withCString { adw_window_title_set_title(titleWidget, $0) }
-            let subtitle = linuxSettingsStore().load().effectiveToolbarMode == .normal
+            let subtitle = settings.effectiveToolbarMode == .normal
                 ? (store.activeSession?.subtitleDetail ?? "") : ""
             subtitle.withCString { adw_window_title_set_subtitle(titleWidget, $0) }
         }
@@ -488,15 +489,21 @@ extension AppController {
     }
 
     func sessionDidReportTitle(_ id: UUID, _ title: String, isSplit: Bool) {
-        store.recordTitle(title, forSession: id, isSplit: isSplit)
+        guard store.recordTitle(title, forSession: id, isSplit: isSplit) else { return }
         if id == store.selectedSessionID { updateTitle() }
-        rebuildSidebar()
+        scheduleSidebarMetadataRefresh()
     }
 
     func sessionDidReportPwd(_ id: UUID, _ pwd: String, isSplit: Bool) {
-        store.recordPwd(pwd, forSession: id, isSplit: isSplit)
+        guard store.recordPwd(pwd, forSession: id, isSplit: isSplit) else { return }
         if id == store.selectedSessionID { updateTitle() }
-        rebuildSidebar()
+        scheduleSidebarMetadataRefresh()
+    }
+
+    private func scheduleSidebarMetadataRefresh() {
+        sidebarMetadataDebouncer.schedule(after: 0.01) { [weak self] in
+            self?.rebuildSidebar()
+        }
     }
 
     func sessionDidReportFontSize(_ id: UUID, _ size: Double) {

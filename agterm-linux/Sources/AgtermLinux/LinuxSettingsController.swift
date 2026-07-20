@@ -84,12 +84,13 @@ extension AppController {
     }
 
     func applyInterfaceElements(settings: AppSettings? = nil) {
-        let hidden = (settings ?? linuxSettingsStore().load()).resolvedHiddenInterfaceElements
+        let settings = settings ?? linuxSettingsStore().load()
+        let hidden = settings.resolvedHiddenInterfaceElements
         for (element, widget) in interfaceWidgets {
             gtk_widget_set_visible(W(widget), hidden.contains(element) ? 0 : 1)
         }
         let countA = (hidden.contains(.recentSessions) ? 0 : 1)
-            + ((linuxSettingsStore().load().attentionButtonEnabled ?? false) ? 1 : 0)
+            + ((settings.attentionButtonEnabled ?? false) ? 1 : 0)
         let countB = (hidden.contains(.scratch) ? 0 : 1) + (hidden.contains(.split) ? 0 : 1)
         let countC = (hidden.contains(.dashboard) ? 0 : 1) + (hidden.contains(.quickTerminal) ? 0 : 1)
         let dividers = InterfaceElement.titlebarGroupDividers(countA: countA, countB: countB, countC: countC)

@@ -150,7 +150,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: agterm-linux/vendor/ghostty
-          key: libghostty-${{ hashFiles('scripts/setup-linux.sh', 'scripts/verify-linux-resources.sh', 'linux/ghostty-resources.env', 'linux/patches/ghostty-embedded-opengl.patch', 'linux/patches/ghostty-lib-resources.patch') }}
+          key: libghostty-${{ hashFiles('scripts/setup-linux.sh', 'scripts/verify-linux-resources.sh', 'linux/ghostty-resources.env', 'linux/patches/ghostty-embedded-opengl.patch', 'linux/patches/ghostty-embedded-input-handoff.patch', 'linux/patches/ghostty-lib-resources.patch') }}
       - name: Verify restored libghostty cache
         if: steps.ghostty-cache.outputs.cache-hit == 'true'
         run: |

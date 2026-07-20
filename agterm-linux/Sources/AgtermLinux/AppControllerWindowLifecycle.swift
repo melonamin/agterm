@@ -53,6 +53,7 @@ extension AppController {
         customCommandOrigin.invalidate()
         commitBackgroundOpacity()
         dismissSessionPicker()
+        sidebarMetadataDebouncer.cancel()
         cancelPendingWorkspaceToggle()
         cancelLeaderDeadlineForWindowClose()
         splitRatioRestore.cancelAll()

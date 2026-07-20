@@ -55,11 +55,12 @@ extension AppController {
     }
 
     func rebuildSidebar() {
+        let settings = linuxSettingsStore().load()
         // GtkPopover is parented to the row's GtkListBox while its context menu is open. Detach it
         // before destroying that list box: GtkListBox disposal otherwise treats the popover as a row,
         // repeatedly fails to remove it, and starves the GTK main loop.
         dismissContextMenu()
-        updateAttentionButton()
+        updateAttentionButton(settings: settings)
         updateDashboardStatusIndicators()
         while let child = gtk_widget_get_first_child(W(sidebarBox)) {
             gtk_box_remove(cast(sidebarBox), child)
@@ -70,7 +71,7 @@ extension AppController {
         workspaceListBoxes.removeAll()
 
         if store.sidebarMode == .flagged {
-            appendSection("Flagged", store.flaggedSessions)
+            appendSection("Flagged", store.flaggedSessions, settings: settings)
             if store.flaggedSessions.isEmpty {
                 if let hint = op(gtk_label_new("No flagged sessions.\nRight-click a session → Flag.")) {
                     gtk_label_set_justify(hint, GTK_JUSTIFY_CENTER)
@@ -90,11 +91,14 @@ extension AppController {
                 connect(pill, "clicked", unsafeBitCast(onClearFocusPill as @convention(c) (OpaquePointer?, gpointer?) -> Void, to: GCallback.self))
                 gtk_box_append(cast(sidebarBox), W(pill))
             }
-            for ws in store.visibleWorkspaces { appendSection(ws.name, ws.sessions, workspace: ws.id) }
+            for ws in store.visibleWorkspaces {
+                appendSection(ws.name, ws.sessions, workspace: ws.id, settings: settings)
+            }
         }
     }
 
-    private func appendSection(_ title: String, _ sessions: [Session], workspace: UUID? = nil) {
+    private func appendSection(_ title: String, _ sessions: [Session], workspace: UUID? = nil,
+                               settings: AppSettings) {
         if let wsID = workspace, let row = op(gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4)) {
             "workspace-row".withCString { gtk_widget_set_name(W(row), $0) }
             gtk_widget_set_margin_top(W(row), 8)
@@ -112,7 +116,7 @@ extension AppController {
                 gtk_widget_add_css_class(W(name), "heading")
                 gtk_box_append(cast(row), W(name))
             }
-            if !linuxSettingsStore().load().isInterfaceElementHidden(.workspaceAddSession),
+            if !settings.isInterfaceElementHidden(.workspaceAddSession),
                let add = op(gtk_button_new_from_icon_name("list-add-symbolic")) {
                 gtk_button_set_has_frame(BUTTON(add), 0)
                 gtk_widget_add_css_class(W(add), "flat")
@@ -266,10 +270,10 @@ extension AppController {
         }
     }
 
-    func updateAttentionButton() {
+    func updateAttentionButton(settings: AppSettings? = nil) {
         updateRecentSessionsButton()
         guard let button = attentionButton else { return }
-        let enabled = linuxSettingsStore().load().attentionButtonEnabled ?? false
+        let enabled = (settings ?? linuxSettingsStore().load()).attentionButtonEnabled ?? false
         gtk_widget_set_visible(W(button), enabled ? 1 : 0)
         let sessions = store.attentionSessions
         gtk_widget_set_sensitive(W(button), sessions.isEmpty ? 0 : 1)
