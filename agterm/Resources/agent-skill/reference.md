@@ -485,10 +485,10 @@ font untouched. The applied size and mode read back on the tree's top-level `das
 `dashboardHighlighted` (each a `<session-id>:left`/`<session-id>:right` pane ref).
 
 The dashboard and terminal zoom are **mutually exclusive**: opening a dashboard closes any active zoom,
-and a zoom becoming active while the dashboard is open closes the dashboard. Opening (and closing) the
-dashboard resizes each pane's pty to (and back from) its cell, so a running program receives a resize
-event and may redraw — "view-only" means no input reaches the cell, not that the pane's process is
-untouched.
+and a zoom becoming active while the dashboard is open closes the dashboard. On macOS, opening (and
+closing) reparents each pane and resizes its pty to (and back from) its cell. Linux instead mirrors each
+live pane at its existing geometry without reparenting its GL surface; fixed and automatic font modes can
+still resize the pane's grid temporarily. In either case, "view-only" means no input reaches a cell.
 
 Invalid invocations error (rejected at the CLI and re-checked server-side): `--font-size` with
 `--auto-size`, a non-positive `--font-size`, `--close` combined with ids, `--mru`, or a font option,

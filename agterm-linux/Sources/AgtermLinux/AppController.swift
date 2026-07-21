@@ -1,5 +1,5 @@
 // Drives the GTK UI from agtermCore's AppStore: an AdwNavigationSplitView with a
-// workspace/session sidebar and a GtkStack deck reconciled from the shared model.
+// workspace/session sidebar and a stable GtkOverlay deck reconciled from the shared model.
 // The Swift importer maps GObject types inconsistently. Typed GTK pointers use the W/WIN/GLBR/cast
 // helpers; opaque GTK objects take the stored OpaquePointer directly.
 import CGtk
@@ -19,7 +19,7 @@ final class AppController {
     let library: WindowLibrary
     let customCommandOrigin: LinuxCustomCommandOrigin
     let window: OpaquePointer        // AdwApplicationWindow
-    let deck: OpaquePointer          // GtkStack (one page per session)
+    let deck: OpaquePointer          // GtkOverlay (one stable overlay child per session)
     var contentBox: OpaquePointer?   // vertical box [search + deck-overlay]
     var deckOverlay: OpaquePointer?  // GtkOverlay over the deck, hosts the floating quick panel
     var switcherBox: OpaquePointer?  // the Ctrl-Tab MRU overlay (a centered overlay child while cycling)
@@ -173,7 +173,7 @@ final class AppController {
         } else {
             gtk_window_set_default_size(WIN(window), 1100, 700)
         }
-        deck = OpaquePointer(gtk_stack_new())
+        deck = makeTerminalDeck()
         gtk_widget_set_hexpand(W(deck), 1)
         gtk_widget_set_vexpand(W(deck), 1)
         sidebarBox = OpaquePointer(gtk_box_new(GTK_ORIENTATION_VERTICAL, 2))

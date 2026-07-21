@@ -4,6 +4,7 @@
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -140,6 +141,26 @@ def press_x11_key(key, process_id, window_title=None):
     time.sleep(0.5)
     subprocess.run(
         ["xdotool", "key", "--clearmodifiers", key],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def type_x11_text(value, process_id, window_title=None):
+    """Type through the real X11 keyboard path used by the isolated UI suite."""
+    if window_title:
+        app = wait_for(lambda: find_app(process_id), "agterm app disappeared before text input")
+        window = wait_for(
+            lambda: named(app, window_title, role="frame"),
+            f"agterm window {window_title!r} disappeared before text input",
+        )
+        focus_accessible_window(window, process_id)
+    else:
+        focus_window(process_id)
+    time.sleep(0.5)
+    subprocess.run(
+        ["xdotool", "type", "--clearmodifiers", "--delay", "1", "--", value],
         check=True,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -568,6 +589,21 @@ def verify_dashboard_modal(env):
         assert window_tree(env, window_id)["workspaces"][0]["sessions"][0].get("splitFocused"), (
             "keyboard dashboard entry did not focus the exact split pane"
         )
+        input_marker = os.path.join(env["AGTERM_STATE_DIR"], "dashboard-input-restored")
+        type_x11_text(
+            f"printf dashboard-restored > {shlex.quote(input_marker)}",
+            process.pid,
+            window_title="modal-session",
+        )
+        press_return(process.pid, window_title="modal-session")
+        wait_for(
+            lambda: os.path.exists(input_marker),
+            "terminal did not accept keyboard input after Dashboard closed",
+        )
+        with open(input_marker, encoding="utf-8") as marker:
+            assert marker.read() == "dashboard-restored", (
+                "post-Dashboard terminal command produced unexpected output"
+            )
 
         # A real single pointer click flashes the split cell, then enters it after the 180 ms delay.
         control_json(

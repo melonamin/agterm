@@ -1,5 +1,5 @@
 // agterm-linux entry point: an Adwaita application whose window is built by
-// AppController (workspace -> session sidebar + a GtkStack terminal deck driven
+// AppController (workspace -> session sidebar + a stable GtkOverlay terminal deck driven
 // by agtermCore's AppStore).
 import CGtk
 import Foundation

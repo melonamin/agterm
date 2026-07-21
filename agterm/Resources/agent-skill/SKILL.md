@@ -268,8 +268,9 @@ honor `--window` (default frontmost). `--mru` is mutually exclusive with explici
 composes with the font flags. Read the state back from the tree's top-level `dashboardMembers`
 (pane refs `<id>:left`/`<id>:right`, in grid order) / `dashboardHighlighted` (a pane ref) /
 `dashboardFontSize`/`dashboardFontMode`. Zoom and the dashboard are mutually exclusive: opening one CLOSES
-the other. Opening/closing resizes each pane's pty to its cell, so programs may redraw — view-only
-means no input, not no process effect.
+the other. macOS reparents each pane and resizes its pty to its cell. Linux mirrors live panes without
+reparenting, preserving their geometry unless a fixed/automatic Dashboard font temporarily changes the
+terminal grid. View-only means no input reaches a cell.
 The most-recently-used grid also has a GUI opener: **⌘⇧D** on macOS or **Ctrl⇧M** on Linux (the
 `dashboard` built-in action), **Navigate ▸ Dashboard** on macOS, and the command palette's **Dashboard**
 entry

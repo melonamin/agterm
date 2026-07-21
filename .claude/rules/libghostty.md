@@ -362,11 +362,20 @@ paths:
   `ControlServer.setDashboard` closes any active zoom before opening the grid, and
   `WindowContentView`'s `.onChange(of: terminalZoom.target)` closes the dashboard when a zoom becomes
   active — so the two view modes never stack.
-- **Opening/closing the dashboard resizes each member's pty — unavoidable.**
+- **On macOS, opening/closing the dashboard resizes each member's pty — unavoidable.**
   A cell is smaller than the full pane, so reparenting a member into (and back out of) its cell resizes
   its surface, which resizes the pty; the program receives a `SIGWINCH`/resize event and may redraw.
   "View-only" means no INPUT reaches the cell, NOT that the member's process is untouched — a full-screen
   TUI reflows to the cell on open and back on close.
+- **Linux Dashboard mirrors live surfaces; it never reparents a `GtkGLArea`.**
+  The AppKit/Metal reparenting rules above apply only to the macOS host.
+  Unparenting a GTK Ghostty surface unrealizes its `GtkGLArea`, invalidates its GL context, and can leave
+  the terminal blank and non-interactive after it is attached again.
+  The Linux terminal deck therefore uses a stable `GtkOverlay` child per session: normal mode maps only
+  the active page, while Dashboard mode maps every page without allowing any page to accept input.
+  Each Dashboard cell displays its source through `GtkWidgetPaintable` + `GtkPicture` beneath an opaque,
+  input-owning Dashboard host, so output remains live and closing Dashboard only changes visibility and
+  targeting state.
 - **strdup buffer lifetime.**
   `working_directory` (and `initial_input`) `const char*` buffers must outlive `ghostty_surface_new`;
   they are held in a `nonisolated(unsafe)` array and freed only in `destroySurface()`.
@@ -514,4 +523,3 @@ paths:
   `view.surface` check).
   The dialog is AppKit and not unit-tested (only `ClipboardPromptPolicy` is); the gating was verified with
   an isolated dev instance driving OSC 52 read/write by hand.
-

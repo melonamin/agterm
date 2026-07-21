@@ -64,6 +64,8 @@ extension AppController {
         if sessionSwitcher.isActive { endSessionSwitch() }
         dashboard.open(members: members, fontMode: fontMode)
         suppressAutoFollow()
+        showDashboardSourcePages()
+        showActive(focus: false)
         applyDashboardFont()
         mountDashboard()
     }
@@ -75,16 +77,6 @@ extension AppController {
         if let keys = dashboardRuntime.keyController {
             gtk_widget_remove_controller(W(window), keys)
             dashboardRuntime.keyController = nil
-        }
-        for (member, target) in dashboardRuntime.targets {
-            guard let surface = surface(for: target) else { continue }
-            _ = g_object_ref(RAW(surface.glArea))
-            if let frame = dashboardRuntime.frames[member] { gtk_frame_set_child(cast(frame), nil) }
-            gtk_widget_set_can_target(W(surface.glArea), 1)
-            gtk_widget_set_focusable(W(surface.glArea), 1)
-            reattach(surface.glArea, to: target)
-            g_object_unref(RAW(surface.glArea))
-            surface.refresh()
         }
         if let host = dashboardRuntime.host, let deckOverlay {
             gtk_overlay_remove_overlay(deckOverlay, W(host))
@@ -98,7 +90,8 @@ extension AppController {
         dashboardRuntime.clickContexts = []
         dashboard.close()
         resumeAutoFollow()
-        gtk_widget_set_visible(W(splitView), 1)
+        restoreSessionTopPages()
+        gtk_widget_set_can_target(W(splitView), 1)
         showActive()
         if refocus { focusedSurface()?.grabFocus() }
     }
@@ -200,15 +193,20 @@ extension AppController {
         let (cols, _) = DashboardLayout.grid(count: dashboard.members.count)
         for (index, member) in dashboard.members.enumerated() {
             let target = TerminalZoomTarget.session(member.session, member.surface)
-            guard let surface = surface(for: target), detach(surface.glArea, from: target) else { continue }
+            guard let surface = surface(for: target) else { continue }
             let frame = OpaquePointer(gtk_frame_new(nil))
             gtk_widget_add_css_class(W(frame), "agterm-dashboard-cell")
             gtk_widget_set_hexpand(W(frame), 1)
             gtk_widget_set_vexpand(W(frame), 1)
-            gtk_widget_set_can_target(W(surface.glArea), 0)
-            gtk_widget_set_focusable(W(surface.glArea), 0)
             let cell = OpaquePointer(gtk_overlay_new())
-            gtk_overlay_set_child(cell, W(surface.glArea))
+            let paintable = gtk_widget_paintable_new(W(surface.glArea))
+            let picture = OpaquePointer(gtk_picture_new_for_paintable(paintable))
+            gtk_picture_set_can_shrink(picture, 1)
+            gtk_picture_set_content_fit(picture, GTK_CONTENT_FIT_FILL)
+            gtk_widget_set_hexpand(W(picture), 1)
+            gtk_widget_set_vexpand(W(picture), 1)
+            gtk_overlay_set_child(cell, W(picture))
+            g_object_unref(RAW(paintable))
             let sessionName = store.session(withID: member.session)?.displayName ?? "Session"
             let paneName = member.surface == .split ? "Right" : "Left"
             gtk_widget_set_tooltip_text(W(frame), "\(sessionName) · \(paneName)")
@@ -225,7 +223,6 @@ extension AppController {
             gtk_box_append(cast(caption), W(captionLabel))
             gtk_overlay_add_overlay(cell, W(caption))
             gtk_frame_set_child(cast(frame), W(cell))
-            g_object_unref(RAW(surface.glArea))
             let click = gtk_gesture_click_new()
             let context = DashboardClickContext(controller: self, member: member)
             dashboardRuntime.clickContexts.append(context)
@@ -251,7 +248,7 @@ extension AppController {
         dashboardRuntime.header = header
         dashboardRuntime.titleLabel = titleLabel
         dashboardRuntime.keyController = keys
-        gtk_widget_set_visible(W(splitView), 0)
+        gtk_widget_set_can_target(W(splitView), 0)
         updateDashboardStatusIndicators()
         updateDashboardHighlight()
         _ = gtk_widget_grab_focus(W(host))

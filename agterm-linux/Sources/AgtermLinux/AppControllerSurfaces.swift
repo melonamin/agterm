@@ -65,7 +65,14 @@ extension AppController {
         surfaces[s.id] = surf
         gtk_paned_set_start_child(paned, W(surf.glArea))
         "main".withCString { _ = gtk_stack_add_named(stack, W(paned), $0) }
-        s.id.uuidString.withCString { _ = gtk_stack_add_named(deck, W(stack), $0) }
+        gtk_widget_set_halign(W(stack), GTK_ALIGN_FILL)
+        gtk_widget_set_valign(W(stack), GTK_ALIGN_FILL)
+        gtk_widget_set_hexpand(W(stack), 1)
+        gtk_widget_set_vexpand(W(stack), 1)
+        gtk_widget_set_opacity(W(stack), 0)
+        gtk_widget_set_can_target(W(stack), 0)
+        gtk_widget_set_child_visible(W(stack), 0)
+        gtk_overlay_add_overlay(deck, W(stack))
     }
 
     /// Create/show/hide the scratch shell to match the session's scratch state. Kept
@@ -402,15 +409,45 @@ extension AppController {
         splitSurfaces[id]?.teardown()
         splitSurfaces[id] = nil
         surfaces[id]?.teardown()
-        if let stack = sessionStacks[id] { gtk_stack_remove(deck, W(stack)) }
+        if let stack = sessionStacks[id] { gtk_overlay_remove_overlay(deck, W(stack)) }
         surfaces[id] = nil
         sessionPanes[id] = nil
         sessionStacks[id] = nil
     }
 
+    /// Dashboard mirrors the primary/split panes, so expose each member's `main` page beneath its
+    /// opaque host even when scratch or a full overlay was previously on top.
+    func showDashboardSourcePages() {
+        for id in Set(dashboard.members.map(\.session)) {
+            guard let stack = sessionStacks[id] else { continue }
+            "main".withCString { gtk_stack_set_visible_child_name(stack, $0) }
+        }
+    }
+
+    /// Restore the page that owns each session after Dashboard stops mirroring its main panes.
+    func restoreSessionTopPages() {
+        for session in store.workspaces.flatMap(\.sessions) {
+            guard let stack = sessionStacks[session.id] else { continue }
+            let page: String
+            if session.fullOverlayActive {
+                page = "overlay"
+            } else if session.scratchActive {
+                page = "scratch"
+            } else {
+                page = "main"
+            }
+            page.withCString { gtk_stack_set_visible_child_name(stack, $0) }
+        }
+    }
+
     func showActive(focus: Bool = true) {
         guard let active = store.activeSession else { return }
-        active.id.uuidString.withCString { gtk_stack_set_visible_child_name(deck, $0) }
+        for (id, stack) in sessionStacks {
+            let presentation = DeckPagePresentation(isActive: id == active.id, dashboardOpen: dashboard.isOpen)
+            gtk_widget_set_opacity(W(stack), presentation.opacity)
+            gtk_widget_set_can_target(W(stack), presentation.canTarget ? 1 : 0)
+            gtk_widget_set_child_visible(W(stack), presentation.childVisible ? 1 : 0)
+        }
         updateFloatingOverlayVisibility(activeID: active.id)
         if focus {
             if active.overlayActive {

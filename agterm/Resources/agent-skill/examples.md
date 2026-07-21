@@ -493,9 +493,9 @@ command "Dashboard build hosts" ctrl+a>d /usr/local/bin/agtermctl dashboard "$WE
 `--mru` is mutually exclusive with explicit ids and `--close`, and errors with `no recent sessions` when
 the window has none. The 9-cell cap counts PANES (a split session is two cells), so a set whose panes
 exceed 9 keeps the first 9 panes and the response reports the dropped-pane count; ids are deduped. The
-dashboard and terminal zoom are mutually exclusive (opening one closes the other). Opening/closing resizes
-each pane's pty to/from its cell, so a running program may redraw — view-only means no input, not no
-process effect.
+dashboard and terminal zoom are mutually exclusive (opening one closes the other). macOS reparents panes
+and resizes their ptys to/from their cells. Linux mirrors the live panes without reparenting, so it keeps
+their existing geometry unless a fixed/automatic Dashboard font changes the terminal grid temporarily.
 
 ## Navigate and manage windows
 
