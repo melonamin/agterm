@@ -48,6 +48,7 @@ struct LinuxPolicyTests {
     func starterFiles() {
         #expect(ConfigPaths.starterGhosttyConfig().contains("agterm-scoped ghostty config"))
         #expect(ConfigPaths.starterRestoreDenylist().contains("tmux\nscreen\nzellij"))
+        #expect(GhosttyDefaults.baseConfLines.contains("cursor-click-to-move = false"))
         #expect("  value\n".linuxTrimmedOrNil == "value")
         #expect(" \n".linuxTrimmedOrNil == nil)
     }

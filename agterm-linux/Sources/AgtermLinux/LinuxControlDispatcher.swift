@@ -20,8 +20,10 @@ struct LinuxControlDispatcher {
         switch request.cmd {
         case .tree:
             return actions.controlTree(window: request.args?.window)
+        case .eventsRead:
+            return dispatchEventsRead(request)
         case .sessionNew, .sessionDuplicate, .sessionSelect, .sessionGo, .sessionClose, .sessionRename, .sessionReveal,
-                .sessionMove, .sessionFlag, .sessionSeen, .sessionStatus:
+                .sessionMove, .sessionFlag, .sessionSeen, .sessionStatus, .sessionRestore:
             return dispatchSessionCommand(request)
         case .sessionSplit, .sessionScratch, .sessionFocus, .sessionResize, .surfaceZoom,
                 .sessionCopy, .sessionPaste, .sessionSelectAll, .sessionOverlayOpen,
@@ -31,7 +33,7 @@ struct LinuxControlDispatcher {
         case .sessionType, .quickType, .quickText:
             return nil
         case .workspaceNew, .workspaceSelect, .workspaceRename, .workspaceDelete,
-                .workspaceMove, .workspaceFocus:
+                .workspaceMove, .workspaceFocus, .workspaceCollapse, .workspaceExpand:
             return dispatchWorkspaceCommand(request)
         case .fontInc, .fontDec, .fontReset, .keymapReload, .configReload, .notify,
                 .themeSet, .themeList, .sidebar, .sidebarMode, .sidebarExpand,
@@ -44,6 +46,43 @@ struct LinuxControlDispatcher {
         default:
             return nil
         }
+    }
+
+    private func dispatchEventsRead(_ request: ControlRequest) -> ControlResponse {
+        let args = request.args
+        let cursor: ControlEventCursor?
+        switch (args?.run, args?.after) {
+        case (nil, nil):
+            cursor = nil
+        case (.some, nil), (nil, .some):
+            return ControlResponse(ok: false, error: ControlEventRequestError.cursorPair)
+        case let (.some(runText), .some(afterText)):
+            guard let run = UUID(uuidString: runText) else {
+                return ControlResponse(ok: false, error: ControlEventRequestError.invalidRun)
+            }
+            guard let after = UInt64(afterText) else {
+                return ControlResponse(ok: false, error: ControlEventRequestError.invalidCursor)
+            }
+            cursor = ControlEventCursor(run: run, after: after)
+        }
+
+        let limit = args?.limit ?? 100
+        guard (1...1_000).contains(limit) else {
+            return ControlResponse(ok: false, error: ControlEventRequestError.invalidLimit)
+        }
+
+        var parsedKinds = Set<ControlEventKind>()
+        for field in args?.kinds ?? [] {
+            for component in field.split(separator: ",", omittingEmptySubsequences: false) {
+                let rawKind = component.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard let kind = ControlEventKind(rawValue: rawKind) else {
+                    return ControlResponse(ok: false, error: ControlEventRequestError.invalidKind(rawKind))
+                }
+                parsedKinds.insert(kind)
+            }
+        }
+        let kinds: Set<ControlEventKind>? = parsedKinds.isEmpty ? nil : parsedKinds
+        return actions.readEvents(ControlEventReadOptions(cursor: cursor, kinds: kinds, limit: limit))
     }
 
     private func dispatchSessionCommand(_ request: ControlRequest) -> ControlResponse {
@@ -62,6 +101,9 @@ struct LinuxControlDispatcher {
             if args?.createWorkspace == true, args?.workspaceName == nil {
                 return ControlResponse(ok: false, error: "--create-workspace requires --workspace-name")
             }
+            if args?.wait == true, args?.command == nil {
+                return ControlResponse(ok: false, error: "--wait requires --command")
+            }
             return actions.createSession(ControlSessionCreateOptions(
                 window: args?.window,
                 cwd: args?.cwd,
@@ -69,6 +111,7 @@ struct LinuxControlDispatcher {
                 workspaceName: args?.workspaceName,
                 createWorkspace: args?.createWorkspace,
                 command: args?.command,
+                wait: args?.wait,
                 name: args?.name,
                 after: args?.after,
                 before: args?.before,
@@ -159,15 +202,56 @@ struct LinuxControlDispatcher {
                                                     sound: request.args?.sound, color: request.args?.color,
                                                     pane: pane, paneID: request.args?.paneID)
             return actions.setSessionStatus(request.target, window: request.args?.window, update: update)
+        case .sessionRestore:
+            return dispatchSessionRestore(request)
         default:
             preconditionFailure("unexpected session command: \(request.cmd.rawValue)")
         }
     }
 
+    private func dispatchSessionRestore(_ request: ControlRequest) -> ControlResponse {
+        let args = request.args
+        let pin: ControlRestoreOverride
+        switch args?.mode ?? "" {
+        case "set":
+            guard let command = args?.command else {
+                return ControlResponse(ok: false, error: "session.restore set requires a command")
+            }
+            guard !command.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7f }) else {
+                return ControlResponse(ok: false, error: "command must not contain control characters")
+            }
+            guard command.utf8.count <= ControlRestoreOverride.maxCommandBytes else {
+                return ControlResponse(ok: false,
+                                       error: "command too long (max \(ControlRestoreOverride.maxCommandBytes) bytes)")
+            }
+            pin = .pin(command)
+        case "none":
+            pin = .pinNone
+        case "clear":
+            pin = .unpin
+        default:
+            return ControlResponse(ok: false,
+                                   error: "invalid restore mode: \(args?.mode ?? "") (set|none|clear)")
+        }
+        let pane: StatusPane?
+        if let rawPane = args?.pane {
+            guard let parsed = StatusPane(rawValue: rawPane) else {
+                return ControlResponse(ok: false, error: "--pane must be left, right, or scratch")
+            }
+            pane = parsed
+        } else {
+            pane = nil
+        }
+        return actions.setSessionRestore(request.target, window: args?.window,
+                                         update: ControlSessionRestoreUpdate(
+                                            pin: pin, pane: pane, paneID: args?.paneID))
+    }
+
     private func dispatchWorkspaceCommand(_ request: ControlRequest) -> ControlResponse {
         switch request.cmd {
         case .workspaceNew:
-            return actions.createWorkspace(window: request.args?.window, name: request.args?.name)
+            return actions.createWorkspace(window: request.args?.window, name: request.args?.name,
+                                           collapsed: request.args?.collapsed ?? false)
         case .workspaceSelect:
             return actions.selectWorkspace(request.target, window: request.args?.window)
         case .workspaceRename:
@@ -187,6 +271,10 @@ struct LinuxControlDispatcher {
             return actions.moveWorkspace(request.target, window: request.args?.window, direction: direction)
         case .workspaceFocus:
             return actions.focusWorkspace(request.target, window: request.args?.window, mode: request.args?.mode)
+        case .workspaceCollapse:
+            return actions.setWorkspaceExpansion(request.target, window: request.args?.window, expanded: false)
+        case .workspaceExpand:
+            return actions.setWorkspaceExpansion(request.target, window: request.args?.window, expanded: true)
         default:
             preconditionFailure("unexpected workspace command: \(request.cmd.rawValue)")
         }

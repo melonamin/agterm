@@ -41,11 +41,12 @@ Code layout:
 
 ### Linux feature parity and platform differences
 
-The `linux-port` branch carries the upstream v0.15.2 terminal model and control protocol, including
+The `linux-port` branch carries the upstream v0.16.1 terminal model and control protocol, including
 split/scratch/overlay terminals, Quick terminal input and read-back, terminal zoom, fullscreen,
 recently closed sessions with grouped undo, light/dark themes, configurable toolbar and sidebar text,
 recent-session and attention popovers, agent status in the multi-session dashboard, stable pane status
-routing, and Ctrl/Shift multi-session selection with batch move, close, flag, status, and drag/drop actions.
+routing, control-event subscriptions, held command sessions, per-pane restore overrides, persisted workspace
+collapse state, and Ctrl/Shift multi-session selection with batch move, close, flag, status, and drag/drop actions.
 The GTK frontend keeps the content toolbar focused on terminal controls.
 Preferences opens with Ctrl+, while Integrations, Keyboard Shortcuts, and About remain available from the command palette.
 

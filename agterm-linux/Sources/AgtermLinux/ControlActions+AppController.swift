@@ -5,7 +5,7 @@ import agtermCore
 // Linux adapter for agtermCore's upstream `ControlActions` seam. The dispatcher owns command parsing and
 // response shape; AppController keeps GTK/libghostty/window side effects.
 extension AppController: ControlActions {
-    private enum ResolveResponse<T> {
+    enum ResolveResponse<T> {
         case success(T)
         case failure(ControlResponse)
     }
@@ -25,7 +25,7 @@ extension AppController: ControlActions {
         return err(ControlResolve.notFoundMessage(noun: noun, target: target ?? "active"))
     }
 
-    private func resolveSessionResponse(_ target: String?) -> ResolveResponse<UUID> {
+    func resolveSessionResponse(_ target: String?) -> ResolveResponse<UUID> {
         let candidates = store.workspaces.flatMap { $0.sessions.map(\.id) }
         switch ControlResolve.resolve(target ?? "active", candidates: candidates, active: store.selectedSessionID) {
         case .resolved(let id): return .success(id)
@@ -33,7 +33,7 @@ extension AppController: ControlActions {
         }
     }
 
-    private func resolveWorkspaceResponse(_ target: String?) -> ResolveResponse<UUID> {
+    func resolveWorkspaceResponse(_ target: String?) -> ResolveResponse<UUID> {
         let candidates = store.workspaces.map(\.id)
         switch ControlResolve.resolve(target ?? "active", candidates: candidates, active: store.currentWorkspaceID) {
         case .resolved(let id): return .success(id)
@@ -107,7 +107,8 @@ extension AppController: ControlActions {
             case .success(let location):
                 let index = options.before != nil ? location.index : location.index + 1
                 guard let session = store.addSession(toWorkspace: location.workspace, cwd: cwd,
-                                                     command: options.command, name: options.name, at: index,
+                                                     command: options.command, name: options.name, wait: options.wait == true,
+                                                     at: index,
                                                      select: !options.noSelect) else {
                     return err("no such workspace")
                 }
@@ -133,7 +134,7 @@ extension AppController: ControlActions {
             }
         }
         guard let session = store.addSession(toWorkspace: workspaceID, cwd: cwd,
-                                             command: options.command, name: options.name,
+                                             command: options.command, name: options.name, wait: options.wait == true,
                                              select: !options.noSelect) else {
             return err("no such workspace")
         }
@@ -220,8 +221,8 @@ extension AppController: ControlActions {
         }
     }
 
-    func createWorkspace(window: String?, name: String?) -> ControlResponse {
-        let workspace = store.addWorkspace(name: name?.linuxTrimmedOrNil ?? store.defaultWorkspaceName)
+    func createWorkspace(window: String?, name: String?, collapsed: Bool) -> ControlResponse {
+        let workspace = store.addWorkspace(name: name?.linuxTrimmedOrNil ?? store.defaultWorkspaceName, collapsed: collapsed)
         reconcile()
         return ok(workspace.id)
     }
@@ -864,8 +865,7 @@ extension AppController: ControlActions {
         case .failure(let response): return response
         case .success(let id):
             _ = store.setBackgroundWatermark(options.watermark, forSession: id)
-            surfaces[id]?.applyWatermarkFromSession()
-            splitSurfaces[id]?.applyWatermarkFromSession()
+            applySessionWatermark(id)
             return ok(id)
         }
     }

@@ -51,13 +51,18 @@ extension AppController {
         sessionStacks[s.id] = stack
         let hadForeground = s.foregroundCommand != nil
         let restoreInput = consumeRestoreInput(&s.foregroundCommand)
-        let plan = CommandRestore.restorePlan(wasRestored: s.wasRestored,
-                                              restoreEnabled: restoreEnabled,
-                                              hadForeground: hadForeground,
-                                              foregroundInput: restoreInput,
-                                              initialCommand: s.initialCommand)
+        let inputs = CommandRestore.RestoreInputs(
+            wasRestored: s.wasRestored,
+            restoreEnabled: restoreEnabled,
+            hadForeground: hadForeground,
+            foregroundInput: restoreInput,
+            initialCommand: s.initialCommand,
+            restoreOverride: s.takePendingRestoreOverride(pane: .left)
+        )
+        let plan = CommandRestore.restorePlan(inputs)
         let surf = GhosttySurface(sessionID: s.id, cwd: s.effectiveCwd, command: plan.command,
-                                  env: sessionEnv(for: s, pane: .left), controller: self, fontSize: s.fontSize,
+                                  env: sessionEnv(for: s, pane: .left), controller: self,
+                                  waitAfterCommand: s.commandWait, fontSize: s.fontSize,
                                   initialInput: plan.initialInput)
         let sid = s.id
         surf.onExit = { [weak self] in self?.closePrimaryPane(sid) }
@@ -288,10 +293,16 @@ extension AppController {
            }) { return }
         guard let paned = sessionPanes[s.id] else { return }
         if s.isSplit, splitSurfaces[s.id] == nil {
+            let capturedInput = consumeRestoreInput(&s.splitForegroundCommand)
+            let restoreInput = CommandRestore.restoreInput(
+                restoreEnabled: restoreEnabled,
+                restoreOverride: s.takePendingRestoreOverride(pane: .right),
+                capturedInput: capturedInput
+            )
             let split = GhosttySurface(sessionID: s.id, cwd: s.initialSplitCwd ?? s.effectiveCwd,
                                        env: sessionEnv(for: s, pane: .right), controller: self,
                                        role: .split, fontSize: s.fontSize,
-                                       initialInput: consumeRestoreInput(&s.splitForegroundCommand))
+                                       initialInput: restoreInput)
             let sid = s.id
             split.onExit = { [weak self] in self?.closeSplitPane(sid) }
             s.splitSurface = split

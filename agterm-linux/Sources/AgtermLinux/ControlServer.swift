@@ -133,17 +133,18 @@ final class ControlServer: @unchecked Sendable {
         switch req.cmd {
         case .sessionClose, .sessionDuplicate, .sessionSelect, .sessionGo, .sessionRename, .sessionReveal,
              .sessionMove, .sessionType,
-             .sessionStatus, .sessionFlag, .sessionSeen, .sessionSplit, .sessionScratch, .sessionFocus,
+             .sessionStatus, .sessionRestore, .sessionFlag, .sessionSeen, .sessionSplit, .sessionScratch, .sessionFocus,
              .sessionCopy, .sessionPaste, .sessionSelectAll, .sessionSearch,
              .sessionOverlayOpen, .sessionOverlayClose, .sessionOverlayResize, .sessionOverlayResult,
              .sessionBackground, .sessionResize, .sessionText, .notify,
              .fontInc, .fontDec, .fontReset:
             return routeOwningSession(req.target) ?? .controller(gController)
-        case .workspaceRename, .workspaceDelete, .workspaceSelect, .workspaceMove, .workspaceFocus:
+        case .workspaceRename, .workspaceDelete, .workspaceSelect, .workspaceMove, .workspaceFocus,
+             .workspaceCollapse, .workspaceExpand:
             return routeOwningWorkspace(req.target) ?? .controller(gController)
         case .sessionNew:
             return routeOwningWorkspace(req.args?.workspace) ?? .controller(gController)
-        case .tree, .workspaceNew, .quick, .quickType, .quickText, .surfaceZoom, .dashboard,
+        case .tree, .eventsRead, .workspaceNew, .quick, .quickType, .quickText, .surfaceZoom, .dashboard,
              .sidebar, .sidebarMode, .sidebarExpand, .sidebarCollapse,
              .windowNew, .windowList, .windowSelect, .windowClose, .windowRename, .windowDelete,
              .windowResize, .windowMove, .windowZoom, .windowFullscreen,
