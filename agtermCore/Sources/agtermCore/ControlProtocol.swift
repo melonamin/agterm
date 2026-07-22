@@ -5,6 +5,7 @@ import Foundation
 /// turns into an "unknown command" error rather than a crash.
 public enum Command: String, Codable, Sendable {
     case tree
+    case eventsRead = "events.read"
     case workspaceNew = "workspace.new"
     case workspaceRename = "workspace.rename"
     case workspaceDelete = "workspace.delete"
@@ -19,10 +20,13 @@ public enum Command: String, Codable, Sendable {
     case sessionMove = "session.move"
     case workspaceMove = "workspace.move"
     case workspaceFocus = "workspace.focus"
+    case workspaceCollapse = "workspace.collapse"
+    case workspaceExpand = "workspace.expand"
     case sessionType = "session.type"
     case sessionStatus = "session.status"
     case sessionFlag = "session.flag"
     case sessionSeen = "session.seen"
+    case sessionRestore = "session.restore"
     case sessionBackground = "session.background"
     case sessionSplit = "session.split"
     case sessionScratch = "session.scratch"
@@ -95,6 +99,11 @@ public struct ControlArgs: Codable, Sendable, Equatable {
     /// For `session.new` with `workspaceName`: create the named workspace when none exists (idempotent
     /// reuse-or-create). An error without `workspaceName` — there is nothing to create by id.
     public var createWorkspace: Bool?
+    /// For `workspace.new`: create the workspace already COLLAPSED in the sidebar (the CLI's `--collapsed`)
+    /// instead of the default expanded state, so a script can build a workspace and fill it with
+    /// `session.new --no-select` without it opening. Omitted/`false` = expanded. The read-back is the
+    /// `tree` workspace node's `collapsed` field.
+    public var collapsed: Bool?
     /// For `session.new`: create the session in the background without selecting or focusing it, leaving
     /// the current selection untouched (the CLI's `--no-select`). Omitted/`false` keeps the default
     /// select-and-focus behavior. The read-back is the existing `tree` `active` flag — the new node is not
@@ -107,7 +116,8 @@ public struct ControlArgs: Codable, Sendable, Equatable {
     /// Mode for `session.split` / `quick` / `surface.zoom` (`on|off|toggle`,
     /// `show|hide|toggle` for quick/surface zoom),
     /// `session.flag` (`on|off|toggle|clear`), `sidebar.mode` (`tree|flagged|toggle`),
-    /// `workspace.focus` (`on|off|toggle`), and `session.background` (`image|text|color|clear`).
+    /// `workspace.focus` (`on|off|toggle`), `session.background` (`image|text|color|clear`), and
+    /// `session.restore` (`set|none|clear` — pin `command`, pin nothing, or drop the pin).
     public var mode: String?
     /// The image file path for `session.background` mode `image` (PNG or JPEG).
     public var path: String?
@@ -130,14 +140,17 @@ public struct ControlArgs: Codable, Sendable, Equatable {
     /// Which split pane to focus for `session.focus` (`left`|`right`|`other`; `other` toggles); also
     /// which pane to read for `session.text` (`left`|`right`; omitted = the focused pane, no `other`),
     /// which pane `session.type` injects into (`left`|`right`; omitted = the left/main pane, the
-    /// pre-pane behavior), and which pane set `session.status` (`left`|`right`|`scratch`; omitted =
-    /// `left`/main, parsed to `StatusPane`).
+    /// pre-pane behavior), which pane set `session.status` (`left`|`right`|`scratch`; omitted =
+    /// `left`/main, parsed to `StatusPane`), and which pane `session.restore` pins (same `StatusPane`
+    /// spelling; omitted = `left`/main, `scratch` rejected app-side).
     public var pane: String?
-    /// A surface's STABLE spawn token for `session.status --pane-id` (the shell's baked `AGTERM_PANE_ID`,
-    /// forwarded by the agent-status hook). When it resolves against the session's live surfaces it
-    /// OVERRIDES the stale role `pane`, so a status set from a promoted-then-re-split pane lands on the
-    /// pane's CURRENT slot; an empty/unknown token falls back to `pane`. Opaque — validated only by whether
-    /// it resolves. See `Session.paneRole(forToken:)` and the #199 fix.
+    /// A surface's STABLE spawn token for `session.status --pane-id` and `session.restore --pane-id` (the
+    /// shell's baked `AGTERM_PANE_ID`, forwarded by the agent-status hook). When it resolves against the
+    /// session's live surfaces it OVERRIDES the stale role `pane`, so a status set from a
+    /// promoted-then-re-split pane lands on the pane's CURRENT slot; an empty/unknown token falls back to
+    /// `pane`. Opaque — validated only by whether it resolves. `session.restore` diverges on the fallback:
+    /// an unresolvable token with NO explicit `pane` is an error there rather than a silent `left`, since
+    /// pinning the wrong pane's restore command persists. See `Session.paneRole(forToken:)` and the #199 fix.
     public var paneID: String?
     /// Absolute left-pane split fraction (0...1) for `session.resize`, clamped server-side to
     /// `AppStore.splitRatioMin...splitRatioMax`. Mutually exclusive with `ratioDelta`.
@@ -161,14 +174,23 @@ public struct ControlArgs: Codable, Sendable, Equatable {
     public var after: String?
     /// Anchor session to place a session right BEFORE, the mirror of `after` (mutually exclusive with it).
     public var before: String?
+    /// App-run UUID paired with `after` for `events.read`. Both fields are omitted for a bootstrap read.
+    public var run: String?
+    /// Raw event-kind filters for `events.read`. Validation deliberately happens in the dispatcher so
+    /// unknown future kinds produce a normal control error rather than making the request undecodable.
+    public var kinds: [String]?
+    /// Maximum matching events returned by `events.read`; omitted uses the dispatcher default.
+    public var limit: Int?
     /// The desktop-notification title for `notify` (optional; defaults to the target session's name).
     public var title: String?
     /// The desktop-notification body for `notify` (required).
     public var body: String?
-    /// The program the overlay terminal runs for `session.overlay.open` (e.g. `revdiff`).
+    /// The program the overlay terminal runs for `session.overlay.open` (e.g. `revdiff`); also the shell
+    /// line `session.restore` pins for the next launch (mode `set` only, typed verbatim — never re-quoted).
     public var command: String?
-    /// Whether `session.overlay.open` keeps the overlay open after its command exits (showing the
-    /// "press any key to close" prompt) instead of closing immediately.
+    /// Whether a command surface keeps its "press any key to close" prompt after the command exits instead
+    /// of closing immediately: `session.overlay.open --wait` (the overlay) and `session.new --command …
+    /// --wait` (the primary session surface, held via `Session.commandWait`).
     public var wait: Bool?
     /// For `session.overlay.open`, the percent of the pane (1...100) a *floating* overlay panel
     /// occupies in both dimensions; omitted gives the default full-pane overlay. Also carries the new
@@ -227,11 +249,13 @@ public struct ControlArgs: Codable, Sendable, Equatable {
 
     public init(name: String? = nil, cwd: String? = nil, targets: [String]? = nil,
                 workspace: String? = nil, workspaceName: String? = nil,
-                createWorkspace: Bool? = nil, noSelect: Bool? = nil, text: String? = nil, select: Bool? = nil, mode: String? = nil,
+                createWorkspace: Bool? = nil, collapsed: Bool? = nil, noSelect: Bool? = nil,
+                text: String? = nil, select: Bool? = nil, mode: String? = nil,
                 command: String? = nil, wait: Bool? = nil, sizePercent: Int? = nil, full: Bool? = nil,
                 follow: Bool? = nil, window: String? = nil,
                 pane: String? = nil, paneID: String? = nil, to: String? = nil,
-                after: String? = nil, before: String? = nil,
+                after: String? = nil, before: String? = nil, run: String? = nil,
+                kinds: [String]? = nil, limit: Int? = nil,
                 title: String? = nil, body: String? = nil,
                 width: Int? = nil, height: Int? = nil, x: Int? = nil, y: Int? = nil, display: Int? = nil,
                 status: String? = nil, blink: Bool? = nil, autoReset: Bool? = nil, sound: String? = nil,
@@ -246,6 +270,7 @@ public struct ControlArgs: Codable, Sendable, Equatable {
         self.workspace = workspace
         self.workspaceName = workspaceName
         self.createWorkspace = createWorkspace
+        self.collapsed = collapsed
         self.noSelect = noSelect
         self.text = text
         self.select = select
@@ -261,6 +286,9 @@ public struct ControlArgs: Codable, Sendable, Equatable {
         self.to = to
         self.after = after
         self.before = before
+        self.run = run
+        self.kinds = kinds
+        self.limit = limit
         self.title = title
         self.body = body
         self.width = width
@@ -355,12 +383,26 @@ public struct ControlSessionNode: Codable, Sendable, Equatable {
     public let overlaySizePercent: Int?
     public let scratch: Bool
     public let flagged: Bool
+    /// For a `--command` session, whether it was created to HOLD its surface after the command exits
+    /// (`session.new --command … --wait`) rather than closing immediately; nil/omitted for a plain session
+    /// or a non-holding command session. The read side of `session.new --wait`, so a script can record and
+    /// restore the flag (it persists across restart, unlike an overlay's live-only wait).
+    public let commandWait: Bool?
     /// The LIVE foreground process command (full argv) in the main pane, or nil when the pane is at its
     /// shell prompt (omitted from the JSON). The same capture the restore-running-command feature uses,
     /// surfaced for introspection ("what is each pane running").
     public let foreground: [String]?
     /// The split (right) pane's live foreground command (full argv), the split analogue of `foreground`.
     public let splitForeground: [String]?
+    /// The main pane's PERSISTED restore-command override, the read side of `session.restore`. Tri-state:
+    /// omitted = no override (the auto-capture behavior), `""` = pinned to nothing (a plain shell), a
+    /// command = that shell line runs on the next launch. Reported from the persisted state, so a read
+    /// after the override already fired still reports what is pinned — record-then-restore works at any
+    /// point in the launch. Unrelated to `foreground`, which is the LIVE process the capture would take.
+    public let restoreCommand: String?
+    /// The split (right) pane's persisted restore-command override, the split analogue of `restoreCommand`
+    /// (the read side of `session.restore --pane right`).
+    public let splitRestoreCommand: String?
     /// The session's agent status (`active`/`completed`/`blocked`) as the `AgentStatus` raw value, or nil
     /// when the session is idle (omitted from the JSON). The read side of `session.status`.
     public let status: String?
@@ -401,7 +443,9 @@ public struct ControlSessionNode: Codable, Sendable, Equatable {
     public init(id: String, name: String, cwd: String, title: String? = nil, active: Bool, split: Bool,
                 splitRatio: Double? = nil, splitFocused: Bool? = nil,
                 overlay: Bool = false, overlaySizePercent: Int? = nil, scratch: Bool = false, flagged: Bool = false,
-                foreground: [String]? = nil, splitForeground: [String]? = nil, status: String? = nil,
+                commandWait: Bool? = nil,
+                foreground: [String]? = nil, splitForeground: [String]? = nil,
+                restoreCommand: String? = nil, splitRestoreCommand: String? = nil, status: String? = nil,
                 statusPane: String? = nil, statusBlink: Bool? = nil, statusColor: String? = nil,
                 background: BackgroundWatermark? = nil, unseen: Int? = nil,
                 fontSize: Double? = nil, splitFontSize: Double? = nil, scratchFontSize: Double? = nil,
@@ -418,8 +462,11 @@ public struct ControlSessionNode: Codable, Sendable, Equatable {
         self.overlaySizePercent = overlaySizePercent
         self.scratch = scratch
         self.flagged = flagged
+        self.commandWait = commandWait
         self.foreground = foreground
         self.splitForeground = splitForeground
+        self.restoreCommand = restoreCommand
+        self.splitRestoreCommand = splitRestoreCommand
         self.status = status
         self.statusPane = statusPane
         self.statusBlink = statusBlink
@@ -443,13 +490,21 @@ public struct ControlWorkspaceNode: Codable, Sendable, Equatable {
     /// SELECTED workspace): focus collapses the sidebar to a single workspace. The read side of the
     /// write-only `workspace.focus` — so a script can record which workspace is focused and restore it.
     public let focused: Bool?
+    /// Whether this workspace is COLLAPSED in the sidebar tree (`true`), or nil when expanded — the
+    /// default — so an all-expanded tree omits the field (matching the persisted `WorkspaceSnapshot.collapsed`).
+    /// The read side of the write-only `workspace.collapse`/`workspace.expand` (and `workspace.new --collapsed`),
+    /// so a script can record a workspace's open/closed state and restore it, or toggle by reading it first.
+    /// Reports the persisted model state (`!isExpanded`), independent of a transient focus force-reveal.
+    public let collapsed: Bool?
     public let sessions: [ControlSessionNode]
 
-    public init(id: String, name: String, active: Bool, focused: Bool? = nil, sessions: [ControlSessionNode]) {
+    public init(id: String, name: String, active: Bool, focused: Bool? = nil,
+                collapsed: Bool? = nil, sessions: [ControlSessionNode]) {
         self.id = id
         self.name = name
         self.active = active
         self.focused = focused
+        self.collapsed = collapsed
         self.sessions = sessions
     }
 }
@@ -632,12 +687,15 @@ public struct ControlResult: Codable, Sendable, Equatable {
     public var sync: Bool?
     public var light: String?
     public var dark: String?
+    /// A page from the app-run event ring, present for `events.read` success and cursor errors.
+    public var events: ControlEventBatch?
 
     public init(id: String? = nil, tree: ControlTree? = nil, text: String? = nil,
                 windows: [ControlWindowNode]? = nil, exitCode: Int? = nil, count: Int? = nil,
                 affected: Int? = nil,
                 theme: String? = nil, themes: [String]? = nil, ratio: Double? = nil,
-                sync: Bool? = nil, light: String? = nil, dark: String? = nil) {
+                sync: Bool? = nil, light: String? = nil, dark: String? = nil,
+                events: ControlEventBatch? = nil) {
         self.id = id
         self.tree = tree
         self.text = text
@@ -651,6 +709,7 @@ public struct ControlResult: Codable, Sendable, Equatable {
         self.sync = sync
         self.light = light
         self.dark = dark
+        self.events = events
     }
 }
 

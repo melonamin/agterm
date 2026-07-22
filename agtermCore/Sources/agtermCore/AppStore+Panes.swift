@@ -59,6 +59,10 @@ extension AppStore {
         session.splitCwd = nil
         session.splitTitle = nil
         session.initialSplitCwd = nil
+        // the right pane is gone, so its restore-command override describes nothing: drop both the
+        // persisted pin and any payload still armed for this launch (a fresh split must be a plain shell).
+        session.splitRestoreCommand = nil
+        session.pendingSplitRestoreCommand = nil
         session.splitRatio = nil // tearing down the split clears its geometry too, so a fresh split opens even
         // a search bar pinned to the torn-down split surface would otherwise stay stuck (the weak
         // `searchSurface` zeroes but `searchActive` stays true), so reset search on the surviving session.
@@ -96,8 +100,10 @@ extension AppStore {
         session.splitFocused = false
         session.splitRatio = nil // promoted to a single pane; a later split should open even, not stale
         // the command pane is gone — the promoted survivor is a plain shell, so drop the creation command
-        // or a restart would resurrect the exited command instead of restoring the promoted shell.
+        // (and its held-open flag) together or a restart would resurrect the exited command instead of the
+        // promoted shell, and a snapshot would persist commandWait with no initialCommand.
         session.initialCommand = nil
+        session.commandWait = false
         // migrate the split pane's live/persisted metadata up to the session (main) fields, then clear the
         // now-meaningless split fields so nothing still describes a pane that no longer exists.
         // cwd prefers the split's live PWD, then its restore-seed (`initialSplitCwd`, set for a restored
@@ -108,10 +114,18 @@ extension AppStore {
         session.currentCwd = session.splitCwd ?? session.initialSplitCwd ?? session.currentCwd
         session.oscTitle = session.splitTitle
         session.foregroundCommand = session.splitForegroundCommand
+        // the restore-command override follows the survivor into the main slot the same way, BOTH halves:
+        // the persisted pin (so the next launch restores the promoted pane's command, not the dead
+        // primary's) and any payload still armed for this launch (so a surface built after promotion
+        // still runs it).
+        session.restoreCommand = session.splitRestoreCommand
+        session.pendingRestoreCommand = session.pendingSplitRestoreCommand
         session.splitCwd = nil
         session.splitTitle = nil
         session.initialSplitCwd = nil
         session.splitForegroundCommand = nil
+        session.splitRestoreCommand = nil
+        session.pendingSplitRestoreCommand = nil
         // reset search only if the torn-down primary owned the bar (or the weak ref already dangled), so a
         // search owned by the SURVIVING pane stays valid across promotion — matching closeScratch's
         // identity guard rather than clearing unconditionally and dropping a still-valid search.

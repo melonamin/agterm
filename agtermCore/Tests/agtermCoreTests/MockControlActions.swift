@@ -10,6 +10,7 @@ import Testing
 final class MockControlActions: ControlActions {
     enum Call: Equatable {
         case tree(window: String?)
+        case eventsRead(ControlEventReadOptions)
         case sessionNew(ControlSessionCreateOptions)
         case sessionDuplicate(target: String?, window: String?)
         case sessionSelect(target: String?, window: String?)
@@ -18,7 +19,7 @@ final class MockControlActions: ControlActions {
         case sessionCloseBatch(targets: [String], window: String?)
         case sessionRename(target: String?, window: String?, String)
         case sessionReveal(target: String?, window: String?)
-        case workspaceNew(window: String?, String?)
+        case workspaceNew(window: String?, String?, collapsed: Bool)
         case workspaceSelect(target: String?, window: String?)
         case workspaceRename(target: String?, window: String?, String)
         case workspaceDelete(target: String?, window: String?)
@@ -26,9 +27,11 @@ final class MockControlActions: ControlActions {
         case sessionMoveBatch(targets: [String], window: String?, ControlSessionMove)
         case workspaceMove(target: String?, window: String?, ReorderDirection)
         case workspaceFocus(target: String?, window: String?, String?)
+        case workspaceExpansion(target: String?, window: String?, expanded: Bool)
         case sessionFlag(target: String?, window: String?, String?)
         case markSessionSeen(target: String?, window: String?)
         case sessionStatus(target: String?, window: String?, ControlSessionStatusUpdate)
+        case sessionRestore(target: String?, window: String?, ControlSessionRestoreUpdate)
         case sessionSplit(target: String?, window: String?, String?)
         case sessionScratch(target: String?, window: String?, String?, command: String?)
         case sessionFocus(target: String?, window: String?, String?)
@@ -74,6 +77,7 @@ final class MockControlActions: ControlActions {
 
     var calls: [Call] = []
     var nextTreeResponse = ControlResponse(ok: false, error: "tree not stubbed")
+    var nextEventsReadResponse = ControlResponse(ok: false, error: "events.read not stubbed")
     var nextSessionNewResponse = ControlResponse(ok: true)
     var nextSessionDuplicateResponse = ControlResponse(ok: true)
     var nextSidebarVisibilityResponse = ControlResponse(ok: true)
@@ -113,10 +117,16 @@ final class MockControlActions: ControlActions {
     var nextWindowZoomResponse = ControlResponse(ok: true)
     var nextWindowFullscreenResponse = ControlResponse(ok: true)
     var nextRestoreClearResponse = ControlResponse(ok: true)
+    var nextSessionRestoreResponse = ControlResponse(ok: true)
 
     func controlTree(window: String?) -> ControlResponse {
         calls.append(.tree(window: window))
         return nextTreeResponse
+    }
+
+    func readEvents(_ options: ControlEventReadOptions) -> ControlResponse {
+        calls.append(.eventsRead(options))
+        return nextEventsReadResponse
     }
 
     func createSession(_ options: ControlSessionCreateOptions) -> ControlResponse {
@@ -159,8 +169,8 @@ final class MockControlActions: ControlActions {
         return ControlResponse(ok: true)
     }
 
-    func createWorkspace(window: String?, name: String?) -> ControlResponse {
-        calls.append(.workspaceNew(window: window, name))
+    func createWorkspace(window: String?, name: String?, collapsed: Bool) -> ControlResponse {
+        calls.append(.workspaceNew(window: window, name, collapsed: collapsed))
         return ControlResponse(ok: true)
     }
 
@@ -199,6 +209,11 @@ final class MockControlActions: ControlActions {
         return ControlResponse(ok: true)
     }
 
+    func setWorkspaceExpansion(_ target: String?, window: String?, expanded: Bool) -> ControlResponse {
+        calls.append(.workspaceExpansion(target: target, window: window, expanded: expanded))
+        return ControlResponse(ok: true)
+    }
+
     func setSessionFlag(_ target: String?, window: String?, mode: String?) -> ControlResponse {
         calls.append(.sessionFlag(target: target, window: window, mode))
         return ControlResponse(ok: true)
@@ -213,6 +228,12 @@ final class MockControlActions: ControlActions {
                           update: ControlSessionStatusUpdate) -> ControlResponse {
         calls.append(.sessionStatus(target: target, window: window, update))
         return ControlResponse(ok: true)
+    }
+
+    func setSessionRestore(_ target: String?, window: String?,
+                           update: ControlSessionRestoreUpdate) -> ControlResponse {
+        calls.append(.sessionRestore(target: target, window: window, update))
+        return nextSessionRestoreResponse
     }
 
     func splitSession(_ target: String?, window: String?, mode: String?) -> ControlResponse {

@@ -36,6 +36,11 @@ struct CommandsTests {
         #expect(try request(["workspace", "new"]) == ControlRequest(cmd: .workspaceNew, args: ControlArgs(name: nil)))
     }
 
+    @Test func workspaceNewCollapsed() throws {
+        let expected = ControlRequest(cmd: .workspaceNew, args: ControlArgs(name: "Work", collapsed: true))
+        #expect(try request(["workspace", "new", "Work", "--collapsed"]) == expected)
+    }
+
     @Test func workspaceRename() throws {
         let expected = ControlRequest(cmd: .workspaceRename, target: "9f3c", args: ControlArgs(name: "Renamed"))
         #expect(try request(["workspace", "rename", "Renamed", "--target", "9f3c"]) == expected)
@@ -72,6 +77,24 @@ struct CommandsTests {
         #expect(throws: (any Error).self) { try Agtermctl.parseAsRoot(["workspace", "focus", "sideways"]) }
     }
 
+    @Test func workspaceCollapseDefaultsActive() throws {
+        #expect(try request(["workspace", "collapse"]) == ControlRequest(cmd: .workspaceCollapse, target: "active"))
+    }
+
+    @Test func workspaceExpandWithTarget() throws {
+        #expect(try request(["workspace", "expand", "--target", "9f3c"]) == ControlRequest(cmd: .workspaceExpand, target: "9f3c"))
+    }
+
+    @Test func workspaceCollapseThreadsWindow() throws {
+        let expected = ControlRequest(cmd: .workspaceCollapse, target: "9f3c", args: ControlArgs(window: "win"))
+        #expect(try request(["workspace", "collapse", "--target", "9f3c", "--window", "win"]) == expected)
+    }
+
+    @Test func workspaceExpandThreadsWindow() throws {
+        let expected = ControlRequest(cmd: .workspaceExpand, target: "active", args: ControlArgs(window: "win"))
+        #expect(try request(["workspace", "expand", "--window", "win"]) == expected)
+    }
+
     @Test func sessionNewWithCwdAndWorkspace() throws {
         let expected = ControlRequest(cmd: .sessionNew, args: ControlArgs(cwd: "/tmp", workspace: "ws1"))
         #expect(try request(["session", "new", "--cwd", "/tmp", "--workspace", "ws1"]) == expected)
@@ -92,6 +115,17 @@ struct CommandsTests {
         // --no-select sets noSelect=true on the wire (omitted when the flag is absent).
         let expected = ControlRequest(cmd: .sessionNew, args: ControlArgs(noSelect: true))
         #expect(try request(["session", "new", "--no-select"]) == expected)
+    }
+
+    @Test func sessionNewWithCommandWait() throws {
+        // --wait rides with --command to hold the session open after the command exits (omitted otherwise).
+        let expected = ControlRequest(cmd: .sessionNew, args: ControlArgs(command: "make test", wait: true))
+        #expect(try request(["session", "new", "--command", "make test", "--wait"]) == expected)
+    }
+
+    @Test func sessionNewRejectsWaitWithoutCommand() {
+        // --wait holds a command surface, so it is meaningless without --command — validate() rejects it.
+        #expect(validationMessage(["session", "new", "--wait"]) == "--wait requires --command")
     }
 
     @Test func sessionNewRejectsWorkspaceAndWorkspaceName() {
@@ -522,6 +556,71 @@ struct CommandsTests {
     @Test func sessionStatusRejectsBadPane() {
         // `other` is a session.focus mode, not a status pane — status accepts left|right|scratch only.
         #expect(validationMessage(["session", "status", "blocked", "--pane", "other"]) == "--pane must be left, right, or scratch")
+    }
+
+    @Test func sessionRestorePinsCommand() throws {
+        let expected = ControlRequest(cmd: .sessionRestore, target: "s1",
+                                      args: ControlArgs(mode: "set", command: "claude --resume abc"))
+        #expect(try request(["session", "restore", "claude --resume abc", "--target", "s1"]) == expected)
+    }
+
+    @Test func sessionRestoreCarriesShellLineVerbatim() throws {
+        // the pinned value is a shell line, so metacharacters must reach the wire untouched.
+        let line = "cd /tmp && claude --resume abc | tee out"
+        let req = try request(["session", "restore", line])
+        #expect(req.args?.command == line)
+    }
+
+    @Test func sessionRestoreNone() throws {
+        let expected = ControlRequest(cmd: .sessionRestore, target: "active", args: ControlArgs(mode: "none"))
+        let req = try request(["session", "restore", "--none"])
+        #expect(req == expected)
+        #expect(req.args?.command == nil)
+    }
+
+    @Test func sessionRestoreClear() throws {
+        let expected = ControlRequest(cmd: .sessionRestore, target: "active", args: ControlArgs(mode: "clear"))
+        let req = try request(["session", "restore", "--clear"])
+        #expect(req == expected)
+        #expect(req.args?.command == nil)
+    }
+
+    @Test func sessionRestoreWithPaneAndPaneID() throws {
+        let expected = ControlRequest(cmd: .sessionRestore, target: "s1",
+                                      args: ControlArgs(mode: "set", command: "claude -c",
+                                                        pane: "right", paneID: "pane-tok"))
+        #expect(try request(["session", "restore", "claude -c", "--pane", "right",
+                             "--pane-id", "pane-tok", "--target", "s1"]) == expected)
+    }
+
+    @Test func sessionRestoreWithoutPaneOmitsBoth() throws {
+        let req = try request(["session", "restore", "--clear"])
+        #expect(req.args?.pane == nil)
+        #expect(req.args?.paneID == nil)
+    }
+
+    @Test func sessionRestoreCarriesWindow() throws {
+        let expected = ControlRequest(cmd: .sessionRestore, target: "active",
+                                      args: ControlArgs(mode: "none", window: "w1"))
+        #expect(try request(["session", "restore", "--none", "--window", "w1"]) == expected)
+    }
+
+    @Test func sessionRestoreRequiresOneForm() {
+        #expect(validationMessage(["session", "restore"]) == "provide exactly one of a COMMAND, --none, or --clear")
+    }
+
+    @Test func sessionRestoreRejectsCommandWithNone() {
+        #expect(validationMessage(["session", "restore", "claude", "--none"])
+            == "provide exactly one of a COMMAND, --none, or --clear")
+    }
+
+    @Test func sessionRestoreRejectsNoneWithClear() {
+        #expect(validationMessage(["session", "restore", "--none", "--clear"])
+            == "provide exactly one of a COMMAND, --none, or --clear")
+    }
+
+    @Test func sessionRestoreRejectsBadPane() {
+        #expect(validationMessage(["session", "restore", "--clear", "--pane", "other"]) == "--pane must be left, right, or scratch")
     }
 
     @Test func sessionSearchWithNeedle() throws {

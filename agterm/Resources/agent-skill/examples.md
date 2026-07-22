@@ -22,6 +22,50 @@ Clear those saved commands so the next launch restores plain shells:
 agtermctl restore clear
 ```
 
+## Pin what a pane restores (per-session override)
+
+`session restore` pins a shell line that a pane re-runs on the NEXT launch, overriding the captured
+foreground. It is written now and consumed at the next launch (it never touches the running session), and
+it is sticky — it fires again on every restart until cleared. Read it back on `tree` as the node's
+`restoreCommand` / `splitRestoreCommand`.
+
+```bash
+agtermctl session restore "claude --resume abc123" --target "$AGTERM_SESSION_ID"  # pin a shell line
+agtermctl session restore --none  --target "$AGTERM_SESSION_ID"   # pin nothing: restore a plain shell
+agtermctl session restore --clear --target "$AGTERM_SESSION_ID"   # drop the override, back to auto-capture
+agtermctl session restore "npm run dev" --target "$AGTERM_SESSION_ID" --pane-id "$AGTERM_PANE_ID"  # a split pane by its live slot
+```
+
+The pinned value is SHELL CODE: it persists in the window's state file (`windows/<id>.json`), is readable
+via `tree`, and may enter shell history when it runs — so it must not carry secrets, and only
+safely-interpolated values (a UUID-shaped session id) belong in it.
+
+## Keep a forking agent session reattaching across restarts (a SessionStart hook)
+
+`claude --resume <id> --fork-session` mints a NEW claude session on every agterm restart, so restoring it
+verbatim never reattaches the session you were in. Fix it by rewriting the override to the LIVE session id
+on every start, from a Claude Code `SessionStart` hook — it runs inside the session's shell, where
+`$AGTERM_SESSION_ID` and `$AGTERM_PANE_ID` are exported:
+
+```bash
+# in the SessionStart hook (the selector is --target; there is no --session).
+# the hook's stdin JSON carries the live id as `session_id` — there is NO $CLAUDE_SESSION_ID variable.
+sid=$(jq -r '.session_id // empty')
+[ -n "$sid" ] || exit 0   # no id: leave the existing pin alone rather than pinning a broken line
+agtermctl session restore "claude --resume $sid" \
+    --target "$AGTERM_SESSION_ID" --pane-id "$AGTERM_PANE_ID"
+```
+
+Because the hook rewrites the override on every start, it always tracks the live child, so the next
+restart reattaches instead of forking. Ownership flips to whoever sets it: write it once by hand and forget,
+and it stays pinned to a STALE id — that is why this is a hook-driven override, not a set-once setting.
+
+Read the id from the hook's stdin (`$CLAUDE_CODE_SESSION_ID` is exported in the session's environment as
+well, but the stdin `session_id` is what the hook is handed). GUARD against an empty value before pinning:
+a pin is sticky and persisted, so `claude --resume ` with an empty argument would be re-typed on every
+launch until cleared. The id is UUID-shaped and safe to interpolate; never build the pinned line from
+untrusted or secret values.
+
 ## Create a session and type into it
 
 `session new` returns the new id and focuses the session. Capture the id, then type. The session is
@@ -44,6 +88,7 @@ Run a command AS the session's process (closes when it exits, no echoed command 
 ```bash
 agtermctl session new --command "ssh host -p 22"     # a default-PATH binary: argv-split (quotes respected), no shell, no echo
 agtermctl session new --command "zsh -lc 'htop'"     # Homebrew/non-default binary: --command has the app's GUI PATH, so wrap in a login shell (or use an absolute path); bare "htop" exits 127
+agtermctl session new --command "zsh -lc 'make test'" --wait   # HOLD the row open after the command exits (press any key to close) so its final output stays readable; --wait needs --command
 ```
 
 Create a session pre-named (label set at creation, no follow-up rename):
@@ -315,6 +360,27 @@ agtermctl sidebar collapse                               # collapse all but the 
 agtermctl sidebar collapse --window "$AGTERM_WINDOW_ID"  # collapse a specific window's sidebar
 ```
 
+## Build a collapsed workspace and fill it quietly
+
+Collapse or expand ONE workspace by id (the per-workspace pair, unlike `sidebar expand`/`collapse` which
+act on all of them). Create a workspace already collapsed with `workspace new --collapsed`, then add
+sessions with `session new --no-select` so it never opens or steals the current selection — the recipe
+for staging a batch of sessions out of the way. Read the open/closed state back from the tree workspace
+node's `collapsed` flag (`true` when collapsed, omitted when expanded).
+
+```bash
+ws=$(agtermctl workspace new "batch" --collapsed --json | jq -r '.result.id')
+for dir in ~/a ~/b ~/c; do
+  agtermctl session new --cwd "$dir" --workspace "$ws" --no-select   # added, but the workspace stays shut
+done
+agtermctl workspace expand --target "$ws"    # open it when you want to see the staged sessions
+agtermctl workspace collapse --target "$ws"  # fold it away again
+
+# toggle: read the flag first, then flip
+collapsed=$(agtermctl tree --json | jq -r --arg w "$ws" '.result.tree.workspaces[] | select(.id==$w) | .collapsed // false')
+[ "$collapsed" = true ] && agtermctl workspace expand --target "$ws" || agtermctl workspace collapse --target "$ws"
+```
+
 ## Copy a selection and reuse it
 
 `session copy` returns the selection as text (it does not use the system clipboard). Pipe it onward.
@@ -382,6 +448,53 @@ agtermctl session search --close          # close the search bar
 agtermctl notify "build finished" --title "CI"                 # active session
 agtermctl notify "tests failed" --target "$sid"               # a specific session
 ```
+
+## Wait for a session status
+
+Subscribe before starting the work, then select the first matching status event. The initial read
+subscribes from now, so an old completed state is not mistaken for a new completion.
+
+```bash
+export target="$AGTERM_SESSION_ID"
+agtermctl events --json --kind status |
+  jq --unbuffered -e 'select(.session == env.target and .payload.status == "completed")' |
+  head -n 1
+```
+
+The pipeline ends after the match. A transport or cursor failure makes `agtermctl events` exit
+non-zero; preserve pipeline status in automation that must distinguish a match from a failed stream.
+
+## Relay accepted notifications
+
+The notification event exists even when desktop banners are disabled. Forward each accepted event as
+NDJSON to another process without parsing human output:
+
+```bash
+agtermctl events --json --kind notify |
+  jq --unbuffered -c '{at: .ts, window, workspace, session, title: .payload.title, body: .payload.body}' |
+  ./notification-relay
+```
+
+Foreground OSC notifications suppressed by agterm do not appear in this stream.
+
+## Clean up after sessions close
+
+Lifecycle events follow visible tree membership. A soft close emits `session.closed` immediately, and
+an undo later emits `session.created` for the same id. Delay irreversible cleanup if undo matters.
+
+```bash
+agtermctl events --json --kind session.closed |
+  jq --unbuffered -r '.session' |
+  while IFS= read -r sid; do
+    ./release-session-resources "$sid"
+  done
+```
+
+For resumable consumers, save the `run` and `next` fields from raw `events.read` batch responses and
+restart with `agtermctl events --run "$run" --after "$next" --json`. The streaming JSON lines are bare
+events and do not include the run id. If the command reports `event run changed`, `event cursor
+expired`, or `event cursor is ahead of the current sequence`, stop loudly. Rebootstrap only after the
+caller accepts that events may have been lost; never replace the cursor automatically.
 
 ## Agent status glyph
 

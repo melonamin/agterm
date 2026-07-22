@@ -10,14 +10,15 @@ description: >
   select, close, resize, move); change font size; or reload and edit the keymap and the agterm-scoped
   ghostty config. Also covers the
   window/workspace/session addressing model and the AGTERM_* environment a spawned shell sees, plus
-  diagnosing problems (keymap editor, custom actions, logs) and filing a bug as a GitHub issue or a
+  subscribe to status, notification, session lifecycle, and tree-change events; diagnose problems
+  (keymap editor, custom actions, logs); and file a bug as a GitHub issue or a
   feature request / question as a GitHub Discussion.
 when_to_use: >
   Trigger on: agterm, agtermctl, agterm control socket, session.new, session.close, session.type,
   session.split, session.scratch, session.focus, session.resize, surface.zoom, dashboard, session.go, session.copy, session.paste, session.selectall, session.text, session.search, session.status,
   session.flag, session.seen, session.reveal, session.duplicate, session.background, session.overlay, workspace.new, workspace.select, workspace.move, workspace.focus, window.new, window.list,
   window.select, window.resize, window.move, window.zoom, window.fullscreen, quick terminal, sidebar, sidebar.mode, sidebar.expand, sidebar.collapse, flagged, notify, font.inc, keymap.reload, config.reload,
-  theme.set, theme.list, select theme, edit keymap, show an image, display an image inline, show-image,
+  theme.set, theme.list, events, events.read, event subscription, select theme, edit keymap, show an image, display an image inline, show-image,
   AGTERM_SESSION_ID, AGTERM_SOCKET, and asks to drive or script agterm. Also: troubleshoot agterm,
   keymap editor won't open, custom action / custom command not working, agterm logs, file an agterm
   bug, report an agterm issue, open an agterm discussion / feature request.
@@ -30,8 +31,9 @@ allowed-tools: Bash(agtermctl *)
 
 agterm is a native desktop terminal with macOS and GTK Linux frontends. It exposes a programmatic control channel over a local unix
 socket, driven by the companion CLI `agtermctl`. Use it to build and steer terminal layouts, run
-programs in overlays, type into sessions, and notify the user in the exact session you are working
-in. Fire-and-forget commands only: there is no terminal-output streaming and no event subscription.
+programs in overlays, type into sessions, notify the user in the exact session you are working in,
+and subscribe to control events. Events cover status, notifications, session lifecycle, and
+structural tree changes. They do not stream terminal output; use `session text` to read a buffer.
 
 ## Am I inside agterm?
 
@@ -72,9 +74,10 @@ invoke it by absolute path.
 - Add `--json` to any command to get the raw JSON response (machine-readable). Without it, ordinary
   mutations print `ok`, batch close/move prints the affected session count, and `tree`/`list` print a
   human listing.
-- One request per invocation. Mutating commands return the affected/new id; batch session mutations return
-  the number actually changed. Create commands (`session new`, `session duplicate`, `workspace new`, `window new`)
-  print the new id.
+- Commands other than `events` make one request per invocation. `events` polls with a fresh connection
+  for each request. Mutating commands return the affected/new id; batch session mutations return the
+  number actually changed. Create commands (`session new`, `session duplicate`, `workspace new`,
+  `window new`) print the new id.
 
 ## The model
 
@@ -125,7 +128,25 @@ you work. For any session-scoped command meant to act on *this* session — `ove
 `type`, `text`, `background`, `status`, `copy`, … — pass `--target "$AGTERM_SESSION_ID"`. Omit it and
 you open overlays / type into whatever the user has selected, not your own session.
 
-## Command summary (61 commands)
+## Launching a program in a session
+
+**Bind it at creation.** `session new --command` (and `scratch --command`) makes the program the session
+process, so no shell line is involved:
+
+```bash
+agtermctl session new --cwd ~/proj --name worker \
+  --command "zsh -lc 'claude \"\$(cat ~/brief.md)\"'"   # GUI PATH: wrap a non-default binary
+```
+
+`session type` drives an ALREADY-RUNNING program — it is not a launcher. Its keystrokes land in a line
+buffer you do not own: a newline submits (a multi-line brief becomes N premature Enters), and the user
+or a concurrent agent writes to that same buffer. An untargeted `session type` from another agent hits
+whatever is `active`, and `session new` focuses — so a just-created session is briefly `active`, a stray
+prompt concatenates with yours, and the program starts on the merged line. (`--no-select` skips the
+focus, but the newline and shared-buffer hazards of `type`-as-launcher remain — `--command` is still the
+rule.) After `--command`, confirm in `tree --json` that the new node's `foreground` shows your program running, not a bare shell prompt.
+
+## Command summary (65 commands)
 
 Run `agtermctl <area> <cmd> --help` for exact flags. Full detail in **reference.md**; recipes in
 **examples.md**.
@@ -133,14 +154,18 @@ Run `agtermctl <area> <cmd> --help` for exact flags. Full detail in **reference.
 **tree** — print the workspace/session tree (`--json` for structured). Each session node carries
 `foreground`/`splitForeground` (the live argv of each pane's foreground process, omitted when the pane
 is at its shell prompt, or running a setuid/setgid program like `top` or `sudo` whose argv macOS won't
-expose) — i.e. what each pane is currently running — `status` (the agent-status set
+expose) — i.e. what each pane is currently running — `restoreCommand`/`splitRestoreCommand` (each pane's
+persisted restore-command override set via `session restore` — the read side: omitted = auto-capture, `""`
+= pinned to nothing (a plain shell), a command = the shell line that runs on the next launch), `status` (the agent-status set
 via `session status`: `active`|`completed`|`blocked`, omitted when idle), `statusPane` (which pane set
 that status: `left` (main) | `right` (split) | `scratch`, from `session status --pane`, omitted when
 unset or idle), `statusBlink`/`statusColor` (the status glyph's `--blink` flag and `--color` `#rrggbb`
 override from `session status`, omitted when idle / not blinking / default color), `background` (the background
 spec — image/text watermark or solid color — set via `session background`, omitted when none — the read side of set/clear),
 `unseen` (the unseen-notification badge count — raised by `notify`/OSC 9/777, cleared by `session
-seen` — omitted when zero), `overlaySizePercent` (an open overlay's floating-panel percent 1–100,
+seen` — omitted when zero), `commandWait` (whether a `--command` session was created with `--wait` to
+hold open after the command exits — the read side of `session new --wait`, omitted for a plain or
+non-holding session), `overlaySizePercent` (an open overlay's floating-panel percent 1–100,
 omitted for a full-pane overlay or no overlay so gate on `overlay` first; the read side of `overlay
 resize` for a record-then-restore zoom), `splitRatio` (the left-pane divider fraction 0.05–0.95 of a
 session that has a split — shown or hidden; omitted when there's no split or the ratio was never set (at
@@ -157,17 +182,33 @@ a split pane, so a split session appears as both), `dashboardHighlighted` (the h
 the one Enter jumps into, focusing that exact pane), `dashboardFontSize` (the absolute font size in points
 applied to the cells, omitted when untouched), and `dashboardFontMode` (`auto`|`fixed`|`untouched`).
 
-**workspace** — `new [name]` · `rename <name>` · `delete` · `select` · `move --to up|down|top|bottom` ·
+**events**: continuously print control events, subscribing from the current tail when no cursor is
+given. Use `--json` for one bare event object per line; filter with repeatable or comma-separated
+`--kind status|notify|session.created|session.closed|tree.changed`; resume with paired
+`--run RUN --after SEQ`; and set page size with `--limit 1...1000`. The app retains 4,096 events for
+one process run. Cursor run changes, expiry, and ahead-of-tail errors are fatal and are never silently
+rebaselined. There is no terminal-output event stream.
+
+**workspace** — `new [name] [--collapsed]` (`--collapsed` creates it closed in the sidebar so you can fill
+it with `session new --no-select` without it opening) · `rename <name>` · `delete` · `select` ·
+`move --to up|down|top|bottom` ·
 `focus [on|off|toggle]` (collapse the sidebar tree to a single workspace; read back which workspace is
-focused from the tree workspace node's `focused` flag).
+focused from the tree workspace node's `focused` flag) ·
+`collapse [--target W] [--window W]` · `expand [--target W] [--window W]` (collapse/expand ONE workspace
+in the sidebar tree — the per-workspace pair, distinct from the all-workspace `sidebar expand`/`collapse`;
+read the open/closed state back from the tree workspace node's `collapsed` flag, `true` when collapsed and
+omitted when expanded).
 
 **session**
-- `new [--cwd DIR] [--workspace W] [--workspace-name NAME] [--create-workspace] [--command CMD] [--name NAME] [--after SID | --before SID] [--no-select]` —
+- `new [--cwd DIR] [--workspace W] [--workspace-name NAME] [--create-workspace] [--command CMD] [--wait] [--name NAME] [--after SID | --before SID] [--no-select]` —
   create (and focus) a session. Target the workspace by id/prefix (`--workspace`) OR by name
   (`--workspace-name`, mutually exclusive); add `--create-workspace` to reuse-or-create the named
   workspace when absent. `--command` runs that program as the session process instead of a login shell
   (argv-only, and with the app's GUI `PATH` — a Homebrew/non-default binary needs an absolute path or a
   `zsh -lc '…'` wrapper, else exit 127; same caveat for `scratch --command` and `overlay open` below);
+  `--wait` (with `--command`, else an error) HOLDS the session open after the command exits, showing the
+  press-any-key prompt with the final output intact instead of closing (persists across restart, unlike an
+  overlay's live-only wait; read back on `tree`'s `commandWait`);
   `--name` seeds the sidebar label (default: the auto basename). `--after`/`--before` place it directly
   after/before an anchor session (id/prefix/`active`) instead of appending — the anchor carries its own
   workspace, so it's mutually exclusive with `--workspace`/`--workspace-name`. `new --after active` =
@@ -219,6 +260,19 @@ focused from the tree workspace node's `focused` flag).
   selection or focus (the focus-free counterpart to `notify`, which raises the badge). Idempotent — a
   no-op when already zero. Read the current count from the tree node's `unseen` field. Use it so an
   orchestrator can acknowledge a driven session's notifications without pulling focus to it.
+- `restore ("cmd" | --none | --clear) [--pane left|right] [--pane-id TOKEN]` — pin what a pane re-runs on
+  the NEXT launch, overriding the captured foreground command. A `"cmd"` shell line pins it, `--none` pins
+  nothing (a plain shell), `--clear` drops the override back to auto-capture. Written now, consumed on the
+  next launch (it never touches the running session), and STICKY — fires again on every restart until
+  cleared. Gated on the "Restore running commands on restart" setting (a set while it is off succeeds with
+  a note that nothing will run) but bypasses `restore-denylist.conf`. Read back as the tree node's
+  `restoreCommand`/`splitRestoreCommand`. `--pane right` needs a split; `scratch` is rejected. `--pane-id`
+  (the shell's `$AGTERM_PANE_ID`) resolves the pane's live slot — unlike `session status`, a token that
+  does not resolve errors unless `--pane` is also given. For a non-idempotent command like
+  `claude --resume … --fork-session` (which mints a new session on every restart), a Claude Code
+  `SessionStart` hook rewrites the override to the live id on every start so the next restart reattaches
+  instead of forking. The pinned value is shell code stored in the state file and readable via `tree`, so
+  it must not carry secrets. See examples.md.
 - `background image <path> [--opacity F] [--fit contain|cover|stretch|none] [--position P] [--repeat]` ·
   `background text <text> [--color #rrggbb] [--opacity F] [--fit ...] [--position ...]` ·
   `background color <#rrggbb>` · `background clear` — composite an image (PNG/JPEG) or rasterized text

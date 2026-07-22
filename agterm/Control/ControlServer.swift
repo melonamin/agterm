@@ -363,11 +363,12 @@ final class ControlServer {
             return response
         }
         switch request.cmd {
-        case .tree, .sessionNew, .sessionDuplicate, .sessionSelect, .sessionGo, .sessionClose, .sessionRename,
+        case .tree, .eventsRead, .sessionNew, .sessionDuplicate, .sessionSelect, .sessionGo, .sessionClose, .sessionRename,
                 .sessionReveal, .sessionMove,
                 .workspaceNew, .workspaceSelect, .workspaceRename, .workspaceDelete, .workspaceMove, .workspaceFocus,
+                .workspaceCollapse, .workspaceExpand,
                 .sessionSplit, .sessionScratch, .sessionFocus, .sessionResize, .surfaceZoom,
-                .sessionStatus, .sessionFlag, .sessionSeen, .notify,
+                .sessionStatus, .sessionFlag, .sessionSeen, .sessionRestore, .notify,
                 .fontInc, .fontDec, .fontReset, .keymapReload, .configReload, .themeSet, .themeList,
                 .sidebar, .sidebarMode, .sidebarExpand, .sidebarCollapse, .sessionType, .sessionCopy,
                 .sessionPaste, .sessionSelectAll,
@@ -568,8 +569,8 @@ final class ControlServer {
                              options: ControlSessionCreateOptions, at index: Int? = nil) -> ControlResponse {
         let cwd = options.cwd ?? FileManager.default.homeDirectoryForCurrentUser.path
         guard let session = store.addSession(toWorkspace: workspaceID, cwd: cwd,
-                                             command: options.command, name: options.name, at: index,
-                                             select: !options.noSelect) else {
+                                             command: options.command, name: options.name,
+                                             wait: options.wait ?? false, at: index, select: !options.noSelect) else {
             return ControlResponse(ok: false, error: "could not create session")
         }
         if !options.noSelect, store === library.activeStore { actions.focusActiveSession() }

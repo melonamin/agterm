@@ -408,35 +408,6 @@
               <span style="font-family: &quot;JetBrains Mono&quot;, monospace; color: #e6e1d7">agtermctl</span> command-line tool,
               so cask users shouldn't run the in-app installer as well.
             </p>
-            <p style="font-size: 15px; line-height: 1.65; color: #949ba4; margin: 14px 0 0">
-              Homebrew upgrade note (July 2026). A recent Homebrew change (installed-cask metadata
-              stored as JSON) can make
-              <span style="font-family: &quot;JetBrains Mono&quot;, monospace; color: #e6e1d7">brew upgrade</span>
-              fail for agterm with
-              <span style="font-family: &quot;JetBrains Mono&quot;, monospace; color: #e6e1d7">It seems there is already an App at '/Applications/agterm.app'</span>.
-              It affects third-party tap casks in general, not only agterm. Recover with a one-time
-              reinstall, which rewrites the install receipt:
-            </p>
-            <div
-              style="
-                background: #15191c;
-                border: 1px solid rgba(255, 255, 255, 0.1);
-                border-radius: 10px;
-                padding: 16px 18px;
-                margin: 14px 0 0;
-                font-family: &quot;JetBrains Mono&quot;, monospace;
-                font-size: 14px;
-                color: #e6e1d7;
-                overflow-x: auto;
-              "
-            >
-              <span style="color: #6d82f3">$ </span>brew reinstall --cask --force agterm
-            </div>
-            <p style="font-size: 15px; line-height: 1.65; color: #949ba4; margin: 14px 0 0">
-              Regular
-              <span style="font-family: &quot;JetBrains Mono&quot;, monospace; color: #e6e1d7">brew upgrade</span>
-              works afterward. This is an upstream Homebrew issue, and the note will be removed once it is fixed.
-            </p>
             <h3
               style="
                 font-family: &quot;JetBrains Mono&quot;, monospace;
@@ -1133,7 +1104,7 @@
               "
             >
               <p style="font-size: 15px; line-height: 1.65; color: #cbc6bc; margin: 0">
-                Looking for the full list? All 61 commands, with every argument, return value, and error, live on the
+                Looking for the full list? All 64 commands, with every argument, return value, and error, live on the
                 <a href="/commands" style="color: #6d82f3; font-weight: 500">Command reference →</a>
               </p>
             </div>
@@ -1200,7 +1171,9 @@
               ><br /><span style="color: #6d82f3">ws</span>=$(agtermctl workspace new work)<br />agtermctl session new --workspace
               <span style="color: #f2b45c">"$ws"</span> --cwd ~/src/agterm<br /><br /><span style="color: #6b727a"
                 ># run a command as the session's process (argv-style; wrap in sh -c for shell syntax)</span
-              ><br />agtermctl session new --command <span style="color: #f2b45c">"ssh user@host"</span><br />agtermctl session new
+              ><br />agtermctl session new --command <span style="color: #f2b45c">"ssh user@host"</span><br />agtermctl session new --command
+              <span style="color: #f2b45c">"zsh -lc 'make test'"</span> --wait
+              <span style="color: #6b727a">&nbsp;&nbsp;# hold open after the command exits (press any key to close); needs --command</span><br />agtermctl session new
               --name <span style="color: #f2b45c">myhost</span> --workspace-name
               <span style="color: #f2b45c">servers</span> --create-workspace<br /><br /><span style="color: #6b727a"
                 ># step / reorder / relocate</span
@@ -1220,7 +1193,10 @@
               ><br />agtermctl session close --target 9f3c --target abcd
               <span style="color: #6b727a">&nbsp;&nbsp;# one grace-period undo for the batch</span
               ><br />agtermctl workspace move --to top
-              <span style="color: #6b727a">&nbsp;&nbsp;&nbsp;# reorder a workspace</span><br />agtermctl workspace focus on
+              <span style="color: #6b727a">&nbsp;&nbsp;&nbsp;# reorder a workspace</span><br />agtermctl workspace new work --collapsed
+              <span style="color: #6b727a">&nbsp;&nbsp;&nbsp;# create a workspace closed in the sidebar (fill with session new --no-select)</span
+              ><br />agtermctl workspace collapse --target <span style="color: #f2b45c">9f3c</span>
+              <span style="color: #6b727a">&nbsp;# collapse one workspace; workspace expand re-opens it</span><br />agtermctl workspace focus on
               <span style="color: #6b727a">&nbsp;&nbsp;&nbsp;# collapse tree to active ws (on|off|toggle)</span>
               <br />agtermctl session reveal --target <span style="color: #f2b45c">9f3c</span>
               <span style="color: #6b727a">&nbsp;# reveal the focused pane's cwd in Finder</span>
@@ -1987,6 +1963,9 @@
               Six Codex lifecycle events run a dedicated adapter.
               A permission request is only a candidate because it fires before Auto Review; the adapter keeps automatic decisions
               active and changes the row to blocked only after a real approval or structured question appears in that pane.
+              On Stop, after trailing whitespace is ignored, a final assistant message ending in
+              <span style="font-family: &quot;JetBrains Mono&quot;, monospace; color: #cbc6bc">?</span> reports blocked;
+              every other final message reports completed and auto-resets.
             </p>
             <p style="font-size: 15px; line-height: 1.65; color: #949ba4; margin: 16px 0 0">
               When Pi
@@ -2028,7 +2007,21 @@
                 default) re-runs the command each pane had in the foreground at the last clean quit — a re-run, not a reattach.
                 Only a single-process command restores faithfully; a force-quit or crash captures nothing; and the multiplexers in
                 <span style="font-family: &quot;JetBrains Mono&quot;, monospace; color: #cbc6bc">restore-denylist.conf</span>
-                (seeded with tmux/screen/zellij) start fresh.
+                (seeded with tmux/screen/zellij) start fresh. A per-session override,
+                <span style="font-family: &quot;JetBrains Mono&quot;, monospace; color: #cbc6bc">agtermctl session restore</span>, pins what a
+                pane restores (or <span style="font-family: &quot;JetBrains Mono&quot;, monospace; color: #cbc6bc">--none</span> for a plain
+                shell, <span style="font-family: &quot;JetBrains Mono&quot;, monospace; color: #cbc6bc">--clear</span> to drop it) —
+                consumed on the next launch, sticky across restarts, winning over both the captured command and the session's own
+                <span style="font-family: &quot;JetBrains Mono&quot;, monospace; color: #cbc6bc">--command</span>, and reading back on
+                <span style="font-family: &quot;JetBrains Mono&quot;, monospace; color: #cbc6bc">tree</span>. It obeys the same setting
+                but bypasses the denylist, since it names its command deliberately. The pinned value is shell code stored in the
+                window's state file and readable via
+                <span style="font-family: &quot;JetBrains Mono&quot;, monospace; color: #cbc6bc">tree</span>, so it must not carry
+                secrets. A
+                <span style="font-family: &quot;JetBrains Mono&quot;, monospace; color: #cbc6bc">SessionStart</span> hook can rewrite it so a
+                non-idempotent command like
+                <span style="font-family: &quot;JetBrains Mono&quot;, monospace; color: #cbc6bc">claude --resume … --fork-session</span>
+                reattaches on restart instead of forking.
               </li>
               <li style="font-size: 15px; line-height: 1.65; color: #cbc6bc; padding-left: 22px; position: relative">
                 <span
