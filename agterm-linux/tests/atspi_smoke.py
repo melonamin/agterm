@@ -6,6 +6,7 @@ import os
 import re
 import shlex
 import shutil
+import socket as socket_module
 import subprocess
 import sys
 import tempfile
@@ -425,6 +426,23 @@ def control_json(env, *arguments):
     return json.loads(output)
 
 
+def raw_control_json(env, request):
+    """Send one wire request so protocol-only commands can be exercised without a CLI polling loop."""
+    client = socket_module.socket(socket_module.AF_UNIX, socket_module.SOCK_STREAM)
+    client.settimeout(10)
+    try:
+        client.connect(env["AGTERM_CONTROL_SOCKET"])
+        client.sendall(json.dumps(request).encode("utf-8") + b"\n")
+        response = b""
+        while b"\n" not in response:
+            chunk = client.recv(64 * 1024)
+            assert chunk, "control socket closed before returning a response"
+            response += chunk
+        return json.loads(response.split(b"\n", 1)[0])
+    finally:
+        client.close()
+
+
 def window_list(env):
     return control_json(env, "window", "list", "--json")["result"]["windows"]
 
@@ -529,6 +547,109 @@ def verify_normal_toolbar(env, state, home):
         raise
     finally:
         stop(process)
+
+
+def verify_upstream_control_parity(env):
+    """Round-trip the upstream v0.16 control additions through the real Linux socket and GTK host."""
+    process, app = launch(env)
+    try:
+        window_id = next(item["id"] for item in window_list(env) if item["open"])
+        initial_tree = window_tree(env, window_id)
+        initial_session = initial_tree["workspaces"][0]["sessions"][0]["id"]
+
+        bootstrap = raw_control_json(env, {"cmd": "events.read"})
+        assert bootstrap["ok"], f"events.read bootstrap failed: {bootstrap}"
+        anchor = bootstrap["result"]["events"]
+        assert anchor["items"] == [], "events.read bootstrap replayed prior history"
+
+        workspace_id = control_json(
+            env, "workspace", "new", "parity-work", "--collapsed",
+            "--window", window_id, "--json",
+        )["result"]["id"]
+        wait_for(
+            lambda: named(app, "parity-work", role="label"),
+            "collapsed workspace was not rendered",
+        )
+
+        def workspace_node():
+            return next(
+                workspace for workspace in window_tree(env, window_id)["workspaces"]
+                if workspace["id"] == workspace_id
+            )
+
+        assert workspace_node().get("collapsed"), "workspace.new --collapsed did not persist model state"
+        control_json(
+            env, "workspace", "expand", "--target", workspace_id,
+            "--window", window_id, "--json",
+        )
+        assert not workspace_node().get("collapsed"), "workspace.expand did not update tree read-back"
+        control_json(
+            env, "workspace", "collapse", "--target", workspace_id,
+            "--window", window_id, "--json",
+        )
+        assert workspace_node().get("collapsed"), "workspace.collapse did not update tree read-back"
+
+        restore_line = "printf restored-by-parity-hook"
+        control_json(
+            env, "session", "restore", restore_line, "--target", initial_session,
+            "--window", window_id, "--json",
+        )
+        restored = window_tree(env, window_id)["workspaces"][0]["sessions"][0]
+        assert restored.get("restoreCommand") == restore_line, "session.restore was not persisted"
+
+        held_id = control_json(
+            env, "session", "new", "--name", "held-command", "--command", "true", "--wait",
+            "--no-select", "--window", window_id, "--json",
+        )["result"]["id"]
+        time.sleep(1.0)
+        held = next((
+            session for workspace in window_tree(env, window_id)["workspaces"]
+            for session in workspace["sessions"] if session["id"] == held_id
+        ), None)
+        assert held and held.get("commandWait"), "session.new --wait did not keep the exited command session"
+
+        page = raw_control_json(env, {
+            "cmd": "events.read",
+            "args": {
+                "run": anchor["run"],
+                "after": str(anchor["next"]),
+                "kinds": ["session.created"],
+                "limit": 100,
+            },
+        })
+        assert page["ok"], f"events.read cursor failed: {page}"
+        assert any(
+            item.get("kind") == "session.created" and item.get("session") == held_id
+            for item in page["result"]["events"]["items"]
+        ), "events.read did not return the Linux-created session event"
+        stop(process)
+        process = None
+
+        process, app = launch(env)
+        persisted_tree = window_tree(env, window_id)
+        persisted_workspace = next(
+            workspace for workspace in persisted_tree["workspaces"] if workspace["id"] == workspace_id
+        )
+        persisted_initial = next(
+            session for workspace in persisted_tree["workspaces"]
+            for session in workspace["sessions"] if session["id"] == initial_session
+        )
+        persisted_held = next(
+            session for workspace in persisted_tree["workspaces"]
+            for session in workspace["sessions"] if session["id"] == held_id
+        )
+        assert persisted_workspace.get("collapsed"), "workspace collapse state did not survive relaunch"
+        assert persisted_initial.get("restoreCommand") == restore_line, (
+            "restore override did not survive relaunch"
+        )
+        assert persisted_held.get("commandWait"), "command wait state did not survive relaunch"
+        print("OK: events, restore overrides, held commands, and workspace collapse round-trip")
+    except AssertionError:
+        describe_tree(app)
+        raise
+    finally:
+        if process is not None:
+            stop(process)
 
 
 def verify_dashboard_modal(env):
@@ -1508,7 +1629,8 @@ def main():
     scenario = os.environ.get("AGTERM_ATSPI_SCENARIO")
     if scenario is None:
         for child_scenario in (
-            "normal", "dashboard-modal", "context-menu", "window-ownership", "preferences-pages",
+            "normal", "upstream-controls", "dashboard-modal", "context-menu",
+            "window-ownership", "preferences-pages",
             "notification-reveal", "notification-focus", "session-pickers",
             "custom-command-failures", "surface-lifetimes", "auto-follow", "hidden-toolbar",
         ):
@@ -1542,6 +1664,8 @@ def main():
         Atspi.init()
         if scenario == "normal":
             verify_normal_toolbar(env, state, home)
+        elif scenario == "upstream-controls":
+            verify_upstream_control_parity(env)
         elif scenario == "dashboard-modal":
             verify_dashboard_modal(env)
         elif scenario == "context-menu":
