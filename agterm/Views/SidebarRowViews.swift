@@ -183,7 +183,8 @@ final class StatusIconView: NSImageView {
         image = Self.icon(for: indicator.status, override: indicator.color)
         widthConstraint.constant = Self.glyphWidth
         setAccessibilityValue(indicator.status.rawValue)
-        if indicator.blink { startBlink() } else { stopBlink() }
+        let shouldBlink = indicator.blink && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        if shouldBlink { startBlink() } else { stopBlink() }
     }
 
     private func startBlink() {

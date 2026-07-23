@@ -643,6 +643,12 @@ extension Notification.Name {
     /// system→settings direction.
     static let agtermSystemAppearanceChanged = Notification.Name("agterm.systemAppearanceChanged")
 
+    /// Posted by `SystemAccessibilityObserver` when a macOS accessibility display option changes.
+    /// AppKit consumers then re-read Reduce Transparency / Reduce Motion directly from `NSWorkspace`;
+    /// SwiftUI views use their native accessibility environment values.
+    static let agtermAccessibilityDisplayOptionsChanged =
+        Notification.Name("agterm.accessibilityDisplayOptionsChanged")
+
     /// Posted when a window becomes frontmost (the active-window change is async, via the window's
     /// didBecomeKey), so the control server can refresh its cached `window.list` — whose `active` flag
     /// would otherwise stay stale until the next dispatched command.

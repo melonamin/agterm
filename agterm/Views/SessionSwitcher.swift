@@ -122,6 +122,7 @@ final class SessionSwitcher {
 struct SessionSwitcherOverlay: View {
     let switcher: SessionSwitcher
     let store: AppStore
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
         GeometryReader { geo in
@@ -142,10 +143,16 @@ struct SessionSwitcherOverlay: View {
             }
         }
         .padding(6)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .background(panelBackground, in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.white.opacity(0.1)))
         .shadow(radius: 24)
         .accessibilityIdentifier("session-switcher")
+    }
+
+    private var panelBackground: AnyShapeStyle {
+        reduceTransparency
+            ? AnyShapeStyle(Color(nsColor: .windowBackgroundColor))
+            : AnyShapeStyle(.regularMaterial)
     }
 
     @ViewBuilder private func row(_ id: UUID, selected: Bool) -> some View {

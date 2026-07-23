@@ -253,6 +253,7 @@ private struct DashboardCaptionPill: View {
     private static let washPeakOpacity: Double = 0.75
     private static let pulseDuration: Double = 0.45
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var pulsed = false
 
     private var isStatus: Bool { indicator.status != .idle }
@@ -271,6 +272,9 @@ private struct DashboardCaptionPill: View {
     /// so the highlighted name reads as the focused one.
     private var textOpacity: Double { isStatus || isHighlighted ? 1 : unselectedTextOpacity }
     private var shouldPulse: Bool { isStatus && indicator.blink }
+    /// Keep status color/text as the durable signal, but suppress the indefinite wash animation when
+    /// macOS Reduce Motion is enabled. SwiftUI refreshes this environment value live.
+    private var shouldAnimatePulse: Bool { shouldPulse && !reduceMotion }
 
     var body: some View {
         Text(text)
@@ -285,15 +289,20 @@ private struct DashboardCaptionPill: View {
                     .fill(fill)
                     // the blink: the opaque fill keeps covering the cell's frame ring while this wash capsule
                     // pulses its opacity on top, so nothing behind the chip ever shows through.
-                    .overlay { Capsule().fill(washColor).opacity(shouldPulse && pulsed ? Self.washPeakOpacity : 0) }
+                    .overlay {
+                        Capsule().fill(washColor)
+                            .opacity(shouldAnimatePulse && pulsed ? Self.washPeakOpacity : 0)
+                    }
             }
             // a pill-level implicit animation on `pulsed` — deeper in the tree than the grid's
             // `.transaction { animation = nil }`, so it re-enables the pulse for this pill WITHOUT re-animating
             // the grid's reparent (later-in-tree wins). Only the wash opacity keys off `pulsed`.
-            .animation(shouldPulse ? .easeInOut(duration: Self.pulseDuration).repeatForever(autoreverses: true) : nil,
+            .animation(shouldAnimatePulse
+                ? .easeInOut(duration: Self.pulseDuration).repeatForever(autoreverses: true)
+                : nil,
                        value: pulsed)
-            .onAppear { pulsed = shouldPulse }
-            .onChange(of: shouldPulse) { _, now in pulsed = now }
+            .onAppear { pulsed = shouldAnimatePulse }
+            .onChange(of: shouldAnimatePulse) { _, now in pulsed = now }
     }
 }
 

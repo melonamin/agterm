@@ -184,6 +184,16 @@ struct WindowAccessor: NSViewRepresentable {
                 }
             }
             titlebarObservers.append(appearanceToken)
+            // A live Reduce Transparency flip must immediately force/restore effective opacity and blur.
+            let accessibilityToken = NotificationCenter.default.addObserver(
+                forName: .agtermAccessibilityDisplayOptionsChanged, object: nil, queue: .main
+            ) { [weak self] _ in
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, let window = self.window else { return }
+                    self.applyTitlebarBlend(window)
+                }
+            }
+            titlebarObservers.append(accessibilityToken)
             // a window restored in a miniaturized state isn't on-screen, so a fresh
             // launch shows nothing and UI-test automation has nothing to hit. bring it
             // forward un-minimized; re-assert next tick because state restoration can
