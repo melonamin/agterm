@@ -52,6 +52,25 @@ final class DockMenuTests: XCTestCase {
         try await super.tearDown()
     }
 
+    func testHostProcessStartsWithIsolatedStateSocketAndShellFreeScene() throws {
+        let environment = ProcessInfo.processInfo.environment
+        let statePath = try XCTUnwrap(environment["AGTERM_STATE_DIR"])
+        let socketPath = try XCTUnwrap(environment["AGTERM_CONTROL_SOCKET"])
+
+        XCTAssertEqual(environment["AGTERM_HOSTED_TESTS"], "1")
+        XCTAssertTrue(agtermApp.isHostedUnitTest)
+        XCTAssertFalse(statePath.contains("$("), "Xcode must expand the state build setting before launch")
+        XCTAssertFalse(socketPath.contains("$("), "Xcode must expand the socket build setting before launch")
+        XCTAssertNotEqual(
+            URL(fileURLWithPath: statePath).standardizedFileURL,
+            PersistenceStore.defaultDirectory.standardizedFileURL
+        )
+        XCTAssertNotEqual(
+            socketPath,
+            ControlResolve.socketPath(stateDir: nil, appSupport: PersistenceStore.defaultDirectory.path)
+        )
+    }
+
     func testContentsEmptyStatesAndEnabledStates() throws {
         let windowID = try activeWindowID()
 
@@ -201,6 +220,83 @@ final class DockMenuTests: XCTestCase {
         XCTAssertNotEqual(library.store(for: windowB)?.activeSession?.id, targetA.id)
     }
 
+    func testTopLevelActionsStayWithCapturedWindowWhenAnotherBecomesFrontmost() throws {
+        let windowA = try activeWindowID()
+        let storeA = try activeStore()
+        let windowB = library.newWindow(name: "window B").id
+        let storeB = try XCTUnwrap(library.store(for: windowB))
+        let quickA = QuickTerminalController()
+        let quickB = QuickTerminalController()
+        let dashboardA = DashboardController()
+        let dashboardB = DashboardController()
+        register(windowA, quick: quickA, dashboard: dashboardA, zoom: TerminalZoomController())
+        register(windowB, quick: quickB, dashboard: dashboardB, zoom: TerminalZoomController())
+
+        library.frontmostWindowID = windowA
+        let capturedMenu = try dockMenu()
+        let sessionCountA = storeA.workspaces.flatMap(\.sessions).count
+        let sessionCountB = storeB.workspaces.flatMap(\.sessions).count
+
+        dashboardB.open(members: [
+            DashboardMember(session: try XCTUnwrap(storeB.activeSession?.id), surface: .primary),
+        ])
+        library.frontmostWindowID = windowB
+        try invokeWithNilSender(try item("New Session", in: capturedMenu))
+        XCTAssertEqual(storeA.workspaces.flatMap(\.sessions).count, sessionCountA + 1)
+        XCTAssertEqual(storeB.workspaces.flatMap(\.sessions).count, sessionCountB)
+        XCTAssertEqual(library.frontmostWindowID, windowA)
+
+        library.frontmostWindowID = windowB
+        try invokeWithNilSender(try item("Quick Terminal", in: capturedMenu))
+        XCTAssertTrue(quickA.isVisible)
+        XCTAssertFalse(quickB.isVisible)
+        XCTAssertEqual(library.frontmostWindowID, windowA)
+
+        library.frontmostWindowID = windowB
+        try invokeWithNilSender(try item("Dashboard", in: capturedMenu))
+        XCTAssertTrue(dashboardA.isOpen)
+        XCTAssertTrue(dashboardB.isOpen, "the frontmost window's existing dashboard is untouched")
+        XCTAssertEqual(library.frontmostWindowID, windowA)
+    }
+
+    func testSessionSelectionForcesPrimaryForExplicitAndOmittedLeftPane() throws {
+        let store = try activeStore()
+        let workspaceID = try XCTUnwrap(store.currentWorkspaceID)
+        let explicitLeft = try XCTUnwrap(store.addSession(
+            toWorkspace: workspaceID, cwd: "/tmp", name: "explicit-left", select: true
+        ))
+        let omittedPane = try XCTUnwrap(store.addSession(
+            toWorkspace: workspaceID, cwd: "/tmp", name: "omitted-pane", select: true
+        ))
+        _ = try XCTUnwrap(store.addSession(
+            toWorkspace: workspaceID, cwd: "/tmp", name: "current", select: true
+        ))
+
+        for session in [explicitLeft, omittedPane] {
+            session.surface = DockMenuTestSurface()
+            session.splitSurface = DockMenuTestSurface()
+            session.hasSplit = true
+            session.isSplit = true
+            session.splitFocused = true
+        }
+        store.setAgentIndicator(
+            AgentIndicator(status: .blocked, statusPane: .left),
+            forSession: explicitLeft.id
+        )
+        store.setAgentIndicator(
+            AgentIndicator(status: .blocked),
+            forSession: omittedPane.id
+        )
+
+        let recent = try submenu("Recent Sessions", in: dockMenu())
+        try invokeWithNilSender(try item("explicit-left — workspace 1", in: recent))
+        XCTAssertFalse(explicitLeft.splitFocused, "an explicit left status must target the primary pane")
+
+        omittedPane.splitFocused = true
+        try invokeWithNilSender(try item("omitted-pane — workspace 1", in: recent))
+        XCTAssertFalse(omittedPane.splitFocused, "an omitted status pane defaults to the primary pane")
+    }
+
     func testCapturedSessionActionRechecksDashboardState() throws {
         let context = try makeCapturedSessionAction()
         let dashboard = DashboardController()
@@ -286,4 +382,12 @@ final class DockMenuTests: XCTestCase {
         XCTAssertTrue(NSApp.sendAction(action, to: target, from: nil),
                       "AppKit should dispatch the retained Dock target with a nil sender")
     }
+}
+
+@MainActor
+private final class DockMenuTestSurface: TerminalSurface {
+    let paneToken = ""
+
+    func teardown() {}
+    func promoteToPrimaryPane() {}
 }

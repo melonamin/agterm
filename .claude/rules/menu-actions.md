@@ -30,14 +30,21 @@ paths:
   capped by `SessionSwitcher.maxCandidates`), and that window's `attentionSessions` ordering.
   `NSMenuItem.target` is non-owning and AppKit sends Dock actions with a nil sender, so
   `AppDelegate.dockMenuActionTargets` strongly retains one closure-backed target per dynamic item until
-  the next menu build. A session row captures its `AppStore` when the menu is built; on invocation it
-  resolves the owning window, rechecks that window's terminal-zoom/dashboard modal gate through
-  `AppActions.uiActionsEnabled(for:)`, raises it, synchronously publishes
+  the next menu build. Every top-level and session action captures the `AppStore` and window id present
+  when AppKit builds the menu; on invocation it rechecks that window's per-window modal/controller state,
+  raises it, synchronously publishes
   `WindowLibrary.frontmostWindowID` plus `.agtermWindowFrontmostChanged`, and only then selects and calls
-  `revealActiveBlockedPane()`. The synchronous publication is load-bearing because shared `AppActions`
-  resolve through the frontmost store, while AppKit can keep tracking a menu after another window becomes
-  frontmost. Hosted AppKit coverage lives in `agtermTests/DockMenuTests.swift`, including nil-sender
-  dispatch, stale modal actions, and captured-window selection.
+  the shared `AppActions` path. Session rows finish with `revealActiveBlockedPane()`. The synchronous
+  publication is load-bearing because shared `AppActions` resolve through the frontmost store, while
+  AppKit can keep tracking a menu after another window becomes frontmost. The per-window check is also
+  load-bearing: window B's dashboard/zoom must not disable A, while a modal opened in captured window A
+  after menu construction must make the stale action inert.
+  Hosted AppKit coverage lives in `agtermTests/DockMenuTests.swift`, including nil-sender dispatch,
+  stale modal actions, captured top-level/session actions, and pane-aware selection. Run it through the
+  dedicated `agtermTests` scheme: its Test action supplies isolated `AGTERM_STATE_DIR` and
+  `AGTERM_CONTROL_SOCKET` values before `agtermApp.init()` and sets `AGTERM_HOSTED_TESTS=1`, which renders
+  a shell-free scene and never starts the control server. Do not add this sentinel to the `agterm` scheme;
+  its Test action launches the real app for `agtermUITests`.
 - **Menu split: View vs Navigate.**
   The menu bar has TWO custom menus (besides File/Help).
   **View** (`CommandGroup(after: .toolbar)`) holds appearance + what-is-shown:

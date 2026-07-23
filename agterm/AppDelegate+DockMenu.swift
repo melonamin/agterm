@@ -45,35 +45,52 @@ extension AppDelegate {
         let menu = NSMenu()
         menu.autoenablesItems = false
         let store = library?.activeStore
-        let actionsEnabled = actions?.uiActionsEnabled == true
+        let windowID = store.flatMap { library?.windowID(for: $0) }
+        let actionsEnabled = actions?.uiActionsEnabled(for: windowID) == true
 
         addDockMenuItem(
             "New Session",
             enabled: actionsEnabled && store?.currentWorkspaceID != nil,
             to: menu
-        ) { [weak self] in
-            self?.activateActiveWindow()
-            self?.actions?.newSession()
-        }
-        addDockMenuItem(
-            "Quick Terminal",
-            enabled: actionsEnabled && actions?.frontmostQuickTerminal != nil,
-            to: menu
-        ) { [weak self] in
-            self?.activateActiveWindow()
-            self?.actions?.toggleQuickTerminal()
+        ) { [weak self, weak store] in
+            guard let self, let store, let windowID,
+                  actions?.uiActionsEnabled(for: windowID) == true,
+                  store.currentWorkspaceID != nil,
+                  activate(windowID: windowID, store: store)
+            else { return }
+            actions?.newSession()
         }
 
-        let dashboard = actions?.frontmostDashboard
+        let quickTerminal = windowID.flatMap { QuickTerminalRegistry.shared.controller(for: $0) }
+        addDockMenuItem(
+            "Quick Terminal",
+            enabled: actionsEnabled && quickTerminal != nil,
+            to: menu
+        ) { [weak self, weak store] in
+            guard let self, let store, let windowID,
+                  actions?.uiActionsEnabled(for: windowID) == true,
+                  QuickTerminalRegistry.shared.controller(for: windowID) != nil,
+                  activate(windowID: windowID, store: store)
+            else { return }
+            actions?.toggleQuickTerminal()
+        }
+
+        let dashboard = windowID.flatMap { DashboardControllerRegistry.shared.controller(for: $0) }
+        let terminalZoom = windowID.flatMap { TerminalZoomRegistry.shared.controller(for: $0) }
         let dashboardHasContent = !(store?.recentSessions(limit: 1).isEmpty ?? true)
         addDockMenuItem(
             "Dashboard",
-            enabled: dashboard != nil && actions?.terminalZoomActive == false
+            enabled: dashboard != nil && terminalZoom?.target == nil
                 && (dashboard?.isOpen == true || dashboardHasContent),
             to: menu
-        ) { [weak self] in
-            self?.activateActiveWindow()
-            self?.actions?.toggleDashboard()
+        ) { [weak self, weak store] in
+            guard let self, let store, let windowID,
+                  let dashboard = DashboardControllerRegistry.shared.controller(for: windowID),
+                  TerminalZoomRegistry.shared.controller(for: windowID)?.target == nil,
+                  dashboard.isOpen || !store.recentSessions(limit: 1).isEmpty,
+                  activate(windowID: windowID, store: store)
+            else { return }
+            actions?.toggleDashboard()
         }
 
         menu.addItem(.separator())
@@ -144,14 +161,23 @@ extension AppDelegate {
         menu.addItem(item)
     }
 
-    /// Dock commands do not activate or unhide the app automatically. Surface the last-active window before
-    /// running an action so New Session, Quick Terminal, and Dashboard are immediately visible.
-    private func activateActiveWindow() {
+    /// Dock commands do not activate or unhide the app automatically. Raise and synchronously publish the
+    /// window captured when AppKit built the menu, so every top-level and session action stays scoped to
+    /// that window even when a different window becomes frontmost while the menu is tracking.
+    @discardableResult
+    private func activate(windowID: UUID, store: AppStore) -> Bool {
+        guard let library, library.store(for: windowID) === store else { return false }
         NSApp.unhide(nil)
         NSApp.activate()
-        if let windowID = library?.activeWindowID {
-            WindowRegistry.shared.raise(windowID)
+        WindowRegistry.shared.raise(windowID)
+        // WindowAccessor reports ordinary key-window changes asynchronously. Publish this Dock-driven
+        // change now so shared AppActions resolve through the captured store during this same invocation.
+        if library.frontmostWindowID != windowID {
+            library.frontmostWindowID = windowID
+            library.saveIndex()
+            NotificationCenter.default.post(name: .agtermWindowFrontmostChanged, object: nil)
         }
+        return true
     }
 
     /// Selects a session captured when the Dock menu was built. The store is captured as well, so the action
@@ -161,20 +187,10 @@ extension AppDelegate {
         guard store.session(withID: sessionID) != nil,
               let library,
               let windowID = library.windowID(for: store),
-              actions?.uiActionsEnabled(for: windowID) == true
+              actions?.uiActionsEnabled(for: windowID) == true,
+              activate(windowID: windowID, store: store)
         else { return }
 
-        NSApp.unhide(nil)
-        NSApp.activate()
-        WindowRegistry.shared.raise(windowID)
-        // WindowAccessor reports ordinary key-window changes asynchronously. Publish this Dock-driven
-        // change now so the action hub targets this store synchronously without suppressing persistence
-        // or the control server's cached window-list refresh.
-        if library.frontmostWindowID != windowID {
-            library.frontmostWindowID = windowID
-            library.saveIndex()
-            NotificationCenter.default.post(name: .agtermWindowFrontmostChanged, object: nil)
-        }
         store.noteUserActivity()
         store.selectSession(sessionID)
         actions?.revealActiveBlockedPane()

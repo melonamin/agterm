@@ -19,8 +19,8 @@ settings:
     ARCHS: arm64
     ONLY_ACTIVE_ARCH: NO
     SWIFT_STRICT_CONCURRENCY: complete
-    # The agterm scheme intentionally builds serially so the app's deep-sign phase
-    # finishes before Xcode places its hosted test bundle inside the app.
+    # The agtermTests scheme intentionally builds serially so the app's deep-sign
+    # phase finishes before Xcode places its hosted test bundle inside the app.
     DISABLE_MANUAL_TARGET_ORDER_BUILD_WARNING: YES
     DEAD_CODE_STRIPPING: YES
     ENABLE_HARDENED_RUNTIME: YES
@@ -199,19 +199,35 @@ targets:
 schemes:
   agterm:
     build:
-      # `agtermTests.xctest` is hosted inside agterm.app; parallel construction can
-      # expose its half-built bundle to the app target's final deep-sign phase.
-      parallelizeBuild: false
       targets:
         agterm: all
-        agtermTests: [test]
         agtermUITests: [test]
     run:
       config: Debug
     test:
       config: Debug
       targets:
-        - agtermTests
         - agtermUITests
     archive:
       config: Release
+
+  agtermTests:
+    build:
+      # The app-hosted test bundle and host must be built serially; otherwise the
+      # app target's final deep-sign phase can observe a half-built xctest bundle.
+      parallelizeBuild: false
+      targets:
+        agterm: all
+        agtermTests: [test]
+    test:
+      config: Debug
+      macroExpansion: agtermTests
+      environmentVariables:
+        # Application-hosted XCTest starts `agtermApp.init()` before test `setUp`.
+        # Isolate every eager app dependency at process launch, and keep the
+        # control socket short enough for sockaddr_un without touching the live app.
+        AGTERM_STATE_DIR: "$(TARGET_TEMP_DIR)/agtermTests-state"
+        AGTERM_CONTROL_SOCKET: "/tmp/agterm-hosted-tests-$(UID).sock"
+        AGTERM_HOSTED_TESTS: "1"
+      targets:
+        - agtermTests
