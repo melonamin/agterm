@@ -1,7 +1,7 @@
 ---
 name: agterm
 description: >
-  Drive agterm, a native macOS terminal app, programmatically via its agtermctl CLI and a local
+  Drive agterm, a native desktop terminal app (macOS upstream or the GTK Linux port), programmatically via its agtermctl CLI and a local
   control socket. Use when running inside an agterm session and asked to control the terminal:
   create, rename, close, select, or reorder sessions and workspaces; split panes; toggle the
   per-session scratch terminal; open or close overlay terminals and read their exit status; display
@@ -29,7 +29,7 @@ allowed-tools: Bash(agtermctl *)
 
 # Driving agterm
 
-agterm is a native macOS terminal. It exposes a programmatic control channel over a local unix
+agterm is a native desktop terminal with macOS and GTK Linux frontends. It exposes a programmatic control channel over a local unix
 socket, driven by the companion CLI `agtermctl`. Use it to build and steer terminal layouts, run
 programs in overlays, type into sessions, notify the user in the exact session you are working in,
 and subscribe to control events. Events cover status, notifications, session lifecycle, and
@@ -63,8 +63,9 @@ already-poisoned tmux server.
 
 ## Running agtermctl
 
-`agtermctl` must be on PATH (install it from agterm's **Help ▸ Install Command Line Tool…**). If it
-is not on PATH, the user can install it, or you invoke it by absolute path.
+`agtermctl` must be on PATH. On macOS, install it from agterm's **Help ▸ Install Command Line Tool…**;
+on Linux, use **Preferences ▸ Integrations**. If it is not on PATH, the user can install it, or you
+invoke it by absolute path.
 
 - The socket path auto-resolves; usually no `--socket` is needed. To be explicit, pass
   `--socket "$AGTERM_SOCKET"`.
@@ -80,7 +81,7 @@ is not on PATH, the user can install it, or you invoke it by absolute path.
 
 ## The model
 
-A **window** is the top level: a named bundle rendered in its own on-screen macOS window. Each window
+A **window** is the top level: a named bundle rendered in its own on-screen native window. Each window
 holds a tree of **workspaces**, each holding **sessions**. A session has a primary shell and can also
 have: a **split** pane (a second shell side by side), a **scratch** terminal (a third full-coverage
 shell, toggled like the split), and an ephemeral **overlay** (runs one program on top, then vanishes).
@@ -103,6 +104,10 @@ terminal is shown — the read side of the write-only `quick` command). List win
 read side, so record it then restore the exact frame), and `fullscreen`/`zoomed` (the read side of
 `window fullscreen`/`window zoom`, so a script can make those toggles idempotent) — all omitted for a
 closed window, but not the live `idleMs`, which is `tree`-only.
+
+On the GTK Linux frontend, window size is restored and clamped to a connected display, but `geometry`
+is omitted because GTK4 cannot reliably read and restore x/y placement. Wayland compositors own window
+positioning, and the frontend does not fabricate coordinates on X11.
 
 ## Addressing
 
@@ -317,9 +322,12 @@ honor `--window` (default frontmost). `--mru` is mutually exclusive with explici
 composes with the font flags. Read the state back from the tree's top-level `dashboardMembers`
 (pane refs `<id>:left`/`<id>:right`, in grid order) / `dashboardHighlighted` (a pane ref) /
 `dashboardFontSize`/`dashboardFontMode`. Zoom and the dashboard are mutually exclusive: opening one CLOSES
-the other. Opening/closing resizes each pane's pty to its cell, so programs may redraw — view-only
-means no input, not no process effect. The most-recently-used grid also has a GUI opener: **⌘⇧D** (the
-`dashboard` built-in action), **Navigate ▸ Dashboard**, and the command palette's **Dashboard** entry
+the other. macOS reparents each pane and resizes its pty to its cell. Linux mirrors live panes without
+reparenting, preserving their geometry unless a fixed/automatic Dashboard font temporarily changes the
+terminal grid. View-only means no input reaches a cell.
+The most-recently-used grid also has a GUI opener: **⌘⇧D** on macOS or **Ctrl⇧M** on Linux (the
+`dashboard` built-in action), **Navigate ▸ Dashboard** on macOS, and the command palette's **Dashboard**
+entry
 TOGGLE the frontmost window's MRU dashboard auto-sized (identical to `dashboard --mru --auto-size`); no new
 control command, the socket `dashboard` command is unchanged.
 
@@ -335,7 +343,7 @@ back from the tree's top-level `sidebarMode`) · `expand [--window W]` (expand e
 Visibility/mode act on the frontmost window; `expand`/`collapse` default to the frontmost but take a
 `--window` selector to target any open window.
 
-**notify** — `notify <body> [--title T]` — post a desktop notification attributed to a session. To signal that you need the user, prefer `session status` (`blocked`/`completed`), a persistent typed attention state rather than a one-shot banner; keep `notify` for a one-off nudge.
+**notify** — `notify <body> [--title T]` — post a desktop notification attributed to a session. Explicit control notifications deliver even when that session is focused; clicking one can reopen its encoded window. To signal that you need the user, prefer `session status` (`blocked`/`completed`), a persistent typed attention state rather than a one-shot banner; keep `notify` for a one-off nudge.
 
 **font** — `font inc|dec|reset [--pane left|right|scratch]` — change a session pane's font size (omitted/`left` = main pane, `right` = the split pane, `scratch` = the scratch terminal). Read the resulting size back from `tree` (`fontSize`/`splitFontSize`/`scratchFontSize` per pane).
 
@@ -345,6 +353,7 @@ Visibility/mode act on the frontmost window; `expand`/`collapse` default to the 
 
 **theme** — `theme list` (bundled themes, current marked `*`) · `theme set [name]` — set + persist the
 terminal theme app-wide, per slot: a NAME sets the light/single theme (a dark theme, if set, is kept);
+`theme set --light <name>` explicitly sets that same light slot;
 `theme set --dark <name>` sets the dark theme, which makes the terminal track the macOS Light/Dark
 appearance automatically; `theme set --dark none` stops tracking. The app default is the bundled
 **agterm** theme; omit the name for ghostty's built-in default ("default ghostty"); an unknown name errors.
@@ -383,6 +392,21 @@ selection/clipboard text), and only post after an explicit go-ahead. If `gh` is 
 authenticated, hand the user the prefilled text plus the new-issue / new-discussion URL instead.
 
 Full detail, templates, and the exact `gh` commands are in **troubleshooting.md**.
+
+## Linux integration management
+
+Linux builds expose local installation inspection separately from the 60 runtime control commands.
+These commands never connect to the socket and work while agterm is stopped:
+
+```bash
+agtermctl integration status [--json]
+agtermctl integration install hooks [--dry-run] [--json]
+agtermctl integration install skill [--dry-run] [--json]
+```
+
+Use `--dry-run` before a mutation and show the user the plan when acting on their environment.
+The engine refuses unrelated executables, hooks, settings, and skills rather than overwriting them.
+See **reference.md** for the JSON shapes, states, package behavior, and exit statuses.
 
 ## Reference files
 

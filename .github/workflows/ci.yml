@@ -2,13 +2,21 @@ name: build
 
 on:
   push:
-    branches: [master]
+    branches: [linux-port]
   pull_request:
-    branches: [master]
+    branches: [linux-port]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
+env:
+  UPSTREAM_BASE_TAG: "v0.16.1"
+  UPSTREAM_BASE_COMMIT: "d597d059edb99c69675e74b9f2ba159bdc194cc6"
+  SWIFTLINT_VERSION: "0.65.0"
+  SWIFTLINT_SHA256: "79306a34e5c7cc55a220cd108cbb861dcad5f10138dcdf261e2624ae8b0a486b"
+  LINUX_SOURCEKIT_LIB_PATH: "/usr/lib/libsourcekitdInProc.so"
+  ZIG_SHA256: "02aa270f183da276e5b5920b1dac44a63f1a49e55050ebde3aecc9eb82f93239"
 
 jobs:
   changes:
@@ -25,95 +33,155 @@ jobs:
             swift:
               - "**/*.swift"
               - "agtermCore/**"
-              - "agterm/**"
-              - "project.yml"
+              - "agterm-linux/**"
+              - "agterm/Resources/agent-status/**"
+              - "agterm/Resources/agent-skill/**"
+              - "linux/**"
+              - "packaging/linux/**"
               - "scripts/**"
               - ".swiftlint.yml"
-              - "agtermUITests/.swiftlint.yml"
               - ".github/workflows/ci.yml"
+              - ".github/workflows/release-linux.yml"
 
-  test:
-    name: Unit tests
+  test-linux:
+    name: Unit tests (Linux)
     needs: changes
     if: needs.changes.outputs.swift == 'true'
-    runs-on: macos-26
+    runs-on: ubuntu-24.04
+    # Keep the shared, host-free controller package green on Linux because it backs the GTK frontend.
+    container: swift:6.3.2-noble
     steps:
       - uses: actions/checkout@v7
-      - name: swift test (with coverage)
-        working-directory: agtermCore
-        run: swift test --enable-code-coverage
-      - name: export lcov
-        working-directory: agtermCore
-        # rewrite the absolute SF: paths llvm-cov emits to repo-relative so the
-        # separate linux coverage job can resolve them against its own checkout
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Trust checkout directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Install test shell
         run: |
-          BIN=$(swift build --show-bin-path)
-          xcrun llvm-cov export \
-            "$BIN/agtermCorePackageTests.xctest/Contents/MacOS/agtermCorePackageTests" \
-            -instr-profile "$BIN/codecov/default.profdata" \
-            -format=lcov \
-            -ignore-filename-regex='(\.build|Tests|checkouts)/' \
-            | sed "s|SF:$GITHUB_WORKSPACE/|SF:|g" > coverage.lcov
-      - name: upload lcov artifact
-        # coverage is best-effort: a transient artifact-service outage must not
-        # red the build when the tests themselves passed
-        continue-on-error: true
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-lcov
-          path: agtermCore/coverage.lcov
+          apt-get update
+          apt-get install -y --no-install-recommends ripgrep zsh
+      - name: Materialize and verify upstream boundary tag
+        run: |
+          git tag --force "$UPSTREAM_BASE_TAG" "$UPSTREAM_BASE_COMMIT"
+          git merge-base --is-ancestor "$UPSTREAM_BASE_TAG" HEAD
+      - name: swift test
+        working-directory: agtermCore
+        run: swift test
+      - name: Enforce host-free core boundary
+        run: scripts/check-linux-core-boundary.sh "$UPSTREAM_BASE_TAG"
+      - name: Reject Linux CLI parser drift
+        run: scripts/check-linux-cli-drift.sh
 
-  coverage:
-    name: Coverage upload
-    needs: [changes, test]
-    if: needs.changes.outputs.swift == 'true'
-    # the coveralls action installs its reporter via a brew tap on macOS (now blocked
-    # by homebrew's tap-trust gate); on linux it downloads a binary, so upload here
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v4
-        # the upload side is best-effort; if the artifact never landed, don't fail
-        # this job either — the coveralls submit below is already continue-on-error
-        continue-on-error: true
-        with:
-          name: coverage-lcov
-      - name: submit coverage to coveralls
-        continue-on-error: true
-        uses: coverallsapp/github-action@v2
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          file: coverage.lcov
-          format: lcov
-
-  lint:
-    name: swiftlint
+  lint-linux:
+    name: SwiftLint (Linux)
     needs: changes
     if: needs.changes.outputs.swift == 'true'
-    runs-on: macos-26
+    runs-on: ubuntu-24.04
+    container: swift:6.3.2-noble
     steps:
       - uses: actions/checkout@v7
-      - name: Install swiftlint
-        run: brew install swiftlint
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Trust checkout directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Install SwiftLint
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends curl ca-certificates unzip
+          curl -fsSLo /tmp/swiftlint.zip \
+            "https://github.com/realm/SwiftLint/releases/download/${SWIFTLINT_VERSION}/swiftlint_linux_amd64.zip"
+          echo "${SWIFTLINT_SHA256}  /tmp/swiftlint.zip" | sha256sum --check
+          unzip -q /tmp/swiftlint.zip -d /usr/local/bin
+          chmod +x /usr/local/bin/swiftlint
+          swiftlint --version
       - name: swiftlint (strict)
-        run: swiftlint lint --strict
+        run: swiftlint lint --strict --quiet
+      - name: Materialize and verify upstream boundary tag
+        run: |
+          git tag --force "$UPSTREAM_BASE_TAG" "$UPSTREAM_BASE_COMMIT"
+          git merge-base --is-ancestor "$UPSTREAM_BASE_TAG" HEAD
+      - name: Reject whitespace errors
+        run: |
+          git diff --check
+          git diff --check "$UPSTREAM_BASE_TAG"...HEAD
 
-  build:
-    name: Build app
-    needs: changes
+      - name: Test published-release verifier
+        run: scripts/test-published-linux-release.sh
+
+  build-linux:
+    name: Build app (Linux GTK)
+    needs: [changes, test-linux, lint-linux]
     if: needs.changes.outputs.swift == 'true'
-    runs-on: macos-26
+    runs-on: ubuntu-24.04
+    # Compile-check the GTK port. The official Swift image carries the toolchain; apt adds GTK4,
+    # libadwaita, GL deps, and zig builds libghostty.
+    container: swift:6.3.2-noble
     steps:
       - uses: actions/checkout@v7
-      - name: Cache libghostty (GhosttyKit + resources)
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Trust checkout directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Install GTK4, accessibility, software GL, test shells, and zig
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            libgtk-4-dev libadwaita-1-dev libepoxy-dev pkg-config git curl ca-certificates xz-utils ncurses-bin \
+            ripgrep zsh at-spi2-core dbus-x11 gir1.2-atspi-2.0 openbox python3-gi xdotool xvfb xauth \
+            libatk-bridge2.0-0 libgl1-mesa-dri libegl-mesa0 mesa-utils
+          curl -fsSLo /tmp/zig.tar.xz \
+            https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz
+          echo "${ZIG_SHA256}  /tmp/zig.tar.xz" | sha256sum --check
+          tar -xJf /tmp/zig.tar.xz -C /opt
+          echo "/opt/zig-x86_64-linux-0.15.2" >> "$GITHUB_PATH"
+      - name: Materialize and verify upstream boundary tag
+        run: |
+          git tag --force "$UPSTREAM_BASE_TAG" "$UPSTREAM_BASE_COMMIT"
+          git merge-base --is-ancestor "$UPSTREAM_BASE_TAG" HEAD
+      - name: Enforce host-free core boundary and CLI sharing
+        run: |
+          scripts/check-linux-core-boundary.sh "$UPSTREAM_BASE_TAG"
+          scripts/check-linux-cli-drift.sh
+      - name: Cache vendored libghostty (keyed on the pinned rev + the patch)
+        id: ghostty-cache
         uses: actions/cache@v6
         with:
-          path: |
-            GhosttyKit.xcframework
-            agterm/Resources/ghostty
-            agterm/Resources/terminfo
-          key: ghosttykit-${{ hashFiles('scripts/setup.sh') }}
-      - name: Install xcodegen
-        run: brew install xcodegen
-      - name: Build libghostty + app (Release)
-        run: scripts/build.sh
+          path: agterm-linux/vendor/ghostty
+          key: libghostty-${{ hashFiles('scripts/setup-linux.sh', 'scripts/verify-linux-resources.sh', 'linux/ghostty-resources.env', 'linux/patches/ghostty-embedded-opengl.patch', 'linux/patches/ghostty-embedded-input-handoff.patch', 'linux/patches/ghostty-lib-resources.patch') }}
+      - name: Verify restored libghostty cache
+        if: steps.ghostty-cache.outputs.cache-hit == 'true'
+        run: |
+          test -s agterm-linux/vendor/ghostty/lib/libghostty.so
+          test -s agterm-linux/vendor/ghostty/include/ghostty.h
+          scripts/verify-linux-resources.sh agterm-linux/vendor/ghostty/share
+      - name: Test deterministic Ghostty resources
+        run: scripts/test-linux-resources.sh
+      - name: Build libghostty (skips if the cache restored it)
+        run: scripts/setup-linux.sh
+      - name: Verify built libghostty resources
+        run: scripts/verify-linux-resources.sh agterm-linux/vendor/ghostty/share
+      - name: swift test (agterm-linux)
+        working-directory: agterm-linux
+        run: swift test
+      - name: swift build (agterm-linux)
+        working-directory: agterm-linux
+        run: swift build
+      - name: swift build Release/WMO (agterm-linux)
+        working-directory: agterm-linux
+        run: swift build -c release
+      - name: Validate staged Linux payload
+        run: scripts/stage-linux.sh "$RUNNER_TEMP/agterm-stage"
+      - name: GTK AT-SPI smoke tests
+        env:
+          AGTERM_UI_ARTIFACT_DIR: ${{ github.workspace }}/artifacts/linux-ui
+        run: scripts/test-linux-ui.sh
+      - name: Upload GTK diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: linux-ui-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/linux-ui
+          if-no-files-found: warn

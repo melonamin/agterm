@@ -15,9 +15,19 @@ paths:
   - "agtermUITests/Control*.swift"
   - "agtermUITests/SessionTextUITests.swift"
   - "agterm/Resources/agent-skill/**"
+  - "agterm-linux/Sources/AgtermLinux/Control*.swift"
+  - "agterm-linux/Sources/AgtermLinux/LinuxControlDispatcher.swift"
+  - "agterm-linux/Sources/agtermctl/*.swift"
 ---
 
 ## Control API
+
+- **Linux adapter:** the GTK frontend implements the same wire protocol through
+  `LinuxControlDispatcher` and the Linux-local `agtermctl` package. Window size is restored and clamped,
+  but GTK4 cannot reliably expose restorable x/y placement; Linux therefore omits `geometry` rather
+  than fabricating it, on Wayland and X11. Fullscreen and maximized flags remain live.
+  Fullscreen requests are serialized through `notify::fullscreened`; rapid GUI, keymap, or socket toggles
+  update one pending desired state instead of issuing overlapping compositor transitions.
 
 - A programmatic control channel lets an external script drive `agterm` over a local unix-domain socket,
   via the companion `agtermctl` CLI.

@@ -7,8 +7,9 @@ Full detail for every `agtermctl` command. See `SKILL.md` for the model and addr
 
 - **Socket resolution** (when `--socket` is omitted): `AGTERM_SOCKET` is the path the running app
   bound; agtermctl resolves the same rendezvous: `<AGTERM_STATE_DIR>/agterm.sock`, else
-  `<$HOME>/Library/Application Support/agterm/agterm.sock`. Passing `--socket "$AGTERM_SOCKET"` is the
-  safe explicit form.
+  `<$HOME>/Library/Application Support/agterm/agterm.sock` on macOS or
+  `${XDG_DATA_HOME:-$HOME/.local/share}/agterm/agterm.sock` on Linux. Passing
+  `--socket "$AGTERM_SOCKET"` is the safe explicit form.
 - **`--json`**: prints the raw response object. Without it, ordinary mutations print `ok`, batch
   close/move prints the affected session count, and `tree`/`window list` print a human listing. Use
   `--json` when you need to read ids or values back.
@@ -466,6 +467,33 @@ Two simpler routes fail and are why the overlay is needed: emitting graphics esc
 tool stdout (the harness escapes the control bytes) and running an image viewer in the agent's tool
 shell (no controlling terminal — `/dev/tty` errors). See examples.md for usage.
 
+## Linux integration management
+
+These Linux-only commands inspect or install local files and never connect to the agterm control
+socket. They work when the app is stopped, ignore `--socket`, and are not counted among the 60 runtime
+control commands above.
+
+- `integration status [--json]` — inspect the command-line tool, Claude Code hooks, Codex hooks, and
+  agent skill in that stable order. JSON is `{"items":[...]}`; each item has `kind`, `state`, `path`,
+  optional `version`, and `detail`. `state` is `not-installed`, `installed`, `update-available`,
+  `partial`, `conflict`, or `unavailable`.
+- `integration install hooks [--dry-run] [--json]` — preview or safely apply the shared Claude/Codex
+  hook plan. It preserves settings, symlinks, file modes, and backups; malformed files or unrelated
+  custom hooks are conflicts.
+- `integration install skill [--dry-run] [--json]` — preview or safely install/update the bundled
+  skill in detected Claude Code and Codex destinations. It replaces only agterm-managed content.
+
+Install JSON contains `kind`, `steps`, `warnings`, `conflicts`, and `canApply`; applied output also
+contains structured per-operation results and protected targets skipped while independent safe targets were applied.
+`--dry-run` never writes. Exit `2` means a protected
+conflict, `4` means a write failed after preview, `1` means unavailable bundled resources, and `64`
+means a malformed command line.
+
+DEB/RPM installations report `/usr/bin/agtermctl` as package-managed and leave updates to the package
+manager. Tar and development builds can create an agterm-owned `~/.local/bin/agtermctl` launcher from
+Preferences ▸ Integrations. AppImage and Flatpak builds do not create a launcher into a temporary or
+sandbox-local executable path.
+
 ## window
 
 - `window new [name]` — create and open a window; returns its id.
@@ -475,13 +503,15 @@ shell (no controlling terminal — `/dev/tty` errors). See examples.md for usage
   for a closed window with no live store), and `geometry` (the open window's live frame `{x, y, width,
   height, display}` in the SAME units `window move`/`window resize` take — `x`/`y` top-left relative to
   `display`, y down — omitted for a closed window; the read side of `window move`/`window resize`, so
-  record it, move/resize, then restore the exact frame), plus `fullscreen` and `zoomed` (whether the
+  record it, move/resize, then restore the exact frame on macOS), plus `fullscreen` and `zoomed` (whether the
   window is in native full screen / zoomed-to-screen — the read side of `window fullscreen` / `window
   zoom`, so a script can make those toggles idempotent; both omitted for a closed window). The
   `geometry`/`fullscreen`/`zoomed` fields stay current — the cache is refreshed when a window
   moves/resizes/zooms/enters or exits full screen, so a hand-drag or GUI toggle is reflected without needing
   another command. (`autoFollowMs` still reflects the last cache refresh, since a settings change is rare;
   and unlike `tree`, `window.list` does NOT carry `idleMs` — the live idle metric would freeze in the cache.)
+  The GTK Linux frontend omits `geometry`: it restores and clamps size, but GTK4 does not provide
+  reliable restorable x/y placement on Wayland or X11.
 - `window select <id>` — raise it if open, else open it.
 - `window close <id>` — close the on-screen window (the bundle is kept; reopen with select).
 - `window rename <id> <name>`.
@@ -497,7 +527,7 @@ shell (no controlling terminal — `/dev/tty` errors). See examples.md for usage
   The window must be open. This is the control half of the double-click-on-header gesture (a plain green-button
   click does native full screen, not zoom — Option-click the green button to zoom); `resize`/`move` are
   control-native, but `zoom` mirrors a GUI action.
-- `window fullscreen <id>` — toggle NATIVE macOS full screen (a separate Space, auto-hidden menu bar),
+- `window fullscreen <id>` — toggle native full screen (a separate Space on macOS; desktop full screen on Linux),
   via `NSWindow.toggleFullScreen`. A second call exits. The window must be open. This is the control half
   of the View ▸ Toggle Full Screen menu item (⌃⌘F, rebindable as `toggle_fullscreen`) and the green
   traffic-light button — distinct from `zoom`, which only maximizes the frame in the same Space.
@@ -543,8 +573,9 @@ count is reported in the response text (`dropped N pane(s) beyond the 9-cell lim
 explicit ids and `--close`, composes with the font flags and `--window`, and errors with `no recent
 sessions` when the window has none.
 
-The most-recently-used grid also has a GUI opener — **⌘⇧D** (the `dashboard` built-in action, rebindable
-in `keymap.conf`), **Navigate ▸ Dashboard**, and the command palette's **Dashboard** entry all TOGGLE the
+The most-recently-used grid also has a GUI opener — **⌘⇧D** on macOS or **Ctrl⇧M** on Linux (the
+`dashboard` built-in action, rebindable in `keymap.conf`), **Navigate ▸ Dashboard** on macOS, and the
+command palette's **Dashboard** entry all TOGGLE the
 frontmost window's dashboard: open it over the window's most-recently-used sessions auto-sized (identical to
 `dashboard --mru --auto-size`) when closed, close it when open. It is a no-op while terminal zoom is active.
 There is no new control command for it — the socket `dashboard` command is unchanged.
@@ -564,10 +595,10 @@ font untouched. The applied size and mode read back on the tree's top-level `das
 `dashboardHighlighted` (each a `<session-id>:left`/`<session-id>:right` pane ref).
 
 The dashboard and terminal zoom are **mutually exclusive**: opening a dashboard closes any active zoom,
-and a zoom becoming active while the dashboard is open closes the dashboard. Opening (and closing) the
-dashboard resizes each pane's pty to (and back from) its cell, so a running program receives a resize
-event and may redraw — "view-only" means no input reaches the cell, not that the pane's process is
-untouched.
+and a zoom becoming active while the dashboard is open closes the dashboard. On macOS, opening (and
+closing) reparents each pane and resizes its pty to (and back from) its cell. Linux instead mirrors each
+live pane at its existing geometry without reparenting its GL surface; fixed and automatic font modes can
+still resize the pane's grid temporarily. In either case, "view-only" means no input reaches a cell.
 
 Invalid invocations error (rejected at the CLI and re-checked server-side): `--font-size` with
 `--auto-size`, a non-positive `--font-size`, `--close` combined with ids, `--mru`, or a font option,
@@ -626,10 +657,12 @@ Workspaces and the ⌃⇧P palette "Collapse Workspaces".
 
 ## notify
 
-`agtermctl notify <body> [--title T] [--target] [--window W]` — post a macOS desktop notification
+`agtermctl notify <body> [--title T] [--target] [--window W]` — post a desktop notification
 attributed to a session (default: the active session of the frontmost window). `--title` defaults to
-the session name. Clicking the banner reveals that session. This is the only app-level way to post a
-banner (the terminal's own OSC 9/777 is the other source). Control-native (no GUI/menu equivalent).
+the session name. Clicking the banner reveals that session and reopens its encoded window if needed.
+An explicit control notification bypasses focused-pane suppression; the terminal's own OSC 9/777 is
+suppressed when its exact surface is already focused in the active window. Control-native (no
+GUI/menu equivalent).
 
 For agentic attention (waiting on input, or a finished result), prefer `session status` over `notify`
 and OSC 9/777. The two overlap, either can raise an "I need you" signal, but a notification is a
@@ -670,7 +703,7 @@ base key is a single character or `tab`/`space`/`return`/`delete`. A key typed w
 `shift+<base>` (`shift+/` = `?`, `shift+=` = `+`, `shift+5` = `%`) — the base key, not the shifted glyph.
 Arrows aren't expressible, and `+`/`>` can't be a bare key token (they are the separators), though those
 keys are bindable via `shift+=`/`shift+.`. Some chords are reserved (the Ctrl-Tab switcher, Ctrl-1/2 pane
-focus) and cannot be bound.
+focus, and Linux Ctrl+, Preferences shortcut) and cannot be rebound.
 
 Custom-command tokens (expanded into the `/bin/sh -c` line, raw — prefer the quoted `$AGT_*` env form
 for untrusted content). A remote host can set the session title (OSC) and working directory (OSC 7),
@@ -684,6 +717,10 @@ so `{AGT_SESSION_NAME}` and `{AGT_SESSION_PWD}` are as untrusted as `{AGT_SELECT
   `scratch` (the session's scratch terminal). Feed it back as `session type --pane "$AGT_PANE"` to type
   into the very pane the shortcut was pressed in.
 - Plus the other `$AGT_*` context vars the runner exports.
+
+Linux runs custom commands detached with stdin, stdout, and stderr connected to `/dev/null`.
+A spawn error or non-zero exit appears as a transient toast only in the originating window while that
+controller incarnation remains open.
 
 Built-in action names for `map` include: `new_window`, `new_workspace`, `new_session`,
 `open_directory`, `rename_session`, `duplicate_session`, `close_session`, `reopen_recent`, `undo_close`, `clear_status`, `increase_font_size`,
