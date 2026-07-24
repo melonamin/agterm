@@ -26,7 +26,9 @@ enum WindowAppearance {
     /// At full opacity the window is opaque with a solid background (the original behavior). Below
     /// full opacity the window goes non-opaque and its background carries the alpha: the renderer is
     /// pinned transparent (see `AppSettings.ghosttyConfigLines`) and the chrome paints nothing, so
-    /// the whole interior reads as one continuous translucent surface, optionally blurred.
+    /// the whole interior reads as one continuous translucent surface, optionally blurred. When macOS
+    /// Reduce Transparency is enabled, the saved chrome inputs stay unchanged but the effective
+    /// presentation is temporarily opaque and unblurred; disabling it restores those inputs.
     static func sync(window: NSWindow, background: NSColor, chrome: Chrome) {
         window.titlebarAppearsTransparent = true
         window.titlebarSeparatorStyle = .none
@@ -43,9 +45,14 @@ enum WindowAppearance {
             window.standardWindowButton(button)?.isHidden = hideButtons
         }
 
-        // native fullscreen draws its own opaque background and the chrome shows through any
-        // transparency, so force opaque while fullscreened.
-        let transparent = chrome.opacity < 1 && !window.styleMask.contains(.fullScreen)
+        // Native fullscreen draws its own opaque background and the chrome shows through any
+        // transparency, so force opaque while fullscreened. Reduce Transparency is an effective
+        // runtime override: preserve the requested opacity/blur, but present an opaque, unblurred
+        // window until the system setting is turned off.
+        let reduceTransparency = NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
+        let transparent = chrome.opacity < 1
+            && !window.styleMask.contains(.fullScreen)
+            && !reduceTransparency
         if transparent {
             window.isOpaque = false
             window.backgroundColor = background.withAlphaComponent(chrome.opacity)

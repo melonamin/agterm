@@ -169,8 +169,9 @@ final class StatusIconView: NSImageView {
     required init?(coder _: NSCoder) { fatalError("init(coder:) is not supported") }
 
     /// apply renders the indicator's tinted glyph (hiding the view and stopping any blink on `.idle`),
-    /// updates the accessibility value to the state name, and starts/stops the blink animation.
+    /// updates the tooltip and accessibility value to the state name, and starts/stops the blink animation.
     func apply(_ indicator: AgentIndicator) {
+        toolTip = indicator.status.tooltipText
         guard indicator.status != .idle else {
             isHidden = true
             image = nil
@@ -183,7 +184,8 @@ final class StatusIconView: NSImageView {
         image = Self.icon(for: indicator.status, override: indicator.color)
         widthConstraint.constant = Self.glyphWidth
         setAccessibilityValue(indicator.status.rawValue)
-        if indicator.blink { startBlink() } else { stopBlink() }
+        let shouldBlink = indicator.blink && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        if shouldBlink { startBlink() } else { stopBlink() }
     }
 
     private func startBlink() {

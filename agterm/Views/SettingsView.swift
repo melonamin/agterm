@@ -210,6 +210,7 @@ private struct AppearanceSettingsView: View {
     let model: SettingsModel
     private let themes = SettingsCatalog.themeNames()
     private let fonts = SettingsCatalog.monospacedFontFamilies()
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
         Form {
@@ -276,7 +277,11 @@ private struct AppearanceSettingsView: View {
                         .frame(width: 42, alignment: .trailing)
                 }
                 .disabled((model.settings.backgroundOpacity ?? 1) >= 1)
-                SettingHint("Blur needs opacity below 100%.")
+                if reduceTransparency {
+                    SettingHint("Reduce Transparency is on; saved opacity and blur apply when it is off.")
+                } else {
+                    SettingHint("Blur needs opacity below 100%.")
+                }
 
                 HStack {
                     Text("Sidebar Tint")

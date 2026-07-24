@@ -19,6 +19,7 @@ struct agtermApp: App {
     @State private var controlServer: ControlServer
     @State private var customCommandRunner: CustomCommandRunner
     @State private var appearanceObserver: SystemAppearanceObserver
+    @State private var accessibilityObserver: SystemAccessibilityObserver
 
     /// The plain `WindowGroup`'s scene id, used by `openWindow(id:)` to spawn additional windows.
     private static let windowGroupID = "terminal"
@@ -59,6 +60,9 @@ struct agtermApp: App {
         // follows the macOS light/dark appearance via an app-level KVO observer on
         // NSApp.effectiveAppearance (see SystemAppearanceObserver). No dependencies; started in `.task`.
         _appearanceObserver = State(initialValue: SystemAppearanceObserver())
+        // follows Reduce Motion / Reduce Transparency through NSWorkspace's accessibility display
+        // notification and fans live changes out to AppKit consumers. SwiftUI consumers use Environment.
+        _accessibilityObserver = State(initialValue: SystemAccessibilityObserver())
     }
 
     var body: some Scene {
@@ -176,6 +180,8 @@ struct agtermApp: App {
                         // start following the macOS appearance last: `[.initial]` seeds the launch side once
                         // the eager-deck surfaces exist (idempotent, so per-window `.task` re-entry is safe).
                         appearanceObserver.start()
+                        // Consumers read current accessibility values at first render; this handles live flips.
+                        accessibilityObserver.start()
                     }
             }
         }

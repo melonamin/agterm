@@ -240,6 +240,9 @@ struct WorkspaceSidebar: NSViewRepresentable {
             // a theme change (new terminal foreground) re-tints the visible rows in place.
             NotificationCenter.default.addObserver(self, selector: #selector(appearanceChanged),
                                                    name: .agtermAppearanceChanged, object: nil)
+            // Reduce Motion does not alter row model content, so re-apply visible status glyphs explicitly.
+            NotificationCenter.default.addObserver(self, selector: #selector(accessibilityDisplayOptionsChanged),
+                                                   name: .agtermAccessibilityDisplayOptionsChanged, object: nil)
         }
 
         isolated deinit {
@@ -294,6 +297,10 @@ struct WorkspaceSidebar: NSViewRepresentable {
             // re-apply the sidebar content inset in case a settings change requires recomputing it (the
             // inset itself is mode-independent, so this is a cheap re-assert, not a per-mode recalculation).
             applySidebarContentInset(outlineView?.enclosingScrollView)
+        }
+
+        @objc private func accessibilityDisplayOptionsChanged() {
+            reapplyStatusGlyphs()
         }
 
         /// Re-apply the sidebar row height + fonts when the sidebar font-size setting changed. The font size
